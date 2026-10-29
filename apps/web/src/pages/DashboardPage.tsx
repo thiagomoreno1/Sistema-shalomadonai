@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { businessToday, formatBusinessDate } from '../lib/formatters'
+import { businessToday, formatBRLExact, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
 const businessDate = new Intl.DateTimeFormat('pt-BR', {
@@ -10,12 +10,11 @@ const businessDate = new Intl.DateTimeFormat('pt-BR', {
   timeZone: 'America/Sao_Paulo',
 }).format(new Date())
 
-const indicators = [
-  { label: 'Vendas registradas', note: 'Sem lançamentos ainda' },
-  { label: 'Valores recebidos', note: 'Sem recebimentos ainda' },
-  { label: 'A receber', note: 'Sem contas cadastradas' },
-  { label: 'Despesas', note: 'Sem despesas cadastradas' },
-]
+type FinancialSummary = {
+  sales: { active_order_count: number; active_total_cents: string }
+  receipts: { record_count: number; amount_cents: string }
+  receivables: { installment_count: number; open_balance_cents: string }
+}
 
 const integrations = [
   { label: 'WhatsApp', state: 'Conexão pendente' },
@@ -29,6 +28,33 @@ export function DashboardPage() {
   const [followUpsLoading, setFollowUpsLoading] = useState(true)
   const [followUpsError, setFollowUpsError] = useState(false)
   const [today] = useState(businessToday)
+  const [financeSummary, setFinanceSummary] = useState<FinancialSummary | null>(null)
+  const [financeLoading, setFinanceLoading] = useState(true)
+  const [financeError, setFinanceError] = useState(false)
+
+  const loadFinanceSummary = useCallback(async () => {
+    if (!supabaseClient) {
+      setFinanceError(true)
+      setFinanceLoading(false)
+      return
+    }
+    setFinanceLoading(true)
+    try {
+      const { data, error } = await supabaseClient.rpc('get_financial_report_summary', {
+        p_business_id: businessId,
+        p_start_on: today,
+        p_end_on: today,
+      })
+      if (error || !data) throw error
+      setFinanceSummary(data as FinancialSummary)
+      setFinanceError(false)
+    } catch {
+      setFinanceError(true)
+      setFinanceSummary(null)
+    } finally {
+      setFinanceLoading(false)
+    }
+  }, [businessId, today])
 
   const loadFollowUps = useCallback(async () => {
     if (!supabaseClient) {
@@ -64,6 +90,8 @@ export function DashboardPage() {
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadFollowUps() }, [loadFollowUps])
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => { void loadFinanceSummary() }, [loadFinanceSummary])
 
   return (
     <div className="page-stack">
@@ -99,16 +127,15 @@ export function DashboardPage() {
           </div>
           <Link className="quiet-link" to="/financeiro">Ver financeiro <Icon name="arrow" /></Link>
         </div>
-        <div className="indicator-grid">
-          {indicators.map((indicator) => (
-            <article className="indicator-card" key={indicator.label}>
-              <p>{indicator.label}</p>
-              <strong aria-label="Sem dados">—</strong>
-              <span>{indicator.note}</span>
-            </article>
-          ))}
-        </div>
-        <p className="section-footnote">Os valores serão preenchidos a partir dos registros do sistema. Resultado e lucro só serão exibidos após validação da fórmula com a empresa.</p>
+        {financeLoading && <p className="inline-state" aria-live="polite">Carregando movimentação registrada hoje…</p>}
+        {!financeLoading && financeError && <div className="empty-state"><span className="empty-icon"><Icon name="coin" /></span><div><h3>Não foi possível carregar o financeiro de hoje</h3><button className="text-button" onClick={() => void loadFinanceSummary()} type="button">Tentar novamente</button></div></div>}
+        {!financeLoading && !financeError && financeSummary && <div className="indicator-grid">
+          <article className="indicator-card"><p>Pedidos ativos criados hoje</p><strong>{formatBRLExact(financeSummary.sales.active_total_cents)}</strong><span>{financeSummary.sales.active_order_count} pedidos · cancelados separados</span></article>
+          <article className="indicator-card"><p>Recebimentos informados hoje</p><strong>{formatBRLExact(financeSummary.receipts.amount_cents)}</strong><span>{financeSummary.receipts.record_count} registros manuais</span></article>
+          <article className="indicator-card"><p>Vencimentos em aberto hoje</p><strong>{formatBRLExact(financeSummary.receivables.open_balance_cents)}</strong><span>{financeSummary.receivables.installment_count} parcelas com vencimento hoje</span></article>
+          <article className="indicator-card indicator-pending-card"><p>Resultado gerencial</p><strong>Indisponível</strong><span>Fórmula e custos aguardam validação</span></article>
+        </div>}
+        <p className="section-footnote">Ainda não há lançamentos financeiros de compras ou despesas. Estes valores representam pedidos, recebimentos informados e vencimentos de hoje; não representam saldo bancário nem lucro.</p>
       </section>
 
       <div className="dashboard-columns">

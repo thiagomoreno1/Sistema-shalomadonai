@@ -6,7 +6,6 @@ import { BusinessProvider } from '../business/BusinessProvider'
 import { LoadingScreen, SetupPage } from '../pages/SetupPage'
 
 const DashboardPage = lazy(async () => ({ default: (await import('../pages/DashboardPage')).DashboardPage }))
-const ModulePage = lazy(async () => ({ default: (await import('../pages/ModulePage')).ModulePage }))
 const CustomersPage = lazy(async () => ({ default: (await import('../pages/CustomersPage')).CustomersPage }))
 const CustomerDetailPage = lazy(async () => ({ default: (await import('../pages/CustomerDetailPage')).CustomerDetailPage }))
 const ProductsPage = lazy(async () => ({ default: (await import('../pages/ProductsPage')).ProductsPage }))
@@ -14,6 +13,7 @@ const OrdersPage = lazy(async () => ({ default: (await import('../pages/OrdersPa
 const NewOrderPage = lazy(async () => ({ default: (await import('../pages/NewOrderPage')).NewOrderPage }))
 const OrderDetailPage = lazy(async () => ({ default: (await import('../pages/OrderDetailPage')).OrderDetailPage }))
 const ReceivablesPage = lazy(async () => ({ default: (await import('../pages/ReceivablesPage')).ReceivablesPage }))
+const ReportsPage = lazy(async () => ({ default: (await import('../pages/ReportsPage')).ReportsPage }))
 const InventoryPage = lazy(async () => ({ default: (await import('../pages/InventoryPage')).InventoryPage }))
 const DeliveriesPage = lazy(async () => ({ default: (await import('../pages/DeliveriesPage')).DeliveriesPage }))
 const FollowUpsPage = lazy(async () => ({ default: (await import('../pages/FollowUpsPage')).FollowUpsPage }))
@@ -47,7 +47,7 @@ export function AuthRoutes() {
             <Route path="estoque" element={<InventoryPage />} />
             <Route path="entregas" element={<DeliveriesPage />} />
             <Route path="financeiro" element={<ReceivablesPage />} />
-            <Route path="relatorios" element={<ModulePage title="Relatórios" description="Acompanhamento diário e mensal da operação." icon="chart" nextStep="Os relatórios serão habilitados junto aos módulos que fornecem seus dados." />} />
+            <Route path="relatorios" element={<ReportsPage />} />
             <Route path="mais" element={<MorePage />} />
             <Route path="configuracoes" element={<SettingsPage />} />
             <Route path="*" element={<Navigate replace to="/" />} />

@@ -60,6 +60,16 @@ export function formatBRL(cents: number | null) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100)
 }
 
+export function formatBRLExact(cents: string | bigint) {
+  const value = BigInt(cents)
+  const negative = value < 0n
+  const absolute = negative ? -value : value
+  const whole = absolute / 100n
+  const fraction = (absolute % 100n).toString().padStart(2, '0')
+  const formattedWhole = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 }).format(whole)
+  return `R$ ${negative ? '-' : ''}${formattedWhole},${fraction}`
+}
+
 export function parseBrazilianCurrency(value: string) {
   const trimmed = value.trim().replace(/\s/g, '').replace(/^R\$/i, '')
   if (!trimmed) return null
