@@ -232,6 +232,7 @@ export function CustomerDetailPage() {
         </div>
         <div className="record-heading-actions">
           {customer.is_active ? <>
+            <Link className="button button-primary" to={`/pedidos/novo?cliente=${encodeURIComponent(customer.id)}`}><Icon name="bag" /> Novo pedido</Link>
             <button className="button button-secondary" onClick={() => { setEditOpen((value) => !value); setFormError(null) }} type="button">{editOpen ? 'Fechar edição' : 'Editar'}</button>
             <button className="button button-secondary" onClick={() => { setInteractionType('call'); setInteractionOpen((value) => !value); setInteractionError(null) }} type="button"><Icon name="plus" /> Registrar contato</button>
           </> : <button className="button button-primary" onClick={() => void handleReactivateCustomer()} type="button">Reativar cliente</button>}
