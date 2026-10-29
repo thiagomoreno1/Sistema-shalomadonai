@@ -1,0 +1,532 @@
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
+import { useBusiness } from '../business/BusinessContext'
+import { Icon } from '../components/Icon'
+import { businessLocalDateTimeToIso, businessToday } from '../lib/formatters'
+import { supabaseClient } from '../lib/supabase'
+
+const PAGE_SIZE = 40
+
+type Product = { id: string; name: string; inventory_unit: string | null; inventory_tracked: boolean; is_combo: boolean; is_active: boolean }
+type Balance = { product_id: string; product_name: string; inventory_unit: string; minimum_stock: number | null; quantity_on_hand: number }
+type Movement = { id: string; product_id: string; movement_type: 'opening' | 'receipt' | 'adjustment' | 'loss' | 'dispatch' | 'return'; quantity_delta: number; reason: string; order_id: string | null; receipt_id: string | null; occurred_at: string; actor_id: string }
+type Receipt = { id: string; supplier_name: string | null; purchase_reference: string | null; received_on: string }
+type ReturnCandidate = { id: string; customer_name_snapshot: string; fulfillment_type: 'delivery' | 'pickup' }
+type ReturnableItem = { product_id: string; product_name: string; inventory_unit: string; remaining_quantity: number }
+type ReceiptLineDraft = { key: string; productId: string; quantity: string }
+type MovementKind = 'adjustment' | 'loss' | 'return'
+
+function newRequestId() { return crypto.randomUUID() }
+
+function isCalendarDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+function parseQuantity(value: string) {
+  const cleaned = value.trim().replace(',', '.')
+  if (!/^\d+(?:\.\d{1,3})?$/.test(cleaned)) return null
+  const quantity = Number(cleaned)
+  return Number.isFinite(quantity) && quantity > 0 && quantity <= 99999999.999 ? quantity : null
+}
+
+function formatQuantity(value: number) {
+  return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(Number(value))
+}
+
+function formatTimestamp(value: string) {
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(value))
+}
+
+function movementLabel(type: Movement['movement_type']) {
+  return ({ opening: 'Contagem inicial', receipt: 'Recebimento de compra', adjustment: 'Ajuste', loss: 'Perda ou avaria', dispatch: 'Despacho de pedido', return: 'Retorno conferido' })[type]
+}
+
+function newLine(): ReceiptLineDraft { return { key: newRequestId(), productId: '', quantity: '1' } }
+
+export function InventoryPage() {
+  const { id: businessId } = useBusiness()
+  const [products, setProducts] = useState<Product[]>([])
+  const [balances, setBalances] = useState<Balance[]>([])
+  const [movements, setMovements] = useState<Movement[]>([])
+  const [receipts, setReceipts] = useState<Receipt[]>([])
+  const [returnCandidates, setReturnCandidates] = useState<ReturnCandidate[]>([])
+  const [returnableItems, setReturnableItems] = useState<ReturnableItem[]>([])
+  const [returnItemsLoading, setReturnItemsLoading] = useState(false)
+  const [movementTotal, setMovementTotal] = useState(0)
+  const [movementOffset, setMovementOffset] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [balanceSearch, setBalanceSearch] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [showReceiptForm, setShowReceiptForm] = useState(false)
+  const [showMovementForm, setShowMovementForm] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [uncertain, setUncertain] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [receiptSupplier, setReceiptSupplier] = useState('')
+  const [receiptReference, setReceiptReference] = useState('')
+  const [receiptDate, setReceiptDate] = useState(businessToday())
+  const [receiptNotes, setReceiptNotes] = useState('')
+  const [receiptLines, setReceiptLines] = useState<ReceiptLineDraft[]>([newLine()])
+  const [movementProductId, setMovementProductId] = useState('')
+  const [movementKind, setMovementKind] = useState<MovementKind>('adjustment')
+  const [movementDirection, setMovementDirection] = useState<'increase' | 'decrease'>('increase')
+  const [movementQuantity, setMovementQuantity] = useState('')
+  const [movementReason, setMovementReason] = useState('')
+  const [movementOrderId, setMovementOrderId] = useState('')
+  const [movementDate, setMovementDate] = useState('')
+  const [historyPage, setHistoryPage] = useState(0)
+  const receiptRequestIdRef = useRef(newRequestId())
+  const movementRequestIdRef = useRef(newRequestId())
+  const returnItemsRequestRef = useRef(0)
+  const receiptTriggerRef = useRef<HTMLButtonElement>(null)
+  const movementTriggerRef = useRef<HTMLButtonElement>(null)
+  const receiptHeadingRef = useRef<HTMLHeadingElement>(null)
+  const movementHeadingRef = useRef<HTMLHeadingElement>(null)
+  const wasReceiptOpenRef = useRef(false)
+  const wasMovementOpenRef = useRef(false)
+
+  const loadData = useCallback(async (showLoading = true) => {
+    if (!supabaseClient) {
+      setError('A conexão da empresa não está disponível.')
+      setLoading(false)
+      return false
+    }
+    if (showLoading) setLoading(true)
+    try {
+      const [productsResult, balancesResult, movementsResult, receiptsResult, deliveriesResult, pickupEventsResult] = await Promise.all([
+        supabaseClient.from('products').select('id, name, inventory_unit, inventory_tracked, is_combo, is_active')
+          .eq('business_id', businessId).order('name', { ascending: true }),
+        supabaseClient.from('inventory_balances').select('product_id, product_name, inventory_unit, minimum_stock, quantity_on_hand')
+          .eq('business_id', businessId).order('product_name', { ascending: true }),
+        supabaseClient.from('inventory_movements').select('id, product_id, movement_type, quantity_delta, reason, order_id, receipt_id, occurred_at, actor_id', { count: 'exact' })
+          .eq('business_id', businessId).order('occurred_at', { ascending: false }).order('id', { ascending: false }).range(0, PAGE_SIZE - 1),
+        supabaseClient.from('inventory_receipts').select('id, supplier_name, purchase_reference, received_on')
+          .eq('business_id', businessId).order('received_on', { ascending: false }).range(0, PAGE_SIZE - 1),
+        supabaseClient.from('deliveries').select('order_id, status, canceled_at')
+          .eq('business_id', businessId).is('canceled_at', null).in('status', ['attempted', 'rescheduled', 'delivered', 'returned']),
+        supabaseClient.from('order_events').select('order_id')
+          .eq('business_id', businessId).eq('event_type', 'picked_up'),
+      ])
+      if (productsResult.error || balancesResult.error || movementsResult.error || receiptsResult.error || deliveriesResult.error || pickupEventsResult.error) {
+        setError('Não foi possível carregar os saldos e o histórico. Tente novamente.')
+        return false
+      }
+      const deliveryOrderIds = new Set((deliveriesResult.data ?? []).map((delivery) => delivery.order_id))
+      const pickupOrderIds = new Set((pickupEventsResult.data ?? []).map((event) => event.order_id))
+      const orderIds = [...new Set([...deliveryOrderIds, ...pickupOrderIds])]
+      const ordersResult = orderIds.length > 0
+        ? await supabaseClient.from('orders').select('id, customer_name_snapshot')
+          .eq('business_id', businessId).eq('status', 'open').in('id', orderIds)
+        : { data: [], error: null }
+      if (ordersResult.error) {
+        setError('Não foi possível carregar pedidos elegíveis para retorno conferido.')
+        return false
+      }
+      setProducts((productsResult.data ?? []) as Product[])
+      setBalances((balancesResult.data ?? []) as Balance[])
+      setMovements((movementsResult.data ?? []) as Movement[])
+      setMovementTotal(movementsResult.count ?? 0)
+      setMovementOffset(movementsResult.data?.length ?? 0)
+      setReceipts((receiptsResult.data ?? []) as Receipt[])
+      setReturnCandidates((ordersResult.data ?? []).map((order) => ({
+        ...order,
+        fulfillment_type: deliveryOrderIds.has(order.id) ? 'delivery' as const : 'pickup' as const,
+      })) as ReturnCandidate[])
+      setHistoryPage(0)
+      setError(null)
+      return true
+    } catch {
+      setError('Não foi possível carregar os saldos e o histórico. Tente novamente.')
+      return false
+    } finally {
+      setLoading(false)
+    }
+  }, [businessId])
+
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => { void loadData() }, [loadData])
+
+  useEffect(() => {
+    if (showReceiptForm) receiptHeadingRef.current?.focus()
+    else if (wasReceiptOpenRef.current && !showMovementForm) receiptTriggerRef.current?.focus()
+    wasReceiptOpenRef.current = showReceiptForm
+  }, [showReceiptForm, showMovementForm])
+
+  useEffect(() => {
+    if (showMovementForm) movementHeadingRef.current?.focus()
+    else if (wasMovementOpenRef.current && !showReceiptForm) movementTriggerRef.current?.focus()
+    wasMovementOpenRef.current = showMovementForm
+  }, [showMovementForm, showReceiptForm])
+
+  const trackedProducts = products.filter((product) => product.inventory_tracked)
+  const untrackedProducts = products.filter((product) => product.is_active && !product.inventory_tracked && !product.is_combo)
+  const belowMinimum = balances.filter((balance) => balance.minimum_stock !== null && Number(balance.quantity_on_hand) < Number(balance.minimum_stock))
+  const negativeBalances = balances.filter((balance) => Number(balance.quantity_on_hand) < 0)
+  const receiptMap = new Map(receipts.map((receipt) => [receipt.id, receipt]))
+  const productMap = new Map(products.map((product) => [product.id, product]))
+  const filteredBalances = balances.filter((balance) => `${balance.product_name} ${balance.inventory_unit}`.toLocaleLowerCase('pt-BR').includes(balanceSearch.trim().toLocaleLowerCase('pt-BR')))
+  const selectedReturnableItem = returnableItems.find((item) => item.product_id === movementProductId) ?? null
+
+  function startReceipt() {
+    setNotice(null)
+    setFormError(null)
+    setShowMovementForm(false)
+    setShowReceiptForm(true)
+    setUncertain(false)
+    setReceiptSupplier('')
+    setReceiptReference('')
+    setReceiptDate(businessToday())
+    setReceiptNotes('')
+    setReceiptLines([newLine()])
+    receiptRequestIdRef.current = newRequestId()
+  }
+
+  function startMovement() {
+    setNotice(null)
+    setFormError(null)
+    setShowReceiptForm(false)
+    setShowMovementForm(true)
+    setUncertain(false)
+    setMovementProductId('')
+    setMovementKind('adjustment')
+    setMovementDirection('increase')
+    setMovementQuantity('')
+    setMovementReason('')
+    setMovementOrderId('')
+    setMovementDate('')
+    setReturnableItems([])
+    setReturnItemsLoading(false)
+    movementRequestIdRef.current = newRequestId()
+  }
+
+  async function loadReturnableItems(orderId: string) {
+    const requestNumber = ++returnItemsRequestRef.current
+    setReturnableItems([])
+    if (!supabaseClient || !orderId) {
+      setReturnItemsLoading(false)
+      return
+    }
+    setReturnItemsLoading(true)
+    setFormError(null)
+    try {
+      const [componentsResult, movementsResult] = await Promise.all([
+        supabaseClient.from('order_line_components')
+          .select('product_id, product_name_snapshot, inventory_unit_snapshot, quantity_snapshot, inventory_tracked_snapshot')
+          .eq('business_id', businessId).eq('order_id', orderId),
+        supabaseClient.from('inventory_movements')
+          .select('product_id, movement_type, quantity_delta')
+          .eq('business_id', businessId).eq('order_id', orderId).in('movement_type', ['dispatch', 'return']),
+      ])
+      if (componentsResult.error || movementsResult.error) {
+        setFormError('Não foi possível conferir os itens ainda enviados deste pedido. Tente carregar novamente.')
+        return
+      }
+      const orderedByProduct = new Map<string, { product_name: string; inventory_unit: string; quantity: number }>()
+      for (const component of componentsResult.data ?? []) {
+        if (!component.inventory_tracked_snapshot || !component.inventory_unit_snapshot) continue
+        const current = orderedByProduct.get(component.product_id) ?? {
+          product_name: component.product_name_snapshot,
+          inventory_unit: component.inventory_unit_snapshot,
+          quantity: 0,
+        }
+        current.quantity += Number(component.quantity_snapshot)
+        orderedByProduct.set(component.product_id, current)
+      }
+      const netIssuedByProduct = new Map<string, number>()
+      for (const movement of movementsResult.data ?? []) {
+        const issued = movement.movement_type === 'dispatch' ? -Number(movement.quantity_delta) : Number(movement.quantity_delta)
+        netIssuedByProduct.set(movement.product_id, (netIssuedByProduct.get(movement.product_id) ?? 0) + issued)
+      }
+      const returnable = [...orderedByProduct].map(([product_id, item]) => ({
+        product_id,
+        product_name: item.product_name,
+        inventory_unit: item.inventory_unit,
+        remaining_quantity: Math.max(item.quantity - (netIssuedByProduct.get(product_id) ?? 0), 0),
+      })).filter((item) => item.remaining_quantity > 0)
+      if (requestNumber === returnItemsRequestRef.current) setReturnableItems(returnable)
+    } catch {
+      if (requestNumber === returnItemsRequestRef.current) setFormError('Não foi possível conferir os itens ainda enviados deste pedido. Tente carregar novamente.')
+    } finally {
+      if (requestNumber === returnItemsRequestRef.current) setReturnItemsLoading(false)
+    }
+  }
+
+  async function handleReceiptSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!supabaseClient || saving || trackedProducts.length === 0) return
+    const supplier = receiptSupplier.trim()
+    const reference = receiptReference.trim()
+    const notes = receiptNotes.trim()
+    if (supplier.length > 160 || reference.length > 120 || notes.length > 2000) {
+      setFormError('Confira o tamanho do fornecedor, referência ou observação.')
+      return
+    }
+    if (!isCalendarDate(receiptDate) || receiptDate > businessToday()) {
+      setFormError('Informe uma data de recebimento válida, hoje ou anterior.')
+      return
+    }
+    const itemPayload = receiptLines.map((line) => ({ product_id: line.productId, quantity: parseQuantity(line.quantity) }))
+    if (itemPayload.length === 0 || itemPayload.some((item) => !item.product_id || item.quantity === null)) {
+      setFormError('Escolha um produto controlado e informe uma quantidade positiva em cada linha.')
+      return
+    }
+    if (new Set(itemPayload.map((item) => item.product_id)).size !== itemPayload.length) {
+      setFormError('Cada produto deve aparecer uma única vez. Ajuste a quantidade na linha correspondente.')
+      return
+    }
+    setSaving(true)
+    setFormError(null)
+    try {
+      const { data, error: rpcError, status } = await supabaseClient.rpc('record_inventory_receipt', {
+        p_business_id: businessId,
+        p_supplier_name: supplier || null,
+        p_purchase_reference: reference || null,
+        p_received_on: receiptDate,
+        p_notes: notes || null,
+        p_items: itemPayload,
+        p_request_id: receiptRequestIdRef.current,
+      })
+      if (rpcError) {
+        if (status >= 400 && status < 500) {
+          receiptRequestIdRef.current = newRequestId()
+          setFormError('O recebimento não foi registrado. Confira os itens e tente novamente.')
+        } else {
+          setUncertain(true)
+          setFormError('Não foi possível confirmar se o recebimento foi registrado. Tente novamente sem alterar os dados.')
+        }
+        return
+      }
+      if (typeof data !== 'string') {
+        setUncertain(true)
+        setFormError('A resposta do recebimento não chegou completa. Tente novamente sem alterar o formulário.')
+        return
+      }
+      setShowReceiptForm(false)
+      setUncertain(false)
+      setNotice('Entrada de estoque registrada para os itens recebidos fisicamente.')
+      receiptRequestIdRef.current = newRequestId()
+      await loadData(false)
+    } catch {
+      setUncertain(true)
+      setFormError('Não foi possível confirmar se o recebimento foi registrado. Tente novamente sem alterar os dados.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleMovementSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!supabaseClient || saving) return
+    const quantity = parseQuantity(movementQuantity)
+    if (!trackedProducts.some((product) => product.id === movementProductId) || quantity === null) {
+      setFormError('Escolha um produto com estoque configurado e informe uma quantidade positiva.')
+      return
+    }
+    if (!movementReason.trim() || movementReason.trim().length > 1000) {
+      setFormError('Informe o motivo da movimentação (até 1.000 caracteres).')
+      return
+    }
+    if (movementKind === 'return' && !movementOrderId) {
+      setFormError('Escolha o pedido associado ao retorno conferido.')
+      return
+    }
+    if (movementKind === 'return') {
+      if (returnItemsLoading) {
+        setFormError('Aguarde a conferência dos itens ainda enviados deste pedido.')
+        return
+      }
+      if (!selectedReturnableItem) {
+        setFormError('Escolha um item que ainda conste como enviado neste pedido.')
+        return
+      }
+      if (quantity > selectedReturnableItem.remaining_quantity) {
+        setFormError(`A quantidade informada excede o saldo ainda enviado (${formatQuantity(selectedReturnableItem.remaining_quantity)} ${selectedReturnableItem.inventory_unit}).`)
+        return
+      }
+    }
+    const occurredAt = movementDate ? businessLocalDateTimeToIso(movementDate) : null
+    if (movementDate && !occurredAt) {
+      setFormError('Confira a data e hora no horário de Brasília.')
+      return
+    }
+    setSaving(true)
+    setFormError(null)
+    try {
+      const { data, error: rpcError, status } = await supabaseClient.rpc('record_inventory_movement', {
+        p_business_id: businessId,
+        p_product_id: movementProductId,
+        p_movement_type: movementKind,
+        p_quantity: quantity,
+        p_direction: movementKind === 'adjustment' ? movementDirection : null,
+        p_reason: movementReason.trim(),
+        p_order_id: movementKind === 'return' ? movementOrderId : null,
+        p_occurred_at: occurredAt,
+        p_request_id: movementRequestIdRef.current,
+      })
+      if (rpcError) {
+        if (status >= 400 && status < 500) {
+          movementRequestIdRef.current = newRequestId()
+          setFormError(movementKind === 'return'
+            ? 'O retorno não foi registrado. Confira se o produto pertence ao pedido e se a quantidade ainda está em trânsito.'
+            : 'A movimentação não foi registrada. Confira os dados e tente novamente.')
+        } else {
+          setUncertain(true)
+          setFormError('Não foi possível confirmar se a movimentação foi registrada. Tente novamente sem alterar os dados.')
+        }
+        return
+      }
+      if (typeof data !== 'string') {
+        setUncertain(true)
+        setFormError('A resposta da movimentação não chegou completa. Tente novamente sem alterar o formulário.')
+        return
+      }
+      setShowMovementForm(false)
+      setUncertain(false)
+      setNotice(movementKind === 'return' ? 'Retorno conferido registrado manualmente.' : 'Movimentação de estoque registrada.')
+      movementRequestIdRef.current = newRequestId()
+      await loadData(false)
+    } catch {
+      setUncertain(true)
+      setFormError('Não foi possível confirmar se a movimentação foi registrada. Tente novamente sem alterar os dados.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function loadMoreMovements() {
+    if (!supabaseClient || loadingMore || movementOffset >= movementTotal) return
+    setLoadingMore(true)
+    try {
+      const { data, error: queryError, count } = await supabaseClient.from('inventory_movements')
+        .select('id, product_id, movement_type, quantity_delta, reason, order_id, receipt_id, occurred_at, actor_id', { count: 'exact' })
+        .eq('business_id', businessId).order('occurred_at', { ascending: false }).order('id', { ascending: false })
+        .range(movementOffset, movementOffset + PAGE_SIZE - 1)
+      if (queryError) {
+        setError('Não foi possível carregar mais movimentações.')
+        return
+      }
+      setMovements((current) => [...current, ...((data ?? []) as Movement[])])
+      setMovementOffset((current) => current + (data?.length ?? 0))
+      setMovementTotal(count ?? movementTotal)
+    } catch {
+      setError('Não foi possível carregar mais movimentações.')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  const pagedMovements = movements.slice(historyPage * PAGE_SIZE, (historyPage + 1) * PAGE_SIZE)
+  const lastHistoryPage = Math.max(0, Math.ceil(movements.length / PAGE_SIZE) - 1)
+
+  return (
+    <div className="page-stack">
+      <header className="page-heading">
+        <div><p className="eyebrow">OPERAÇÃO · ESTOQUE</p><h1>Estoque</h1><p className="page-description">Saldos controlados, entradas recebidas e movimentações registradas.</p></div>
+        <div className="record-heading-actions"><button className="button button-secondary" onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Ajuste, perda ou retorno</button><button className="button button-primary" onClick={startReceipt} ref={receiptTriggerRef} type="button"><Icon name="box" /> Receber compra</button></div>
+      </header>
+
+      {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
+      {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadData() }} type="button">Tentar novamente</button></div>}
+
+      <section className="order-balance-grid inventory-summary" aria-label="Resumo do estoque">
+        <article className="surface-panel order-balance-card"><span>Produtos controlados</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>Unidade e contagem inicial registradas.</small></article>
+        <article className="surface-panel order-balance-card"><span>Abaixo do mínimo</span><strong>{loading ? '—' : belowMinimum.length}</strong><small>Somente produtos com limite configurado.</small></article>
+        <article className="surface-panel order-balance-card"><span>Saldo negativo</span><strong>{loading ? '—' : negativeBalances.length}</strong><small>Vendas despachadas acima do saldo disponível.</small></article>
+      </section>
+
+      {showReceiptForm && <form className="surface-panel record-form" onSubmit={(event) => void handleReceiptSubmit(event)}>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA FÍSICA</p><h2 ref={receiptHeadingRef} tabIndex={-1}>Registrar compra recebida</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowReceiptForm(false)} type="button">Fechar</button></div>
+        <p className="section-footnote inventory-form-hint">A entrada altera o saldo quando os itens chegam. O registro não lança pagamento, despesa ou saída de caixa.</p>
+        {trackedProducts.length === 0 ? <p className="inline-state">Configure unidade e contagem inicial de um produto no <Link to="/catalogo">catálogo</Link> antes de registrar recebimentos.</p> : <>
+          <div className="record-form-grid">
+            <label className="record-field"><span className="field-label">Fornecedor <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={160} onChange={(event) => setReceiptSupplier(event.target.value)} value={receiptSupplier} /></label>
+            <label className="record-field"><span className="field-label">Referência da compra <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={120} onChange={(event) => setReceiptReference(event.target.value)} value={receiptReference} /></label>
+            <label className="record-field"><span className="field-label">Recebido em <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || uncertain} max={businessToday()} onChange={(event) => setReceiptDate(event.target.value)} required type="date" value={receiptDate} /></label>
+            <label className="record-field"><span className="field-label">Observações <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={2000} onChange={(event) => setReceiptNotes(event.target.value)} value={receiptNotes} /></label>
+          </div>
+          <div className="inventory-line-list">
+            {receiptLines.map((line, index) => {
+              const selected = trackedProducts.find((product) => product.id === line.productId)
+              return <div className="inventory-line-row" key={line.key}>
+                <label className="record-field"><span className="field-label">Produto {index + 1}</span><select className="text-input" disabled={saving || uncertain} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, productId: event.target.value } : row))} required value={line.productId}><option value="">Selecione um produto</option>{trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
+                <label className="record-field"><span className="field-label">Quantidade recebida{selected?.inventory_unit ? ' · ' + selected.inventory_unit : ''}</span><input className="text-input" disabled={saving || uncertain} inputMode="decimal" onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required value={line.quantity} /></label>
+                <button aria-label={'Remover produto ' + (index + 1)} className="text-button order-remove-button" disabled={saving || uncertain || receiptLines.length === 1} onClick={() => setReceiptLines((current) => current.filter((row) => row.key !== line.key))} type="button">Remover</button>
+              </div>
+            })}
+          </div>
+          <button className="button button-secondary inventory-add-line" disabled={saving || uncertain} onClick={() => setReceiptLines((current) => [...current, newLine()])} type="button"><Icon name="plus" /> Adicionar produto</button>
+          {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
+          <div className="record-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Registrando…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Confirmar recebimento físico'}</button></div>
+        </>}
+      </form>}
+
+      {showMovementForm && <form className="surface-panel record-form" onSubmit={(event) => void handleMovementSubmit(event)}>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">MOVIMENTAÇÃO MANUAL</p><h2 ref={movementHeadingRef} tabIndex={-1}>Registrar ajuste, perda ou retorno</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowMovementForm(false)} type="button">Fechar</button></div>
+        <p className="section-footnote inventory-form-hint">Ajustes e perdas precisam de motivo. Um retorno só entra no saldo depois da conferência física.</p>
+        <div className="record-form-grid">
+          <label className="record-field"><span className="field-label">Tipo de movimentação <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { setMovementKind(event.target.value as MovementKind); setMovementOrderId(''); setMovementProductId(''); setReturnableItems([]); setFormError(null) }} value={movementKind}><option value="adjustment">Ajuste de contagem</option><option value="loss">Perda ou avaria</option><option value="return">Retorno conferido de pedido</option></select></label>
+          {movementKind === 'return' && <label className="record-field"><span className="field-label">Pedido associado <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { const orderId = event.target.value; setMovementOrderId(orderId); setMovementProductId(''); setReturnableItems([]); if (orderId) void loadReturnableItems(orderId) }} required value={movementOrderId}><option value="">Selecione um pedido enviado</option>{returnCandidates.map((order) => <option key={order.id} value={order.id}>{order.customer_name_snapshot} · {order.fulfillment_type === 'pickup' ? 'Retirada' : 'Entrega'} · {order.id.slice(0, 8)}</option>)}</select></label>}
+          <label className="record-field"><span className="field-label">Produto <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain || (movementKind === 'return' && (returnItemsLoading || !movementOrderId))} onChange={(event) => setMovementProductId(event.target.value)} required value={movementProductId}><option value="">{movementKind === 'return' ? returnItemsLoading ? 'Conferindo itens do pedido…' : 'Selecione um item enviado' : 'Selecione um produto com estoque'}</option>{movementKind === 'return' ? returnableItems.map((item) => <option key={item.product_id} value={item.product_id}>{item.product_name} · ainda enviado {formatQuantity(item.remaining_quantity)} {item.inventory_unit}</option>) : trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
+          <label className="record-field"><span className="field-label">Quantidade <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || uncertain} inputMode="decimal" onChange={(event) => setMovementQuantity(event.target.value)} placeholder="0" required value={movementQuantity} /></label>
+          {movementKind === 'adjustment' && <label className="record-field"><span className="field-label">Direção do ajuste <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => setMovementDirection(event.target.value as 'increase' | 'decrease')} value={movementDirection}><option value="increase">Adicionar ao saldo</option><option value="decrease">Retirar do saldo</option></select></label>}
+          <label className="record-field"><span className="field-label">Data e hora <span className="field-optional">Brasília · vazio = agora</span></span><input className="text-input" disabled={saving || uncertain} onChange={(event) => setMovementDate(event.target.value)} type="datetime-local" value={movementDate} /></label>
+          <label className="record-field record-field-wide"><span className="field-label">Motivo ou conferência <span aria-hidden="true">*</span></span><textarea className="text-input record-textarea" disabled={saving || uncertain} maxLength={1000} onChange={(event) => setMovementReason(event.target.value)} required rows={2} value={movementReason} /></label>
+        </div>
+        {movementKind === 'return' && <>
+          {returnItemsLoading && <p className="inline-state" aria-live="polite">Conferindo quantidades enviadas e retornadas deste pedido…</p>}
+          {!returnItemsLoading && movementOrderId && returnableItems.length === 0 && !formError && <p className="inline-state">Este pedido não tem quantidade controlada ainda enviada para retorno. Confira o pedido e o histórico de estoque.</p>}
+          {selectedReturnableItem && <p className="form-message form-message-warning" role="status">Ainda enviado neste pedido: <strong>{formatQuantity(selectedReturnableItem.remaining_quantity)} {selectedReturnableItem.inventory_unit}</strong>. O saldo só aumenta depois da conferência física, e a quantidade do retorno não pode exceder esse valor.</p>}
+          {!movementOrderId && <p className="section-footnote">Escolha um pedido para ver quais itens ainda constam como enviados e os limites de retorno de cada um.</p>}
+        </>}
+        {formError && <div className="form-message form-message-error" role="alert"><p>{formError}</p>{movementKind === 'return' && movementOrderId && <button className="text-button" disabled={returnItemsLoading} onClick={() => void loadReturnableItems(movementOrderId)} type="button">Recarregar itens ainda enviados</button>}</div>}
+        <div className="record-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Registrando…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Salvar movimentação'}</button></div>
+      </form>}
+
+      <section className="surface-panel record-panel" aria-labelledby="inventory-balance-heading">
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">SALDOS ATUAIS</p><h2 id="inventory-balance-heading">Produtos com estoque configurado</h2></div><span className="neutral-status">{loading ? '—' : balances.length}</span></div>
+        {!loading && balances.length > 0 && <label className="search-field"><Icon name="search" /><span className="visually-hidden">Buscar produtos no estoque</span><input onChange={(event) => setBalanceSearch(event.target.value)} placeholder="Buscar produto" value={balanceSearch} /></label>}
+        {loading ? <p className="inline-state" aria-live="polite">Carregando saldos…</p> : balances.length === 0 ? <div className="inline-state"><p>Não há saldos configurados. Configure a unidade e a contagem inicial no catálogo.</p><Link className="quiet-link" to="/catalogo">Abrir catálogo →</Link></div> : <ul className="inventory-balance-list">
+          {filteredBalances.length === 0 ? <li className="inline-state">Nenhum produto corresponde à busca.</li> : filteredBalances.map((balance) => {
+            const quantity = Number(balance.quantity_on_hand)
+            const isNegative = quantity < 0
+            const isZero = quantity === 0
+            const isBelow = balance.minimum_stock !== null && quantity < Number(balance.minimum_stock)
+            return <li key={balance.product_id}>
+              <span className="inventory-balance-copy"><strong>{balance.product_name}</strong><small>Unidade: {balance.inventory_unit}{balance.minimum_stock !== null ? ' · Mínimo ' + formatQuantity(Number(balance.minimum_stock)) : ' · Sem limite mínimo'}</small></span>
+              <span className="inventory-balance-value"><strong>{formatQuantity(quantity)} <small>{balance.inventory_unit}</small></strong><span className={'stock-state' + (isNegative ? ' stock-state-negative' : isZero ? ' stock-state-zero' : isBelow ? ' stock-state-low' : '')}>{isNegative ? 'Saldo negativo' : isZero ? 'Zerado' : isBelow ? 'Abaixo do mínimo' : 'Disponível'}</span></span>
+            </li>
+          })}
+        </ul>}
+        {!loading && untrackedProducts.length > 0 && <div className="inventory-untracked"><p className="eyebrow">AINDA NÃO CONTROLADOS</p><p>{untrackedProducts.map((product) => product.name).join(' · ')}</p><Link className="quiet-link" to="/catalogo">Configurar unidade e contagem inicial →</Link></div>}
+        {!loading && products.some((product) => product.is_combo) && <p className="section-footnote inventory-combo-note">Combos não têm saldo próprio. A disponibilidade é formada pelos saldos dos produtos da composição.</p>}
+      </section>
+
+      <section className="surface-panel record-panel" aria-labelledby="inventory-history-heading">
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">RASTREABILIDADE</p><h2 id="inventory-history-heading">Histórico de movimentações</h2></div><span className="neutral-status">{movementTotal}</span></div>
+        {loading ? <p className="inline-state" aria-live="polite">Carregando movimentações…</p> : movements.length === 0 ? <p className="inline-state">Nenhuma movimentação registrada.</p> : <ul className="timeline-list inventory-movement-list">
+          {pagedMovements.map((movement) => {
+            const product = productMap.get(movement.product_id)
+            const quantity = Number(movement.quantity_delta)
+            const receipt = movement.receipt_id ? receiptMap.get(movement.receipt_id) : undefined
+            return <li key={movement.id}><span className="timeline-dot" /><div className="inventory-movement-detail">
+              <strong>{movementLabel(movement.movement_type)} · {quantity > 0 ? '+' : ''}{formatQuantity(quantity)} {product?.inventory_unit ?? ''}</strong>
+              <p>{product?.name ?? 'Produto arquivado'} · {formatTimestamp(movement.occurred_at)} · Proprietário</p>
+              <p>{movement.reason}{movement.order_id ? ' · Pedido ' + movement.order_id.slice(0, 8) : ''}{receipt?.supplier_name ? ' · Fornecedor: ' + receipt.supplier_name : ''}{receipt?.purchase_reference ? ' · Ref. ' + receipt.purchase_reference : ''}</p>
+              {movement.order_id && <Link to={'/pedidos/' + movement.order_id}>Abrir pedido →</Link>}
+            </div></li>
+          })}
+        </ul>}
+        {!loading && movements.length > 0 && <div className="record-form-actions inventory-history-actions">
+          {historyPage > 0 && <button className="button button-secondary" onClick={() => setHistoryPage((page) => Math.max(0, page - 1))} type="button">Movimentações mais recentes</button>}
+          {historyPage < lastHistoryPage && <button className="button button-secondary" onClick={() => setHistoryPage((page) => Math.min(lastHistoryPage, page + 1))} type="button">Movimentações anteriores</button>}
+          {movementOffset < movementTotal && historyPage === lastHistoryPage && <button className="button button-secondary" disabled={loadingMore} onClick={() => void loadMoreMovements()} type="button">{loadingMore ? 'Carregando…' : 'Carregar histórico anterior'}</button>}
+        </div>}
+      </section>
+    </div>
+  )
+}

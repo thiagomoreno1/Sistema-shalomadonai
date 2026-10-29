@@ -254,6 +254,112 @@
 .order-total-list .order-total-grand { margin-top: 4px; padding-top: 11px; border-top: 1px solid #e7ebe5; }
 .order-total-grand dt, .order-total-grand dd { color: var(--ink); font-size: 14px; font-weight: 680; }
 .order-payment-hint { margin: -2px 0 13px; }
+.order-delivery-toggle { align-items: flex-start; padding: 8px 0; }
+.order-delivery-toggle strong, .order-delivery-toggle small { display: block; }
+.order-delivery-toggle strong { color: var(--ink); font-size: 12px; font-weight: 620; }
+.order-delivery-toggle small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.inventory-summary { margin-bottom: 2px; }
+.inventory-form-hint { margin: -2px 0 14px; }
+.inventory-line-list { display: flex; flex-direction: column; gap: 9px; }
+.inventory-line-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(125px, 0.35fr) auto; align-items: end; gap: 10px; padding: 10px 12px; border: 1px solid #e7ebe5; border-radius: 9px; background: #fcfdfb; }
+.inventory-line-row .text-input { margin-bottom: 0; }
+.inventory-add-line { margin-top: 11px; }
+.inventory-balance-list, .worker-list, .delivery-list { margin: 0; padding: 0; list-style: none; }
+.inventory-balance-list { border-top: 1px solid #eef0ec; }
+.inventory-balance-list > li, .worker-list > li { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 72px; padding: 11px 3px; border-bottom: 1px solid #eef0ec; }
+.inventory-balance-copy, .inventory-balance-value { min-width: 0; }
+.inventory-balance-copy strong, .inventory-balance-copy small, .inventory-balance-value > strong, .inventory-balance-value .stock-state, .worker-list strong, .worker-list small { display: block; }
+.inventory-balance-copy strong, .worker-list strong { color: var(--ink); font-size: 12px; font-weight: 620; }
+.inventory-balance-copy small, .worker-list small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.inventory-balance-value { flex: 0 0 auto; text-align: right; }
+.inventory-balance-value > strong { color: var(--ink); font-size: 14px; }
+.inventory-balance-value > strong small { color: var(--muted); font-size: 10px; font-weight: 500; }
+.stock-state { margin-top: 3px; color: #42684b; font-size: 9px; font-weight: 650; }
+.stock-state-low, .stock-state-zero { color: #8a6a28; }
+.stock-state-negative { color: #a13a30; }
+.inventory-untracked { margin-top: 12px; padding: 13px 0 3px; border-top: 1px solid #eef0ec; }
+.inventory-untracked .eyebrow { margin-bottom: 5px; }
+.inventory-untracked > p:nth-child(2) { margin: 0 0 7px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.inventory-combo-note { margin-top: 13px; }
+.inventory-movement-list li { padding-block: 12px; }
+.inventory-movement-detail { min-width: 0; }
+.inventory-movement-detail > strong { color: var(--ink); font-size: 11px; }
+.inventory-movement-detail p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.inventory-movement-detail a { display: inline-block; margin-top: 5px; color: var(--accent); font-size: 10px; }
+.inventory-history-actions { justify-content: space-between; padding-top: 12px; }
+.delivery-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 12px; }
+.delivery-filter { min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: #fff; font-size: 10px; cursor: pointer; }
+.delivery-filter:hover, .delivery-filter.is-active { border-color: #91a28f; color: #36513b; background: var(--accent-wash); }
+.delivery-filter:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.delivery-list { border-top: 1px solid #eef0ec; }
+.delivery-card { padding: 13px 2px; border-bottom: 1px solid #eef0ec; }
+.delivery-card-head { display: flex; align-items: center; gap: 11px; }
+.delivery-order-mark { display: grid; flex: 0 0 auto; width: 38px; height: 38px; place-items: center; border-radius: 10px; color: var(--accent); background: var(--accent-wash); }
+.delivery-order-mark svg { width: 19px; height: 19px; }
+.delivery-card-main { min-width: 0; flex: 1; }
+.delivery-customer-line { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.delivery-customer-line > strong { color: var(--ink); font-size: 13px; }
+.delivery-card-main > small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+.delivery-card-main > small a, .delivery-facts a { color: var(--accent); }
+.delivery-status { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 7px; border-radius: 999px; color: #506252; background: #edf2ec; font-size: 9px; font-weight: 650; }
+.delivery-status-dispatched, .delivery-status-attempted { color: #835d20; background: #fbf3e2; }
+.delivery-status-delivered { color: #345e3a; background: #e7f1e5; }
+.delivery-status-returned { color: #8a3e36; background: #f8e9e6; }
+.delivery-expand-button { min-width: 72px; min-height: 46px; padding-inline: 11px; }
+.delivery-card-summary { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr); gap: 12px; margin: 12px 0 0 49px; }
+.delivery-card-summary small, .delivery-card-summary strong { display: block; }
+.delivery-card-summary small { color: var(--quiet); font-size: 9px; }
+.delivery-card-summary strong { margin-top: 3px; color: var(--ink); font-size: 11px; font-weight: 560; }
+.delivery-card-details { margin: 14px 0 0 49px; padding-top: 12px; border-top: 1px solid #eef0ec; }
+.delivery-facts { margin-top: 0; }
+.delivery-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 13px 0; }
+.delivery-card-actions .button { min-height: 46px; }
+.delivery-action-form { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; padding: 14px; border: 1px solid #e7ebe5; border-radius: 9px; background: #fcfdfb; }
+.delivery-action-form h3, .delivery-history h3 { margin: 2px 0 4px; color: var(--ink); font-size: 14px; }
+.delivery-action-form .section-heading { margin-bottom: 0; }
+.delivery-action-form .record-field .text-input { margin-bottom: 0; }
+.delivery-action-form .record-form-grid { margin-top: 4px; }
+.delivery-history { margin-top: 17px; }
+.delivery-history .timeline-list { margin-top: 9px; }
+.delivery-history .timeline-list li { padding-block: 10px; }
+.delivery-stock-warning { color: #9d392f !important; font-weight: 620; }
+.delivery-return-note { margin: 12px 0 0; }
+.delivery-return-note a { color: var(--accent); }
+.order-delivery-panel .delivery-status { flex: 0 0 auto; }
+.pickup-stock-preview { display: grid; gap: 8px; margin: 12px 0; padding: 0; list-style: none; }
+.pickup-stock-preview li { display: flex; justify-content: space-between; gap: 14px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.pickup-stock-preview li > span { display: grid; gap: 3px; }
+.pickup-stock-preview li > span:last-child { flex: 0 0 auto; text-align: right; }
+.pickup-stock-preview strong { color: var(--ink); font-size: 12px; }
+.pickup-stock-preview small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.pickup-stock-short { border-color: #efc9c2 !important; background: #fff8f6 !important; }
+.pickup-stock-preview .pickup-stock-short { color: #923d32; }
+.order-delivery-history { margin-top: 12px; }
+.form-message-warning ul { margin: 8px 0; padding-left: 20px; }
+.worker-list { border-top: 1px solid #eef0ec; }
+.worker-list > li > span { min-width: 0; }
+
+@media (max-width: 680px) {
+  .inventory-line-row { grid-template-columns: minmax(0, 1fr) minmax(90px, 0.42fr) auto; align-items: end; gap: 0 9px; }
+  .inventory-line-row .record-field:first-child { grid-column: 1 / -1; }
+  .inventory-line-row .order-remove-button { grid-column: 3; }
+  .delivery-filters { gap: 6px; }
+  .delivery-filter { min-height: 44px; padding-inline: 10px; }
+  .delivery-card-head { align-items: flex-start; }
+  .delivery-card-summary { grid-template-columns: 1fr; gap: 9px; margin-left: 0; }
+  .delivery-card-details { margin-left: 0; }
+  .delivery-expand-button { min-width: 62px; }
+  .delivery-card-actions { align-items: stretch; flex-direction: column; }
+  .delivery-card-actions .button { justify-content: flex-start; }
+  .inventory-history-actions { justify-content: flex-start; }
+}
+.combo-composition { min-width: 0; margin: 4px 0 13px; padding: 14px; border: 1px solid #e7ebe5; border-radius: 9px; background: #fcfdfb; }
+.combo-composition h3 { margin: 3px 0 0; color: var(--ink); font-size: 14px; font-weight: 620; }
+.combo-composition > .section-footnote { margin: 0 0 12px; }
+.combo-composition .section-heading { align-items: center; margin-bottom: 9px; }
+.combo-component-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(125px, 0.36fr) auto; align-items: end; gap: 10px; padding: 10px 0; border-top: 1px solid #eef0ec; }
+.combo-component-row .text-input { margin-bottom: 0; }
+.combo-component-row .order-remove-button { min-height: 46px; }
 .installment-draft-item { grid-template-columns: minmax(115px, 0.28fr) minmax(145px, 0.3fr) minmax(170px, 1fr) auto; }
 .order-schedule-total { margin: 14px 0 0; padding: 11px 12px; border-radius: 8px; color: #6d5e44; background: #faf6eb; font-size: 11px; }
 .order-schedule-total strong { font-weight: 700; }
@@ -389,6 +495,10 @@
   .order-product-select, .order-method-field { grid-column: 1 / -1; }
   .order-line-total { min-height: 42px; }
   .order-remove-button { justify-self: end; min-height: 44px; }
+  .combo-component-row { grid-template-columns: minmax(0, 1fr) minmax(100px, 0.42fr) auto; align-items: end; gap: 0 10px; }
+  .combo-component-row .record-field:first-child { grid-column: 1 / -1; }
+  .combo-component-row .order-remove-button { grid-column: 3; }
+  .combo-composition { padding: 12px; }
   .receivable-summary-grid { grid-template-columns: 1fr; gap: 8px; }
   .receivable-summary-card { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 3px 12px; padding: 13px 15px; }
   .receivable-summary-card > strong { grid-column: 2; grid-row: 1 / span 2; font-size: 20px; }
@@ -438,4 +548,14 @@
   .main-content { padding-inline: 12px; }
   .indicator-card { padding: 11px; }
   .neutral-status { max-width: 114px; white-space: normal; text-align: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
 }

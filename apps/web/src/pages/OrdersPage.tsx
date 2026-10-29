@@ -10,12 +10,13 @@ type Order = {
   customer_name_snapshot: string
   total_cents: number
   status: 'open' | 'cancelled'
+  requires_delivery: boolean
   created_at: string
 }
 
 type Payment = { order_id: string; amount_cents: number }
 
-type OrderSummary = Order & { received_cents: number; outstanding_cents: number }
+type OrderSummary = Order & { received_cents: number; outstanding_cents: number; has_pickup: boolean }
 
 function formatOrderDate(value: string) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeZone: 'America/Sao_Paulo' }).format(new Date(value))
@@ -36,7 +37,7 @@ export function OrdersPage() {
     setLoading(true)
     try {
       const ordersResult = await supabaseClient.from('orders')
-        .select('id, customer_name_snapshot, total_cents, status, created_at')
+        .select('id, customer_name_snapshot, total_cents, status, created_at, requires_delivery')
         .eq('business_id', businessId)
         .order('created_at', { ascending: false })
       if (ordersResult.error) {
@@ -47,16 +48,25 @@ export function OrdersPage() {
       const rows = (ordersResult.data ?? []) as Order[]
       const orderIds = rows.map((order) => order.id)
       let payments: Payment[] = []
+      let pickupOrderIds = new Set<string>()
       if (orderIds.length > 0) {
-        const paymentsResult = await supabaseClient.from('order_payments')
-          .select('order_id, amount_cents')
-          .eq('business_id', businessId)
-          .in('order_id', orderIds)
-        if (paymentsResult.error) {
-          setError('Os pedidos foram encontrados, mas não foi possível carregar os recebimentos. Tente novamente.')
+        const [paymentsResult, pickupEventsResult] = await Promise.all([
+          supabaseClient.from('order_payments')
+            .select('order_id, amount_cents')
+            .eq('business_id', businessId)
+            .in('order_id', orderIds),
+          supabaseClient.from('order_events')
+            .select('order_id')
+            .eq('business_id', businessId)
+            .eq('event_type', 'picked_up')
+            .in('order_id', orderIds),
+        ])
+        if (paymentsResult.error || pickupEventsResult.error) {
+          setError('Os pedidos foram encontrados, mas não foi possível carregar os recebimentos e as retiradas. Tente novamente.')
           return
         }
         payments = (paymentsResult.data ?? []) as Payment[]
+        pickupOrderIds = new Set((pickupEventsResult.data ?? []).map((event) => event.order_id))
       }
 
       const receivedByOrder = new Map<string, number>()
@@ -69,6 +79,7 @@ export function OrdersPage() {
           ...order,
           received_cents,
           outstanding_cents: order.status === 'open' ? Math.max(0, order.total_cents - received_cents) : 0,
+          has_pickup: pickupOrderIds.has(order.id),
         }
       }))
       setError(null)
@@ -95,7 +106,7 @@ export function OrdersPage() {
               <span className="record-avatar"><Icon name="bag" /></span>
               <span className="order-list-main">
                 <strong>{order.customer_name_snapshot}</strong>
-                <small>Pedido de {formatOrderDate(order.created_at)}</small>
+                <small>Pedido de {formatOrderDate(order.created_at)} · {order.requires_delivery ? order.status === 'cancelled' ? 'Entrega cancelada' : 'Entrega' : order.status === 'cancelled' ? 'Retirada cancelada' : order.has_pickup ? 'Retirada registrada' : 'Retirada pendente'}</small>
                 <span className={`order-status ${order.status === 'cancelled' ? 'order-status-cancelled' : order.outstanding_cents > 0 ? 'order-status-open' : 'order-status-received'}`}>
                   {order.status === 'cancelled' ? 'Cancelado' : order.outstanding_cents > 0 ? 'Em aberto' : 'Recebido'}
                 </span>

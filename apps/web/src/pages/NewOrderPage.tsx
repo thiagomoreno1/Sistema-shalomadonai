@@ -56,6 +56,7 @@ export function NewOrderPage() {
   const [loadingChoices, setLoadingChoices] = useState(true)
   const [choiceError, setChoiceError] = useState<string | null>(null)
   const [customerId, setCustomerId] = useState(requestedCustomerId)
+  const [requiresDelivery, setRequiresDelivery] = useState(false)
   const [deliveryAddress, setDeliveryAddress] = useState('')
   const [deliveryFee, setDeliveryFee] = useState('')
   const [discount, setDiscount] = useState('')
@@ -188,6 +189,10 @@ export function NewOrderPage() {
       setFormError('Confira o tamanho do endereço ou das observações.')
       return
     }
+    if (requiresDelivery && !deliveryAddress.trim()) {
+      setFormError('Informe o endereço deste pedido para incluí-lo na fila de entregas.')
+      return
+    }
 
     const installmentPayload = [] as { amount_cents: number; due_on: string; payment_method: string | null }[]
     for (const installment of installments) {
@@ -213,6 +218,7 @@ export function NewOrderPage() {
       const { data, error: rpcError, status: rpcStatus } = await supabaseClient.rpc('create_order', {
         p_business_id: businessId,
         p_customer_id: customerId,
+        p_requires_delivery: requiresDelivery,
         p_delivery_address: deliveryAddress.trim() || null,
         p_delivery_fee_cents: safeFeeCents,
         p_discount_cents: safeDiscountCents,
@@ -266,8 +272,9 @@ export function NewOrderPage() {
                   </select>
                 </label>
                 {requestedCustomerId && !selectedCustomer && <p className="form-message form-message-warning record-field-wide">O cliente do atalho não está ativo. Selecione outro cliente disponível.</p>}
-                <label className="record-field record-field-wide"><span className="field-label">Endereço registrado para este pedido <span className="field-optional">opcional</span></span>
-                  <textarea className="text-input record-textarea" disabled={disabled} maxLength={1000} onChange={(event) => setDeliveryAddress(event.target.value)} placeholder="Pode ajustar ou deixar em branco" rows={2} value={deliveryAddress} />
+                <label className="record-checkbox record-field-wide order-delivery-toggle"><input checked={requiresDelivery} disabled={disabled} onChange={(event) => setRequiresDelivery(event.target.checked)} type="checkbox" /><span><strong>Este pedido precisa ser entregue</strong><small>Só pedidos marcados aqui entram na fila de entregas.</small></span></label>
+                <label className="record-field record-field-wide"><span className="field-label">Endereço registrado para este pedido <span className="field-optional">{requiresDelivery ? 'obrigatório para entrega' : 'opcional'}</span></span>
+                  <textarea className="text-input record-textarea" disabled={disabled} maxLength={1000} onChange={(event) => setDeliveryAddress(event.target.value)} placeholder="Pode ajustar ou deixar em branco" required={requiresDelivery} rows={2} value={deliveryAddress} />
                 </label>
                 <label className="record-field record-field-wide"><span className="field-label">Observações do pedido <span className="field-optional">opcional</span></span>
                   <textarea className="text-input record-textarea" disabled={disabled} maxLength={4000} onChange={(event) => setNotes(event.target.value)} rows={3} value={notes} />

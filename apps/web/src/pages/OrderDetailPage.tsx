@@ -16,12 +16,14 @@ type Order = {
   total_cents: number
   notes: string | null
   status: 'open' | 'cancelled'
+  requires_delivery: boolean
   cancellation_reason: string | null
   created_at: string
   cancelled_at: string | null
 }
 type OrderLine = {
   id: string
+  product_id: string
   line_number: number
   product_name_snapshot: string
   inventory_unit_snapshot: string | null
@@ -29,6 +31,7 @@ type OrderLine = {
   unit_price_snapshot_cents: number
   line_total_cents: number
 }
+type OrderLineComponent = { id: string; order_line_id: string; product_id: string; product_name_snapshot: string; inventory_unit_snapshot: string | null; quantity_snapshot: number; inventory_tracked_snapshot: boolean }
 type Installment = {
   id: string
   installment_number: number
@@ -44,8 +47,24 @@ type Payment = {
   notes: string | null
 }
 type PaymentAllocation = { id: string; payment_id: string; installment_id: string; amount_cents: number }
-type OrderEvent = { id: string; event_type: 'created' | 'cancelled'; reason: string | null; occurred_at: string }
+type PickupWarning = { product_id: string; product_name: string; inventory_unit: string; quantity_on_hand: number }
+type PickupPreviewItem = PickupWarning & { available: number; needed: number; projected: number }
+type PickupPreviewWarning = PickupPreviewItem
+type OrderEvent = { id: string; event_type: 'created' | 'cancelled' | 'picked_up'; reason: string | null; stock_warnings: PickupWarning[]; occurred_at: string }
+type DeliveryStatus = 'awaiting_separation' | 'ready' | 'dispatched' | 'delivered' | 'attempted' | 'rescheduled' | 'returned'
+type Delivery = { id: string; status: DeliveryStatus; delivery_worker_id: string | null; scheduled_on: string | null; time_window: string | null; notes: string | null; canceled_at: string | null; dispatched_at: string | null; delivered_at: string | null; attempted_at: string | null; returned_at: string | null }
+type DeliveryEvent = { id: string; event_type: 'created' | 'plan_updated' | 'status_changed'; from_status: DeliveryStatus | null; to_status: DeliveryStatus; note: string | null; next_step: string | null; stock_warnings: Array<{ product_name: string; inventory_unit: string; quantity_on_hand: number }>; occurred_at: string }
 type LocationState = { successMessage?: string } | null
+
+const deliveryStatusLabels: Record<DeliveryStatus, string> = {
+  awaiting_separation: 'Aguardando separação',
+  ready: 'Pronta para despacho',
+  dispatched: 'Em rota',
+  delivered: 'Entregue',
+  attempted: 'Tentativa sem sucesso',
+  rescheduled: 'Reagendada',
+  returned: 'Devolvida',
+}
 
 function newRequestId() {
   return crypto.randomUUID()
@@ -70,6 +89,10 @@ export function OrderDetailPage() {
   const locationState = location.state as LocationState
   const [order, setOrder] = useState<Order | null>(null)
   const [lines, setLines] = useState<OrderLine[]>([])
+  const [lineComponents, setLineComponents] = useState<OrderLineComponent[]>([])
+  const [delivery, setDelivery] = useState<Delivery | null>(null)
+  const [deliveryEvents, setDeliveryEvents] = useState<DeliveryEvent[]>([])
+  const [deliveryWorkerName, setDeliveryWorkerName] = useState<string | null>(null)
   const [installments, setInstallments] = useState<Installment[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
   const [allocations, setAllocations] = useState<PaymentAllocation[]>([])
@@ -94,6 +117,18 @@ export function OrderDetailPage() {
   const [cancelReason, setCancelReason] = useState('')
   const [cancelSaving, setCancelSaving] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [showPickupForm, setShowPickupForm] = useState(false)
+  const [pickupPreviewLoading, setPickupPreviewLoading] = useState(false)
+  const [pickupPreviewReady, setPickupPreviewReady] = useState(false)
+  const [pickupPreviewItems, setPickupPreviewItems] = useState<PickupPreviewItem[]>([])
+  const [pickupWarnings, setPickupWarnings] = useState<PickupPreviewWarning[]>([])
+  const [pickupSaving, setPickupSaving] = useState(false)
+  const [pickupUncertain, setPickupUncertain] = useState(false)
+  const [pickupError, setPickupError] = useState<string | null>(null)
+  const pickupRequestIdRef = useRef(newRequestId())
+  const pickupHeadingRef = useRef<HTMLHeadingElement>(null)
+  const wasPickupFormOpenRef = useRef(false)
+  const pickupEvent = events.find((event) => event.event_type === 'picked_up')
 
   const loadDetail = useCallback(async (showBusy = true) => {
     if (!supabaseClient) {
@@ -104,16 +139,16 @@ export function OrderDetailPage() {
     if (showBusy) setLoading(true)
     try {
       const orderResult = await supabaseClient.from('orders')
-        .select('id, customer_id, customer_name_snapshot, delivery_address_snapshot, subtotal_cents, delivery_fee_cents, discount_cents, total_cents, notes, status, cancellation_reason, created_at, cancelled_at')
+        .select('id, customer_id, customer_name_snapshot, delivery_address_snapshot, subtotal_cents, delivery_fee_cents, discount_cents, total_cents, notes, status, cancellation_reason, created_at, cancelled_at, requires_delivery')
         .eq('business_id', businessId).eq('id', orderId).maybeSingle()
       if (orderResult.error || !orderResult.data) {
         setError(orderResult.error ? 'Não foi possível carregar este pedido. Tente novamente.' : 'Este pedido não está disponível.')
         return
       }
 
-      const [linesResult, installmentsResult, paymentsResult, eventsResult] = await Promise.all([
+      const [linesResult, installmentsResult, paymentsResult, eventsResult, componentsResult, deliveryResult] = await Promise.all([
         supabaseClient.from('order_lines')
-          .select('id, line_number, product_name_snapshot, inventory_unit_snapshot, quantity, unit_price_snapshot_cents, line_total_cents')
+          .select('id, product_id, line_number, product_name_snapshot, inventory_unit_snapshot, quantity, unit_price_snapshot_cents, line_total_cents')
           .eq('business_id', businessId).eq('order_id', orderId).order('line_number', { ascending: true }),
         supabaseClient.from('order_installments')
           .select('id, installment_number, amount_cents, due_on, payment_method')
@@ -122,12 +157,35 @@ export function OrderDetailPage() {
           .select('id, amount_cents, received_at, payment_method, notes')
           .eq('business_id', businessId).eq('order_id', orderId).order('received_at', { ascending: false }),
         supabaseClient.from('order_events')
-          .select('id, event_type, reason, occurred_at')
+          .select('id, event_type, reason, stock_warnings, occurred_at')
           .eq('business_id', businessId).eq('order_id', orderId).order('occurred_at', { ascending: false }),
+        supabaseClient.from('order_line_components')
+          .select('id, order_line_id, product_id, product_name_snapshot, inventory_unit_snapshot, quantity_snapshot, inventory_tracked_snapshot')
+          .eq('business_id', businessId).eq('order_id', orderId).order('product_name_snapshot', { ascending: true }),
+        supabaseClient.from('deliveries')
+          .select('id, status, delivery_worker_id, scheduled_on, time_window, notes, canceled_at, dispatched_at, delivered_at, attempted_at, returned_at')
+          .eq('business_id', businessId).eq('order_id', orderId).maybeSingle(),
       ])
-      if (linesResult.error || installmentsResult.error || paymentsResult.error || eventsResult.error) {
+      if (linesResult.error || installmentsResult.error || paymentsResult.error || eventsResult.error || componentsResult.error || deliveryResult.error) {
         setError('Não foi possível carregar o histórico completo do pedido. Tente novamente.')
         return
+      }
+      let deliveryEventRows: DeliveryEvent[] = []
+      let workerName: string | null = null
+      if (deliveryResult.data) {
+        const [deliveryEventsResult, workerResult] = await Promise.all([
+          supabaseClient.from('delivery_events').select('id, event_type, from_status, to_status, note, next_step, stock_warnings, occurred_at')
+            .eq('business_id', businessId).eq('delivery_id', deliveryResult.data.id).order('occurred_at', { ascending: false }),
+          deliveryResult.data.delivery_worker_id
+            ? supabaseClient.from('delivery_workers').select('name').eq('business_id', businessId).eq('id', deliveryResult.data.delivery_worker_id).maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+        ])
+        if (deliveryEventsResult.error || workerResult.error) {
+          setError('Não foi possível carregar o histórico de entrega. Tente novamente.')
+          return
+        }
+        deliveryEventRows = (deliveryEventsResult.data ?? []) as DeliveryEvent[]
+        workerName = workerResult.data?.name ?? null
       }
       const loadedPayments = (paymentsResult.data ?? []) as Payment[]
       let loadedAllocations: PaymentAllocation[] = []
@@ -144,6 +202,10 @@ export function OrderDetailPage() {
       }
       setOrder(orderResult.data as Order)
       setLines((linesResult.data ?? []) as OrderLine[])
+      setLineComponents((componentsResult.data ?? []) as OrderLineComponent[])
+      setDelivery(deliveryResult.data as Delivery | null)
+      setDeliveryEvents(deliveryEventRows)
+      setDeliveryWorkerName(workerName)
       setInstallments((installmentsResult.data ?? []) as Installment[])
       setPayments(loadedPayments)
       setAllocations(loadedAllocations)
@@ -165,6 +227,12 @@ export function OrderDetailPage() {
     wasPaymentFormOpenRef.current = showPaymentForm
   }, [showPaymentForm])
 
+  useEffect(() => {
+    if (showPickupForm) pickupHeadingRef.current?.focus()
+    else if (wasPickupFormOpenRef.current) orderHeadingRef.current?.focus()
+    wasPickupFormOpenRef.current = showPickupForm
+  }, [showPickupForm])
+
   const receivedCents = payments.reduce((sum, payment) => sum + payment.amount_cents, 0)
   const outstandingCents = order?.status === 'open' ? Math.max(0, (order?.total_cents ?? 0) - receivedCents) : 0
   const today = businessToday()
@@ -173,6 +241,12 @@ export function OrderDetailPage() {
     for (const allocation of allocations) result.set(allocation.installment_id, (result.get(allocation.installment_id) ?? 0) + allocation.amount_cents)
     return result
   }, [allocations])
+  const componentsByLine = new Map<string, OrderLineComponent[]>()
+  for (const component of lineComponents) {
+    const current = componentsByLine.get(component.order_line_id) ?? []
+    current.push(component)
+    componentsByLine.set(component.order_line_id, current)
+  }
   const selectedAllocations = Object.entries(allocationDraft)
     .map(([installment_id, value]) => ({ installment_id, amount_cents: parseBrazilianCurrency(value) }))
     .filter((allocation): allocation is { installment_id: string; amount_cents: number } => allocation.amount_cents !== null && !Number.isNaN(allocation.amount_cents) && allocation.amount_cents > 0)
@@ -201,6 +275,123 @@ export function OrderDetailPage() {
     setPaymentUncertain(false)
     setPaymentError(null)
     paymentRequestIdRef.current = newRequestId()
+  }
+
+  async function previewPickupStock() {
+    if (!supabaseClient || !order) return
+    setPickupPreviewLoading(true)
+    setPickupPreviewReady(false)
+    setPickupError(null)
+    try {
+      const neededByProduct = new Map<string, { name: string; unit: string; needed: number }>()
+      for (const component of lineComponents) {
+        if (!component.inventory_tracked_snapshot) continue
+        const current = neededByProduct.get(component.product_id) ?? {
+          name: component.product_name_snapshot,
+          unit: component.inventory_unit_snapshot ?? '',
+          needed: 0,
+        }
+        current.needed += Number(component.quantity_snapshot)
+        neededByProduct.set(component.product_id, current)
+      }
+
+      const productIds = [...neededByProduct.keys()]
+      let balances: Array<{ product_id: string; quantity_on_hand: number }> = []
+      if (productIds.length > 0) {
+        const { data, error: balanceError } = await supabaseClient.from('inventory_balances')
+          .select('product_id, quantity_on_hand')
+          .eq('business_id', businessId)
+          .in('product_id', productIds)
+        if (balanceError) {
+          setPickupError('Não foi possível conferir os saldos atuais. Tente conferir novamente antes de confirmar a retirada.')
+          return
+        }
+        balances = (data ?? []) as Array<{ product_id: string; quantity_on_hand: number }>
+      }
+      const balanceByProduct = new Map(balances.map((balance) => [balance.product_id, Number(balance.quantity_on_hand)]))
+      const previewItems: PickupPreviewItem[] = []
+      for (const [productId, item] of neededByProduct) {
+        const available = balanceByProduct.get(productId) ?? 0
+        const projected = available - item.needed
+        previewItems.push({
+          product_id: productId,
+          product_name: item.name,
+          inventory_unit: item.unit,
+          quantity_on_hand: projected,
+          available,
+          needed: item.needed,
+          projected,
+        })
+      }
+      setPickupPreviewItems(previewItems)
+      setPickupWarnings(previewItems.filter((item) => item.projected < 0))
+      setPickupPreviewReady(true)
+    } catch {
+      setPickupError('Não foi possível conferir os saldos atuais. Tente conferir novamente antes de confirmar a retirada.')
+    } finally {
+      setPickupPreviewLoading(false)
+    }
+  }
+
+  async function startPickup() {
+    if (!order || order.status !== 'open' || order.requires_delivery || pickupEvent || pickupPreviewLoading) return
+    setNotice(null)
+    setActionError(null)
+    setPickupError(null)
+    setPickupPreviewItems([])
+    setPickupWarnings([])
+    setPickupPreviewReady(false)
+    if (!pickupUncertain) pickupRequestIdRef.current = newRequestId()
+    setPickupUncertain(false)
+    setShowPickupForm(true)
+    await previewPickupStock()
+  }
+
+  function closePickupForm() {
+    setShowPickupForm(false)
+    if (!pickupUncertain) pickupRequestIdRef.current = newRequestId()
+    setPickupError(null)
+  }
+
+  async function handlePickupSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!supabaseClient || !order || pickupSaving || !pickupPreviewReady) return
+    setPickupSaving(true)
+    setPickupError(null)
+    try {
+      const { data, error: rpcError, status } = await supabaseClient.rpc('record_order_pickup', {
+        p_business_id: businessId,
+        p_order_id: order.id,
+        p_request_id: pickupRequestIdRef.current,
+      })
+      if (rpcError) {
+        if (status >= 400 && status < 500) {
+          pickupRequestIdRef.current = newRequestId()
+          setPickupUncertain(false)
+          setPickupError('A retirada não foi registrada. Atualize o pedido e confira se ele continua elegível antes de tentar novamente.')
+          await loadDetail(false)
+        } else {
+          setPickupUncertain(true)
+          setPickupError('Não foi possível confirmar se a retirada foi registrada. Tente novamente sem alterar a ação para evitar uma baixa duplicada.')
+        }
+        return
+      }
+      if (typeof data !== 'string') {
+        setPickupUncertain(true)
+        setPickupError('A resposta da retirada não chegou completa. Tente novamente sem alterar a ação.')
+        return
+      }
+      setShowPickupForm(false)
+      setPickupUncertain(false)
+      setNotice('Retirada pelo cliente registrada. O estoque foi atualizado e o histórico preservado.')
+      pickupRequestIdRef.current = newRequestId()
+      await loadDetail(false)
+    } catch {
+      setPickupUncertain(true)
+      setPickupError('Não foi possível confirmar se a retirada foi registrada. Tente novamente sem alterar a ação.')
+    } finally {
+      setPickupSaving(false)
+    }
   }
 
   async function handlePaymentSubmit(event: FormEvent<HTMLFormElement>) {
@@ -326,7 +517,7 @@ export function OrderDetailPage() {
         <div><p className="eyebrow">PEDIDO · {order.status === 'cancelled' ? 'CANCELADO' : outstandingCents > 0 ? 'EM ABERTO' : 'RECEBIDO'}</p><h1 ref={orderHeadingRef} tabIndex={-1}>{order.customer_name_snapshot}</h1><p className="page-description">Criado em {formatOrderTimestamp(order.created_at)}</p></div>
         <div className="record-heading-actions">
           {order.status === 'open' && outstandingCents > 0 && <button className="button button-primary" onClick={startPayment} type="button"><Icon name="coin" /> Registrar recebimento</button>}
-          {order.status === 'open' && payments.length === 0 && <button className="button button-secondary order-cancel-trigger" onClick={() => { setShowCancelForm((current) => !current); setActionError(null) }} type="button">{showCancelForm ? 'Fechar cancelamento' : 'Cancelar pedido'}</button>}
+          {order.status === 'open' && payments.length === 0 && !pickupEvent && <button className="button button-secondary order-cancel-trigger" onClick={() => { setShowCancelForm((current) => !current); setActionError(null) }} type="button">{showCancelForm ? 'Fechar cancelamento' : 'Cancelar pedido'}</button>}
         </div>
       </header>
 
@@ -339,7 +530,7 @@ export function OrderDetailPage() {
         <article className="surface-panel order-balance-card"><span>{order.status === 'open' ? 'Saldo em aberto' : 'Saldo após cancelamento'}</span><strong>{formatBRL(outstandingCents)}</strong><small>{order.status === 'open' ? 'Sem juros ou encargos automáticos.' : 'Este pedido está cancelado.'}</small></article>
       </section>
 
-      {showCancelForm && order.status === 'open' && payments.length === 0 && (
+      {showCancelForm && order.status === 'open' && payments.length === 0 && !pickupEvent && (
         <form className="surface-panel record-form" onSubmit={handleCancelSubmit}>
           <p className="eyebrow">CANCELAMENTO</p><h2>Confirmar cancelamento</h2>
           <p className="section-footnote">Um pedido com qualquer recebimento não pode ser cancelado nesta etapa. O registro será preservado no histórico.</p>
@@ -382,14 +573,52 @@ export function OrderDetailPage() {
 
       {order.status === 'cancelled' && <p className="form-message form-message-warning" role="status">Cancelado{order.cancelled_at ? ` em ${formatOrderTimestamp(order.cancelled_at)}` : ''}{order.cancellation_reason ? ` · ${order.cancellation_reason}` : ''}</p>}
 
+      {!order.requires_delivery && <section className="surface-panel record-panel order-pickup-panel" aria-labelledby="order-pickup-heading">
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">RETIRADA PELO CLIENTE</p><h2 id="order-pickup-heading">Entrega ao cliente</h2></div>{pickupEvent && <span className="delivery-status delivery-status-delivered">Retirada registrada</span>}</div>
+        {pickupEvent ? <>
+          <p className="section-footnote">Registrada em {formatOrderTimestamp(pickupEvent.occurred_at, true)}. Os produtos com estoque configurado foram baixados; o evento não entrou na fila de entregas.</p>
+          {pickupEvent.stock_warnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Saldo negativo após a retirada:</strong><ul>{pickupEvent.stock_warnings.map((warning) => <li key={warning.product_id}>{warning.product_name}: {formatQuantity(warning.quantity_on_hand)} {warning.inventory_unit}.</li>)}</ul></div>}
+        </> : order.status === 'open' ? <>
+          <p className="section-footnote">Este pedido não foi marcado para entrega e não aparece na fila. Registre a retirada quando o cliente receber os produtos; o estoque baixa nesse momento.</p>
+          <button className="button button-primary" disabled={pickupPreviewLoading} onClick={() => void startPickup()} type="button"><Icon name="box" /> Registrar retirada pelo cliente</button>
+        </> : <p className="section-footnote">Pedido cancelado; não há retirada registrada.</p>}
+      </section>}
+
+      {showPickupForm && order.status === 'open' && !order.requires_delivery && !pickupEvent && <form className="surface-panel record-form" onSubmit={(event) => void handlePickupSubmit(event)}>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">CONFIRMAÇÃO DE ENTREGA</p><h2 ref={pickupHeadingRef} tabIndex={-1}>Registrar retirada pelo cliente</h2></div><button className="text-button" disabled={pickupSaving || pickupPreviewLoading} onClick={closePickupForm} type="button">Fechar</button></div>
+        <p className="section-footnote">A confirmação baixa do estoque somente os itens com controle configurado. Confira as quantidades e os saldos atuais antes de concluir.</p>
+        {pickupPreviewLoading ? <p className="inline-state" aria-live="polite">Conferindo saldo atual…</p> : null}
+        {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length === 0 && <p className="section-footnote">Este pedido não contém itens com estoque configurado. A retirada será registrada no histórico sem movimentação de estoque.</p>}
+        {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length > 0 && <ul className="pickup-stock-preview" aria-label="Itens controlados e saldos previstos">
+          {pickupPreviewItems.map((item) => <li className={item.projected < 0 ? 'pickup-stock-short' : ''} key={item.product_id}><span><strong>{item.product_name}</strong><small>Disponível {formatQuantity(item.available)} {item.inventory_unit} · quantidade do pedido {formatQuantity(item.needed)} {item.inventory_unit}</small></span><span><small>Após a retirada</small><strong>{formatQuantity(item.projected)} {item.inventory_unit}</strong></span></li>)}
+        </ul>}
+        {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length > 0 && pickupWarnings.length === 0 && <p className="form-message form-message-success" role="status">Os saldos consultados cobrem as quantidades controladas. A operação final será conferida novamente e ficará no histórico.</p>}
+        {!pickupPreviewLoading && pickupPreviewReady && pickupWarnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Saldo insuficiente para esta retirada.</strong><span>A retirada pode continuar; o saldo negativo será permitido e o resultado será registrado. O saldo pode mudar antes da confirmação.</span></div>}
+        {pickupError && <p className="form-message form-message-error" role="alert">{pickupError}</p>}
+        <div className="record-form-actions">{!pickupPreviewReady && !pickupPreviewLoading && <button className="button button-secondary" disabled={pickupSaving} onClick={() => void previewPickupStock()} type="button">Conferir saldos novamente</button>}<button className="button button-primary" disabled={pickupSaving || pickupPreviewLoading || !pickupPreviewReady} type="submit">{pickupSaving ? 'Registrando…' : pickupUncertain ? 'Tentar novamente sem alterar a ação' : pickupWarnings.length > 0 ? 'Confirmar retirada com saldo negativo' : 'Confirmar retirada e baixar estoque'}</button><button className="text-button" disabled={pickupSaving || pickupPreviewLoading} onClick={closePickupForm} type="button">Manter pedido</button></div>
+      </form>}
+
+      {order.requires_delivery && <section className="surface-panel record-panel order-delivery-panel" aria-labelledby="order-delivery-heading">
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">LOGÍSTICA</p><h2 id="order-delivery-heading">Entrega vinculada</h2></div>{delivery && <span className="delivery-status">{delivery.canceled_at ? 'Cancelada com o pedido' : deliveryStatusLabels[delivery.status]}</span>}</div>
+        {!delivery ? <p className="form-message form-message-warning" role="status">Este pedido foi marcado para entrega, mas não há registro de entrega carregado. Atualize o histórico antes de continuar.</p> : <>
+          <dl className="customer-facts order-address-facts"><div><dt>Endereço</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div><div><dt>Entregador</dt><dd>{deliveryWorkerName || 'Sem atribuição'}</dd></div><div><dt>Agendamento</dt><dd>{delivery.scheduled_on ? formatBusinessDate(delivery.scheduled_on) + (delivery.time_window ? ' · ' + delivery.time_window : '') : 'Sem data ou horário definido'}</dd></div><div><dt>Observações da entrega</dt><dd>{delivery.notes || 'Nenhuma observação'}</dd></div></dl>
+          <div className="record-form-actions"><Link className="button button-secondary" to="/entregas">Abrir fila de entregas</Link>{delivery.dispatched_at && <span className="section-footnote">Despachado em {formatOrderTimestamp(delivery.dispatched_at, true)}</span>}{delivery.delivered_at && <span className="section-footnote">Concluído em {formatOrderTimestamp(delivery.delivered_at, true)}</span>}</div>
+          {deliveryEvents.length > 0 && <ul className="timeline-list order-delivery-history">{deliveryEvents.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Entrega criada' : event.event_type === 'plan_updated' ? 'Planejamento atualizado' : (event.from_status ? deliveryStatusLabels[event.from_status] + ' → ' : '') + deliveryStatusLabels[event.to_status]}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.note && <p>{event.note}</p>}{event.next_step && <p>Próxima ação: {event.next_step}</p>}{event.stock_warnings.length > 0 && <p className="delivery-stock-warning">Saldo negativo após o despacho: {event.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(warning.quantity_on_hand) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}</ul>}
+        </>}
+      </section>}
+
       <div className="record-detail-grid order-detail-grid">
         <section className="surface-panel record-panel" aria-labelledby="order-lines-heading">
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">FOTOGRAFIA DO PEDIDO</p><h2 id="order-lines-heading">Produtos registrados</h2></div></div>
           {lines.length === 0 ? <p className="inline-state">Nenhum item foi encontrado neste pedido.</p> : <ul className="order-detail-lines">
-            {lines.map((line) => <li key={line.id}>
-              <span><strong>{line.product_name_snapshot}</strong><small>{formatQuantity(line.quantity)}{line.inventory_unit_snapshot ? ` ${line.inventory_unit_snapshot}` : ''} × {formatBRL(line.unit_price_snapshot_cents)}</small></span>
+            {lines.map((line) => {
+              const components = componentsByLine.get(line.id) ?? []
+              const comboComponents = components.filter((component) => component.product_id !== line.product_id)
+              return <li key={line.id}>
+              <span><strong>{line.product_name_snapshot}</strong><small>{formatQuantity(line.quantity)}{line.inventory_unit_snapshot ? ` ${line.inventory_unit_snapshot}` : ''} × {formatBRL(line.unit_price_snapshot_cents)}</small>{comboComponents.length > 0 && <small>Composição registrada: {comboComponents.map((component) => formatQuantity(component.quantity_snapshot) + (component.inventory_unit_snapshot ? ' ' + component.inventory_unit_snapshot : '') + ' ' + component.product_name_snapshot).join(' · ')}</small>}</span>
               <strong>{formatBRL(line.line_total_cents)}</strong>
-            </li>)}
+            </li>
+            })}
           </ul>}
           <dl className="order-total-list order-detail-totals">
             <div><dt>Subtotal</dt><dd>{formatBRL(order.subtotal_cents)}</dd></div>
@@ -437,7 +666,7 @@ export function OrderDetailPage() {
       <section className="surface-panel record-panel" aria-labelledby="order-events-heading">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">HISTÓRICO</p><h2 id="order-events-heading">Eventos do pedido</h2></div></div>
         {events.length === 0 ? <p className="inline-state">Nenhum evento registrado.</p> : <ul className="timeline-list">
-          {events.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Pedido criado' : 'Pedido cancelado'}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.reason && <p>{event.reason}</p>}</div></li>)}
+          {events.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Pedido criado' : event.event_type === 'picked_up' ? 'Retirada pelo cliente registrada' : 'Pedido cancelado'}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.reason && <p>{event.reason}</p>}{event.event_type === 'picked_up' && event.stock_warnings.length > 0 && <p className="delivery-stock-warning">Saldo negativo após a retirada: {event.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(warning.quantity_on_hand) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}
         </ul>}
       </section>
     </div>

@@ -14,6 +14,8 @@ const OrdersPage = lazy(async () => ({ default: (await import('../pages/OrdersPa
 const NewOrderPage = lazy(async () => ({ default: (await import('../pages/NewOrderPage')).NewOrderPage }))
 const OrderDetailPage = lazy(async () => ({ default: (await import('../pages/OrderDetailPage')).OrderDetailPage }))
 const ReceivablesPage = lazy(async () => ({ default: (await import('../pages/ReceivablesPage')).ReceivablesPage }))
+const InventoryPage = lazy(async () => ({ default: (await import('../pages/InventoryPage')).InventoryPage }))
+const DeliveriesPage = lazy(async () => ({ default: (await import('../pages/DeliveriesPage')).DeliveriesPage }))
 const FollowUpsPage = lazy(async () => ({ default: (await import('../pages/FollowUpsPage')).FollowUpsPage }))
 const MorePage = lazy(async () => ({ default: (await import('../pages/ModulePage')).MorePage }))
 const SettingsPage = lazy(async () => ({ default: (await import('../pages/SettingsPage')).SettingsPage }))
@@ -42,8 +44,8 @@ export function AuthRoutes() {
             <Route path="pedidos/novo" element={<NewOrderPage />} />
             <Route path="pedidos/:orderId" element={<OrderDetailPage />} />
             <Route path="catalogo" element={<ProductsPage />} />
-            <Route path="estoque" element={<ModulePage title="Estoque" description="Saldos e movimentações de produtos." icon="box" nextStep="O controle de estoque será habilitado após confirmar unidades, quantidades iniciais e limites mínimos." />} />
-            <Route path="entregas" element={<ModulePage title="Entregas" description="Separação, despacho e acompanhamento das entregas." icon="truck" nextStep="As entregas serão ligadas aos pedidos, sem criar contas para entregadores." />} />
+            <Route path="estoque" element={<InventoryPage />} />
+            <Route path="entregas" element={<DeliveriesPage />} />
             <Route path="financeiro" element={<ReceivablesPage />} />
             <Route path="relatorios" element={<ModulePage title="Relatórios" description="Acompanhamento diário e mensal da operação." icon="chart" nextStep="Os relatórios serão habilitados junto aos módulos que fornecem seus dados." />} />
             <Route path="mais" element={<MorePage />} />
