@@ -1,0 +1,24 @@
+import react from '@vitejs/plugin-react'
+import { defineConfig, loadEnv } from 'vite'
+import { getSupabaseConfigurationError, isPublishableKey, isValidSupabaseUrl } from './src/lib/supabaseConfig.js'
+
+// https://vite.dev/config/
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), 'VITE_')
+  const supabaseUrl = env.VITE_SUPABASE_URL?.trim() ?? ''
+  const publishableKey = env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim() ?? ''
+  const validUrl = isValidSupabaseUrl(supabaseUrl)
+  const validKey = isPublishableKey(publishableKey)
+  const configError = getSupabaseConfigurationError(supabaseUrl, publishableKey) ?? ''
+
+  return {
+    plugins: [react()],
+    // Do not expose arbitrary VITE_ values. Only inject validated public Supabase config.
+    envPrefix: [],
+    define: {
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(validUrl ? supabaseUrl : ''),
+      'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(validKey ? publishableKey : ''),
+      'import.meta.env.VITE_SUPABASE_CONFIG_ERROR': JSON.stringify(configError),
+    },
+  }
+})

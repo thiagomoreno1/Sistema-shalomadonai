@@ -1,0 +1,14 @@
+{
+  "name": "shalom-adonai-operations",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=web",
+    "build": "npm run build --workspace=web",
+    "lint": "npm run lint --workspace=web",
+    "preview": "npm run preview --workspace=web"
+  }
+}

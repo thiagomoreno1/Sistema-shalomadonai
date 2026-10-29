@@ -1,0 +1,36 @@
+# Supabase local development configuration.
+# https://supabase.com/docs/guides/local-development/cli/config
+project_id = "shalom-adonai-operations"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+# Require explicit grants for newly created tables in the Data API.
+auto_expose_new_tables = false
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[db.seed]
+enabled = false
+sql_paths = []
+
+[auth]
+enabled = true
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173/redefinir-senha", "http://127.0.0.1:5173/redefinir-senha"]
+# The first release is owner-only and has no public registration flow.
+enable_signup = false
+enable_anonymous_sign_ins = false
+
+[auth.email]
+enable_signup = false

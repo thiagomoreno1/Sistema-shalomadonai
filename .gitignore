@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local
+.DS_Store
+Thumbs.db
+.vercel/
+.wrangler/
+supabase/.branches/
+supabase/.temp/
