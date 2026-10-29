@@ -2,18 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { businessToday, formatBRLExact, formatBusinessDate } from '../lib/formatters'
+import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
+import { useBusinessToday } from '../lib/useBusinessToday'
 import { supabaseClient } from '../lib/supabase'
-
-const businessDate = new Intl.DateTimeFormat('pt-BR', {
-  dateStyle: 'full',
-  timeZone: 'America/Sao_Paulo',
-}).format(new Date())
 
 type FinancialSummary = {
   sales: { active_order_count: number; active_total_cents: string }
   receipts: { record_count: number; amount_cents: string }
   receivables: { installment_count: number; open_balance_cents: string }
+  outflows: { record_count: number; total_cents: string }
+  cash_movement: { net_recorded_cents: string }
+  managerial_result: { available: boolean; result_cents: string | null; missing_cost_line_count: number; returned_order_count: number; completed_order_count: number }
 }
 
 const integrations = [
@@ -24,10 +23,11 @@ const integrations = [
 
 export function DashboardPage() {
   const { id: businessId } = useBusiness()
+  const today = useBusinessToday()
+  const businessDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeZone: 'America/Sao_Paulo' }).format(new Date(`${today}T12:00:00Z`))
   const [followUps, setFollowUps] = useState<Array<{ id: string; title: string; due_on: string; customer_id: string | null; customerName: string | null }>>([])
   const [followUpsLoading, setFollowUpsLoading] = useState(true)
   const [followUpsError, setFollowUpsError] = useState(false)
-  const [today] = useState(businessToday)
   const [financeSummary, setFinanceSummary] = useState<FinancialSummary | null>(null)
   const [financeLoading, setFinanceLoading] = useState(true)
   const [financeError, setFinanceError] = useState(false)
@@ -133,9 +133,11 @@ export function DashboardPage() {
           <article className="indicator-card"><p>Pedidos ativos criados hoje</p><strong>{formatBRLExact(financeSummary.sales.active_total_cents)}</strong><span>{financeSummary.sales.active_order_count} pedidos · cancelados separados</span></article>
           <article className="indicator-card"><p>Recebimentos informados hoje</p><strong>{formatBRLExact(financeSummary.receipts.amount_cents)}</strong><span>{financeSummary.receipts.record_count} registros manuais</span></article>
           <article className="indicator-card"><p>Vencimentos em aberto hoje</p><strong>{formatBRLExact(financeSummary.receivables.open_balance_cents)}</strong><span>{financeSummary.receivables.installment_count} parcelas com vencimento hoje</span></article>
-          <article className="indicator-card indicator-pending-card"><p>Resultado gerencial</p><strong>Indisponível</strong><span>Fórmula e custos aguardam validação</span></article>
+          <article className="indicator-card"><p>Saídas pagas hoje</p><strong>{formatBRLExact(financeSummary.outflows.total_cents)}</strong><span>{financeSummary.outflows.record_count} registros manuais</span></article>
+          <article className="indicator-card"><p>Movimento líquido registrado</p><strong>{formatBRLExact(financeSummary.cash_movement.net_recorded_cents)}</strong><span>Recebimentos informados menos saídas pagas</span></article>
+          <article className="indicator-card indicator-pending-card"><p>Resultado gerencial de hoje</p><strong>{financeSummary.managerial_result.available && financeSummary.managerial_result.result_cents !== null ? formatBRLExact(financeSummary.managerial_result.result_cents) : 'Indisponível'}</strong><span>{financeSummary.managerial_result.available ? `${financeSummary.managerial_result.completed_order_count} pedidos entregues ou retirados` : `${financeSummary.managerial_result.missing_cost_line_count} itens sem custo · ${financeSummary.managerial_result.returned_order_count} pedidos com devolução`}</span></article>
         </div>}
-        <p className="section-footnote">Ainda não há lançamentos financeiros de compras ou despesas. Estes valores representam pedidos, recebimentos informados e vencimentos de hoje; não representam saldo bancário nem lucro.</p>
+        <p className="section-footnote">O movimento líquido usa recebimentos e pagamentos informados manualmente; não é saldo bancário. O resultado segue a fórmula aprovada e usa a data de entrega ou retirada; custos de despesas e entregas usam a data paga.</p>
       </section>
 
       <div className="dashboard-columns">

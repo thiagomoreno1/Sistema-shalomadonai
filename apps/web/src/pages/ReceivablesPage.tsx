@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
+import { FinanceNavigation } from '../components/FinanceNavigation'
 import { formatBRL, formatBusinessDate, businessToday } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
@@ -141,6 +142,7 @@ export function ReceivablesPage() {
 
   return (
     <div className="page-stack">
+      <FinanceNavigation active="receivables" />
       <header className="page-heading">
         <div>
           <p className="eyebrow">FINANCEIRO · PEDIDOS</p>

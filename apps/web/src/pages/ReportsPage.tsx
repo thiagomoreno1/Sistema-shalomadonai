@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
-import { businessLocalDateTimeToIso, businessToday, formatBRLExact, formatBusinessDate } from '../lib/formatters'
+import { FinanceNavigation } from '../components/FinanceNavigation'
+import { businessLocalDateTimeToIso, formatBRLExact, formatBusinessDate } from '../lib/formatters'
+import { useBusinessToday } from '../lib/useBusinessToday'
 import { supabaseClient } from '../lib/supabase'
 
 type PeriodMode = 'today' | 'month' | 'custom'
@@ -32,6 +34,30 @@ type InstallmentRow = {
   due_on: string
 }
 type AllocationRow = { id: string; installment_id: string; amount_cents: number | string }
+type OutflowRow = {
+  id: string
+  outflow_type: 'purchase' | 'operating_expense' | 'delivery_cost'
+  description: string
+  category: string | null
+  counterparty_name: string | null
+  amount_cents: number | string
+  paid_on: string
+  order_id: string | null
+  void_event: { reason: string; created_at: string } | null
+}
+type OutflowVoidRow = { outflow_id: string; reason: string; created_at: string }
+type CompletedOrder = {
+  id: string
+  customer_name_snapshot: string
+  total_cents: number | string
+  completed_at: string
+  item_cost_cents: bigint | null
+  missing_cost_line_count: number
+  return_movement_count: number
+}
+type FulfillmentRow = { order_id: string; delivered_at?: string | null; occurred_at?: string | null }
+type OrderLineCost = { order_id: string; unit_cost_snapshot_cents: number | string | null; quantity: number | string }
+type ReturnedMovement = { order_id: string; occurred_at: string }
 type Summary = {
   start_on: string
   end_on: string
@@ -48,6 +74,35 @@ type Summary = {
   }
   receipts: { record_count: number; amount_cents: string }
   receivables: { installment_count: number; open_balance_cents: string; overdue_balance_cents: string }
+  outflows: {
+    record_count: number
+    purchase_count: number
+    purchase_cents: string
+    operating_expense_count: number
+    operating_expense_cents: string
+    delivery_cost_count: number
+    delivery_cost_cents: string
+    total_cents: string
+  }
+  cash_movement: { reported_receipts_cents: string; paid_outflows_cents: string; net_recorded_cents: string }
+  managerial_result: {
+    completed_order_count: number
+    sales_cents: string
+    product_subtotal_cents: string
+    customer_delivery_fee_cents: string
+    discount_cents: string
+    item_cost_cents: string | null
+    missing_cost_line_count: number
+    returned_order_count: number
+    operating_expense_cents: string
+    delivery_cost_cents: string
+    available: boolean
+    result_cents: string | null
+    sales_date_basis: string
+    cost_date_basis: string
+    expense_date_basis: string
+    inventory_purchase_treatment: string
+  }
 }
 type ReceivableRow = InstallmentRow & { customer_name: string; balance_cents: bigint }
 type QueryResponse = { data: unknown[] | null; error: unknown; count?: number | null }
@@ -74,6 +129,24 @@ async function loadAllPages<T>(loadPage: (from: number, to: number) => PromiseLi
 
 function cents(value: number | string) {
   return BigInt(value)
+}
+
+function quantityThousandths(value: number | string) {
+  const [integer = '0', fraction = ''] = String(value).split('.')
+  if (!/^\d+$/.test(integer) || !/^\d*$/.test(fraction) || fraction.length > 3) {
+    throw new Error('A quantidade de um item não pôde ser interpretada.')
+  }
+  return BigInt(integer) * 1000n + BigInt(fraction.padEnd(3, '0') || '0')
+}
+
+function roundMilliCents(value: bigint) {
+  return (value + 500n) / 1000n
+}
+
+function outflowTypeLabel(type: OutflowRow['outflow_type']) {
+  if (type === 'purchase') return 'Compra de estoque'
+  if (type === 'operating_expense') return 'Despesa operacional'
+  return 'Custo de entrega'
 }
 
 function nextBusinessDate(value: string) {
@@ -121,15 +194,19 @@ function statusLabel(order: OrderRow) {
 
 export function ReportsPage() {
   const { id: businessId } = useBusiness()
-  const today = useMemo(() => businessToday(), [])
+  const today = useBusinessToday()
   const firstDayOfMonth = `${today.slice(0, 7)}-01`
   const [periodMode, setPeriodMode] = useState<PeriodMode>('month')
-  const [customStart, setCustomStart] = useState(firstDayOfMonth)
-  const [customEnd, setCustomEnd] = useState(today)
+  const [customStartOverride, setCustomStartOverride] = useState<string | null>(null)
+  const [customEndOverride, setCustomEndOverride] = useState<string | null>(null)
+  const customStart = customStartOverride ?? firstDayOfMonth
+  const customEnd = customEndOverride ?? today
   const [summary, setSummary] = useState<Summary | null>(null)
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [payments, setPayments] = useState<PaymentRow[]>([])
   const [receivables, setReceivables] = useState<ReceivableRow[]>([])
+  const [outflows, setOutflows] = useState<OutflowRow[]>([])
+  const [completedOrders, setCompletedOrders] = useState<CompletedOrder[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [reconciliationWarning, setReconciliationWarning] = useState(false)
@@ -162,6 +239,8 @@ export function ReportsPage() {
       setOrders([])
       setPayments([])
       setReceivables([])
+      setOutflows([])
+      setCompletedOrders([])
       setReconciliationWarning(false)
       setLoading(false)
       return
@@ -171,7 +250,7 @@ export function ReportsPage() {
     setError(null)
     try {
       const { startAt, endAt } = timestampRange(startOn, endOn)
-      const [orderResult, paymentResult, installmentResult] = await Promise.all([
+      const [orderResult, paymentResult, installmentResult, outflowResult, deliveryResult, pickupResult] = await Promise.all([
         loadAllPages<OrderRow>((from, to) => client.from('orders')
           .select('id, customer_name_snapshot, subtotal_cents, delivery_fee_cents, discount_cents, total_cents, status, created_at, cancelled_at', { count: 'exact' })
           .eq('business_id', businessId)
@@ -197,16 +276,141 @@ export function ReportsPage() {
           .order('order_id', { ascending: true })
           .order('installment_number', { ascending: true })
           .range(from, to)),
+        loadAllPages<OutflowRow>((from, to) => client.from('financial_outflows')
+          .select('id, outflow_type, description, category, counterparty_name, amount_cents, paid_on, order_id', { count: 'exact' })
+          .eq('business_id', businessId)
+          .gte('paid_on', startOn)
+          .lte('paid_on', endOn)
+          .order('paid_on', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to)),
+        loadAllPages<FulfillmentRow>((from, to) => client.from('deliveries')
+          .select('order_id, delivered_at', { count: 'exact' })
+          .eq('business_id', businessId)
+          .eq('status', 'delivered')
+          .is('canceled_at', null)
+          .gte('delivered_at', startAt)
+          .lt('delivered_at', endAt)
+          .order('order_id', { ascending: true })
+          .range(from, to)),
+        loadAllPages<FulfillmentRow>((from, to) => client.from('order_events')
+          .select('order_id, occurred_at', { count: 'exact' })
+          .eq('business_id', businessId)
+          .eq('event_type', 'picked_up')
+          .gte('occurred_at', startAt)
+          .lt('occurred_at', endAt)
+          .order('order_id', { ascending: true })
+          .range(from, to)),
       ])
 
       if (reportRequestId.current !== requestId) return
-      if (orderResult.error || paymentResult.error || installmentResult.error) {
+      if (orderResult.error || paymentResult.error || installmentResult.error || outflowResult.error || deliveryResult.error || pickupResult.error) {
         throw new Error('Não foi possível carregar todos os dados deste período. Tente novamente.')
       }
 
       const loadedOrders = orderResult.data ?? []
       const loadedPayments = paymentResult.data ?? []
       const loadedInstallments = installmentResult.data ?? []
+      const rawOutflows = outflowResult.data ?? []
+      const outflowVoids: OutflowVoidRow[] = []
+      const outflowIds = rawOutflows.map((outflow) => outflow.id)
+      for (let start = 0; start < outflowIds.length; start += 100) {
+        if (reportRequestId.current !== requestId) return
+        const batch = outflowIds.slice(start, start + 100)
+        const { data, error: voidError } = await client.from('financial_outflow_voids')
+          .select('outflow_id, reason, created_at')
+          .eq('business_id', businessId)
+          .in('outflow_id', batch)
+        if (voidError) throw voidError
+        outflowVoids.push(...((data ?? []) as OutflowVoidRow[]))
+      }
+      const voidByOutflowId = new Map(outflowVoids.map((event) => [event.outflow_id, { reason: event.reason, created_at: event.created_at }]))
+      const loadedOutflows = rawOutflows.map((outflow) => ({ ...outflow, void_event: voidByOutflowId.get(outflow.id) ?? null }))
+      const activeOutflows = loadedOutflows.filter((outflow) => outflow.void_event === null)
+      const fulfillmentDates = new Map<string, string>()
+      for (const handoff of [...(deliveryResult.data ?? []), ...(pickupResult.data ?? [])]) {
+        const completedAt = handoff.delivered_at ?? handoff.occurred_at
+        if (!completedAt) continue
+        const existing = fulfillmentDates.get(handoff.order_id)
+        if (!existing || completedAt < existing) fulfillmentDates.set(handoff.order_id, completedAt)
+      }
+      const fulfilledOrderIds = Array.from(fulfillmentDates.keys())
+      const fulfilledOrderRows: OrderRow[] = []
+      for (let start = 0; start < fulfilledOrderIds.length; start += 100) {
+        if (reportRequestId.current !== requestId) return
+        const batch = fulfilledOrderIds.slice(start, start + 100)
+        const result = await loadAllPages<OrderRow>((from, to) => client.from('orders')
+          .select('id, customer_name_snapshot, subtotal_cents, delivery_fee_cents, discount_cents, total_cents, status, created_at, cancelled_at', { count: 'exact' })
+          .eq('business_id', businessId)
+          .eq('status', 'open')
+          .in('id', batch)
+          .order('id', { ascending: true })
+          .range(from, to))
+        if (result.error) throw result.error
+        fulfilledOrderRows.push(...(result.data ?? []))
+      }
+      const fulfilledOrderIdsActive = fulfilledOrderRows.map((order) => order.id)
+      const lineCosts: OrderLineCost[] = []
+      for (let start = 0; start < fulfilledOrderIdsActive.length; start += 100) {
+        if (reportRequestId.current !== requestId) return
+        const batch = fulfilledOrderIdsActive.slice(start, start + 100)
+        const result = await loadAllPages<OrderLineCost>((from, to) => client.from('order_lines')
+          .select('order_id, unit_cost_snapshot_cents, quantity', { count: 'exact' })
+          .eq('business_id', businessId)
+          .in('order_id', batch)
+          .order('order_id', { ascending: true })
+          .range(from, to))
+        if (result.error) throw result.error
+        lineCosts.push(...(result.data ?? []))
+      }
+      const returnMovements: ReturnedMovement[] = []
+      for (let start = 0; start < fulfilledOrderIdsActive.length; start += 100) {
+        if (reportRequestId.current !== requestId) return
+        const batch = fulfilledOrderIdsActive.slice(start, start + 100)
+        const result = await loadAllPages<ReturnedMovement>((from, to) => client.from('inventory_movements')
+          .select('order_id, occurred_at', { count: 'exact' })
+          .eq('business_id', businessId)
+          .eq('movement_type', 'return')
+          .in('order_id', batch)
+          .order('order_id', { ascending: true })
+          .range(from, to))
+        if (result.error) throw result.error
+        returnMovements.push(...(result.data ?? []))
+      }
+      const itemCostMilliCents = new Map<string, bigint>()
+      const missingCostsByOrder = new Map<string, number>()
+      const returnedMovementsByOrder = new Map<string, number>()
+      for (const orderId of fulfilledOrderIdsActive) {
+        itemCostMilliCents.set(orderId, 0n)
+        missingCostsByOrder.set(orderId, 0)
+        returnedMovementsByOrder.set(orderId, 0)
+      }
+      for (const movement of returnMovements) {
+        const completedAt = fulfillmentDates.get(movement.order_id)
+        if (!completedAt || movement.occurred_at <= completedAt) continue
+        returnedMovementsByOrder.set(movement.order_id, (returnedMovementsByOrder.get(movement.order_id) ?? 0) + 1)
+      }
+      for (const line of lineCosts) {
+        if (line.unit_cost_snapshot_cents === null) {
+          missingCostsByOrder.set(line.order_id, (missingCostsByOrder.get(line.order_id) ?? 0) + 1)
+          continue
+        }
+        const lineCost = cents(line.unit_cost_snapshot_cents) * quantityThousandths(line.quantity)
+        itemCostMilliCents.set(line.order_id, (itemCostMilliCents.get(line.order_id) ?? 0n) + lineCost)
+      }
+      const loadedCompletedOrders: CompletedOrder[] = fulfilledOrderRows.map((order) => {
+        const missing = missingCostsByOrder.get(order.id) ?? 0
+        const returnCount = returnedMovementsByOrder.get(order.id) ?? 0
+        return {
+          id: order.id,
+          customer_name_snapshot: order.customer_name_snapshot,
+          total_cents: order.total_cents,
+          completed_at: fulfillmentDates.get(order.id) ?? '',
+          item_cost_cents: missing === 0 && returnCount === 0 ? roundMilliCents(itemCostMilliCents.get(order.id) ?? 0n) : null,
+          missing_cost_line_count: missing,
+          return_movement_count: returnCount,
+        }
+      }).sort((left, right) => right.completed_at.localeCompare(left.completed_at) || left.id.localeCompare(right.id))
       const referencedOrderIds = Array.from(new Set([
         ...loadedPayments.map((payment) => payment.order_id),
         ...loadedInstallments.map((installment) => installment.order_id),
@@ -268,6 +472,22 @@ export function ReportsPage() {
       const listOverdueBalance = outstanding
         .filter((item) => item.due_on < reportSummary.as_of_on)
         .reduce((total, item) => total + item.balance_cents, 0n)
+      const outflowTotalByType = (type: OutflowRow['outflow_type']) => activeOutflows
+        .filter((outflow) => outflow.outflow_type === type)
+      const purchaseOutflows = outflowTotalByType('purchase')
+      const operatingOutflows = outflowTotalByType('operating_expense')
+      const deliveryOutflows = outflowTotalByType('delivery_cost')
+      const outflowTotal = sum(activeOutflows.map((outflow) => outflow.amount_cents))
+      const reportedReceipts = sum(loadedPayments.map((payment) => payment.amount_cents))
+      const completedSales = sum(loadedCompletedOrders.map((order) => order.total_cents))
+      const missingCostLineCount = loadedCompletedOrders.reduce((total, order) => total + order.missing_cost_line_count, 0)
+      const returnedOrderCount = loadedCompletedOrders.filter((order) => order.return_movement_count > 0).length
+      const completedItemCost = missingCostLineCount === 0 && returnedOrderCount === 0
+        ? loadedCompletedOrders.reduce((total, order) => total + (order.item_cost_cents ?? 0n), 0n)
+        : null
+      const operatingExpenseTotal = sum(operatingOutflows.map((outflow) => outflow.amount_cents))
+      const deliveryCostTotal = sum(deliveryOutflows.map((outflow) => outflow.amount_cents))
+      const expectedResult = completedItemCost === null ? null : completedSales - completedItemCost - operatingExpenseTotal - deliveryCostTotal
       const summaryMismatch =
         reportSummary.sales.record_count !== loadedOrders.length ||
         reportSummary.sales.active_order_count !== activeOrders.length ||
@@ -281,13 +501,33 @@ export function ReportsPage() {
         BigInt(reportSummary.receipts.amount_cents) !== sum(loadedPayments.map((payment) => payment.amount_cents)) ||
         reportSummary.receivables.installment_count !== outstanding.length ||
         BigInt(reportSummary.receivables.open_balance_cents) !== listOpenBalance ||
-        BigInt(reportSummary.receivables.overdue_balance_cents) !== listOverdueBalance
+        BigInt(reportSummary.receivables.overdue_balance_cents) !== listOverdueBalance ||
+        reportSummary.outflows.record_count !== activeOutflows.length ||
+        reportSummary.outflows.purchase_count !== purchaseOutflows.length ||
+        BigInt(reportSummary.outflows.purchase_cents) !== sum(purchaseOutflows.map((outflow) => outflow.amount_cents)) ||
+        reportSummary.outflows.operating_expense_count !== operatingOutflows.length ||
+        BigInt(reportSummary.outflows.operating_expense_cents) !== operatingExpenseTotal ||
+        reportSummary.outflows.delivery_cost_count !== deliveryOutflows.length ||
+        BigInt(reportSummary.outflows.delivery_cost_cents) !== deliveryCostTotal ||
+        BigInt(reportSummary.outflows.total_cents) !== outflowTotal ||
+        BigInt(reportSummary.cash_movement.reported_receipts_cents) !== reportedReceipts ||
+        BigInt(reportSummary.cash_movement.paid_outflows_cents) !== outflowTotal ||
+        BigInt(reportSummary.cash_movement.net_recorded_cents) !== reportedReceipts - outflowTotal ||
+        reportSummary.managerial_result.completed_order_count !== loadedCompletedOrders.length ||
+        BigInt(reportSummary.managerial_result.sales_cents) !== completedSales ||
+        reportSummary.managerial_result.missing_cost_line_count !== missingCostLineCount ||
+        reportSummary.managerial_result.returned_order_count !== returnedOrderCount ||
+        reportSummary.managerial_result.available !== (missingCostLineCount === 0 && returnedOrderCount === 0) ||
+        (completedItemCost === null ? reportSummary.managerial_result.item_cost_cents !== null || reportSummary.managerial_result.result_cents !== null :
+          BigInt(reportSummary.managerial_result.item_cost_cents ?? '0') !== completedItemCost || BigInt(reportSummary.managerial_result.result_cents ?? '0') !== expectedResult)
 
       if (reportRequestId.current !== requestId) return
       setSummary(reportSummary)
       setOrders(loadedOrders)
       setPayments(paymentsWithCustomer)
       setReceivables(outstanding)
+      setOutflows(loadedOutflows)
+      setCompletedOrders(loadedCompletedOrders)
       setReconciliationWarning(summaryMismatch)
     } catch {
       if (reportRequestId.current !== requestId) return
@@ -296,6 +536,8 @@ export function ReportsPage() {
       setOrders([])
       setPayments([])
       setReceivables([])
+      setOutflows([])
+      setCompletedOrders([])
       setReconciliationWarning(false)
     } finally {
       if (reportRequestId.current === requestId) setLoading(false)
@@ -315,8 +557,15 @@ export function ReportsPage() {
     if (!summary) return
     const rows: string[][] = [
       ['Relatório financeiro', `${formatBusinessDate(summary.start_on)} a ${formatBusinessDate(summary.end_on)}`],
-      ['Escopo', 'Este arquivo contém pedidos, recebimentos informados manualmente e vencimentos em aberto. Não inclui lançamentos financeiros de compras, despesas, custos de entrega, reembolsos ou movimentos bancários. Não calcula fluxo de caixa líquido, conciliação bancária ou resultado gerencial.'],
+      ['Escopo', 'Este arquivo inclui pedidos, recebimentos informados manualmente, vencimentos em aberto, pagamentos de compras/despesas/entregas, movimento líquido registrado e resultado gerencial pela fórmula aprovada. Lançamentos anulados por erro ficam visíveis na lista, mas são excluídos dos totais. Não representa saldo bancário nem inclui conciliação. Reembolsos e ajustes financeiros não são registrados neste módulo.'],
       ['Nota sobre recebimentos', 'Os recebimentos são informados manualmente pelo proprietário; o sistema não processa nem verifica pagamentos ou créditos bancários.'],
+      ['Nota sobre saídas', 'Compras, despesas e custos de entrega aparecem somente quando pagos e são informados manualmente. Compra de estoque afeta o caixa; o resultado reconhece o custo congelado nos itens vendidos.'],
+      ['Fórmula gerencial', 'Pedidos concluídos (subtotal de produtos + taxa de entrega cobrada − desconto) − custo congelado nos itens do pedido − despesas operacionais pagas − custos reais de entrega pagos.'],
+      ['Base de datas do resultado', 'Vendas e custo dos itens: data de entrega concluída ou retirada pelo cliente. Despesas e custos de entrega: data do pagamento informado.'],
+      ['Resultado gerencial (R$)', summary.managerial_result.result_cents === null ? 'Indisponível; há custo congelado ausente ou mercadoria devolvida sem regra de ajuste financeiro.' : csvMoney(summary.managerial_result.result_cents)],
+      ['Itens sem custo congelado', String(summary.managerial_result.missing_cost_line_count)],
+      ['Pedidos concluídos com devolução registrada', String(summary.managerial_result.returned_order_count)],
+      ['Movimento líquido registrado (R$)', csvMoney(summary.cash_movement.net_recorded_cents)],
       ['Pedidos ativos no período', String(summary.sales.active_order_count)],
       ['Subtotal de produtos (R$)', csvMoney(summary.sales.active_subtotal_cents)],
       ['Taxas de entrega cobradas (R$)', csvMoney(summary.sales.active_delivery_fee_cents)],
@@ -327,12 +576,21 @@ export function ReportsPage() {
       ['Recebimentos informados no período (R$)', csvMoney(summary.receipts.amount_cents)],
       [`Saldos em vencimentos do período, apurados em ${formatBusinessDate(summary.as_of_on)} (R$)`, csvMoney(summary.receivables.open_balance_cents)],
       [`Parte vencida desse saldo em ${formatBusinessDate(summary.as_of_on)} (R$)`, csvMoney(summary.receivables.overdue_balance_cents)],
+      ['Compras de estoque pagas no período (R$)', csvMoney(summary.outflows.purchase_cents)],
+      ['Despesas operacionais pagas no período (R$)', csvMoney(summary.outflows.operating_expense_cents)],
+      ['Custos reais de entrega pagos no período (R$)', csvMoney(summary.outflows.delivery_cost_cents)],
+      [],
+      ['Entregas/retiradas concluídas', 'Data do repasse', 'Pedido', 'Cliente', 'Venda líquida após desconto (R$)', 'Custo dos itens congelado no pedido (R$)', 'Itens sem custo', 'Devoluções registradas'],
+      ...completedOrders.map((order) => [order.id, reportDate(order.completed_at), order.id, order.customer_name_snapshot, csvMoney(String(order.total_cents)), order.item_cost_cents === null ? 'Indisponível' : csvMoney(order.item_cost_cents), String(order.missing_cost_line_count), String(order.return_movement_count)]),
       [],
       ['Pedidos', 'Data do pedido', 'Cliente', 'Produtos (R$)', 'Taxa cobrada (R$)', 'Desconto (R$)', 'Total original (R$)', 'Situação'],
       ...orders.map((order) => [order.id, reportDate(order.created_at), order.customer_name_snapshot, csvMoney(String(order.subtotal_cents)), csvMoney(String(order.delivery_fee_cents)), csvMoney(String(order.discount_cents)), csvMoney(String(order.total_cents)), statusLabel(order)]),
       [],
       ['Recebimentos informados', 'Data do recebimento', 'Cliente', 'Forma informada', 'Valor (R$)'],
       ...payments.map((payment) => [payment.order_id, reportDate(payment.received_at), payment.customer_name, payment.payment_method ?? '', csvMoney(String(payment.amount_cents))]),
+      [],
+      ['Saídas pagas informadas', 'Data paga', 'Tipo', 'Descrição', 'Categoria', 'Quem recebeu', 'Pedido relacionado', 'Valor original (R$)', 'Situação', 'Motivo da anulação'],
+      ...outflows.map((outflow) => [outflow.id, formatBusinessDate(outflow.paid_on), outflowTypeLabel(outflow.outflow_type), outflow.description, outflow.category ?? '', outflow.counterparty_name ?? '', outflow.order_id ?? '', csvMoney(String(outflow.amount_cents)), outflow.void_event ? 'Anulado por erro; excluído dos totais' : 'Ativo', outflow.void_event?.reason ?? '']),
       [],
       ['Vencimentos ainda em aberto', 'Vencimento', 'Cliente', 'Parcela', 'Valor original (R$)', 'Saldo apurado hoje (R$)', 'Situação'],
       ...receivables.map((item) => [item.order_id, formatBusinessDate(item.due_on), item.customer_name, String(item.installment_number), csvMoney(String(item.amount_cents)), csvMoney(item.balance_cents), item.due_on < (summary.as_of_on ?? today) ? 'Vencido' : 'Em aberto']),
@@ -348,6 +606,7 @@ export function ReportsPage() {
 
   return (
     <div className="page-stack report-page">
+      <FinanceNavigation active="reports" />
       <header className="page-heading">
         <div>
           <p className="eyebrow">FINANCEIRO · CONSULTA</p>
@@ -365,11 +624,11 @@ export function ReportsPage() {
         <div className="report-period-controls">
           <label className="record-field"><span className="field-label">Período</span><select className="text-input" onChange={(event) => setPeriodMode(event.target.value as PeriodMode)} value={periodMode}><option value="today">Hoje</option><option value="month">Este mês até hoje</option><option value="custom">Intervalo personalizado</option></select></label>
           {periodMode === 'custom' && <>
-            <label className="record-field"><span className="field-label">De</span><input aria-describedby={rangeError ? 'report-period-error' : undefined} aria-invalid={Boolean(rangeError)} className="text-input" max={customEnd || undefined} onChange={(event) => setCustomStart(event.target.value)} type="date" value={customStart} /></label>
-            <label className="record-field"><span className="field-label">Até</span><input aria-describedby={rangeError ? 'report-period-error' : undefined} aria-invalid={Boolean(rangeError)} className="text-input" min={customStart || undefined} onChange={(event) => setCustomEnd(event.target.value)} type="date" value={customEnd} /></label>
+            <label className="record-field"><span className="field-label">De</span><input aria-describedby={rangeError ? 'report-period-error' : undefined} aria-invalid={Boolean(rangeError)} className="text-input" max={customEnd || undefined} onChange={(event) => setCustomStartOverride(event.target.value)} type="date" value={customStart} /></label>
+            <label className="record-field"><span className="field-label">Até</span><input aria-describedby={rangeError ? 'report-period-error' : undefined} aria-invalid={Boolean(rangeError)} className="text-input" min={customStart || undefined} onChange={(event) => setCustomEndOverride(event.target.value)} type="date" value={customEnd} /></label>
           </>}
           {rangeError && <p className="form-message form-message-error report-period-error" id="report-period-error" role="alert">{rangeError}</p>}
-          <p className="section-footnote">Período atual: {startOn && endOn ? `${formatBusinessDate(startOn)} a ${formatBusinessDate(endOn)}` : 'datas inválidas'}. Saldos a receber consideram apenas vencimentos do intervalo e são apurados na data de hoje ({formatBusinessDate(summary?.as_of_on ?? today)}).</p>
+          <p className="section-footnote">Período atual: {startOn && endOn ? `${formatBusinessDate(startOn)} a ${formatBusinessDate(endOn)}` : 'datas inválidas'}. Saldos a receber consideram vencimentos do intervalo e são apurados hoje. Saídas usam a data paga; o resultado combina data de entrega/retirada e data de pagamento.</p>
         </div>
       </section>
 
@@ -384,11 +643,31 @@ export function ReportsPage() {
           <article className="surface-panel report-summary-card"><span>Recebimentos informados</span><strong>{formatBRLExact(summary.receipts.amount_cents)}</strong><small>{summary.receipts.record_count} registros · não processados pelo sistema</small></article>
           <article className="surface-panel report-summary-card"><span>Saldo em vencimentos do período</span><strong>{formatBRLExact(summary.receivables.open_balance_cents)}</strong><small>Saldo atual · {summary.receivables.installment_count} parcelas em aberto</small></article>
           <article className="surface-panel report-summary-card"><span>Vencido hoje nesse período</span><strong>{formatBRLExact(summary.receivables.overdue_balance_cents)}</strong><small>Em aberto com vencimento anterior a hoje</small></article>
+          <article className="surface-panel report-summary-card"><span>Saídas pagas informadas</span><strong>{formatBRLExact(summary.outflows.total_cents)}</strong><small>{summary.outflows.record_count} lançamentos · inclui compras de estoque</small></article>
+          <article className="surface-panel report-summary-card"><span>Movimento líquido registrado</span><strong>{formatBRLExact(summary.cash_movement.net_recorded_cents)}</strong><small>Recebimentos informados − saídas pagas; sem verificação bancária</small></article>
         </section>
 
         <section className="surface-panel report-definition-panel" aria-labelledby="report-result-title">
-          <div><p className="eyebrow">RESULTADO GERENCIAL</p><h2 id="report-result-title">Cálculo pendente de validação</h2><p>A fórmula, a cobertura do custo dos produtos e o tratamento de descontos, entrega e compras ainda precisam ser confirmados. O fluxo de caixa e as vendas registradas não são apresentados como lucro.</p><p className="report-scope-note">Escopo atual: ainda não há lançamentos financeiros de compras, despesas ou custos de entrega. As entradas abaixo são recebimentos informados manualmente; não representam fluxo líquido, saldo bancário ou conciliação.</p></div>
-          <Link className="quiet-link report-related-link" to="/financeiro">Abrir contas a receber</Link>
+          <div>
+            <p className="eyebrow">RESULTADO GERENCIAL · FÓRMULA APROVADA</p>
+            <h2 id="report-result-title">{summary.managerial_result.available && summary.managerial_result.result_cents !== null ? formatBRLExact(summary.managerial_result.result_cents) : 'Resultado indisponível para este período'}</h2>
+            <p>Pedidos concluídos após desconto (subtotal de produtos + taxa cobrada − desconto) − custo congelado dos itens do pedido − despesas operacionais pagas − custos reais de entrega pagos.</p>
+            <div className="report-breakdown report-result-breakdown" aria-label="Componentes do resultado gerencial">
+              <span>Vendas concluídas <strong>{formatBRLExact(summary.managerial_result.sales_cents)}</strong></span>
+              <span>Custo dos itens vendidos <strong>{summary.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(summary.managerial_result.item_cost_cents)}</strong></span>
+              <span>Despesas operacionais pagas <strong>{formatBRLExact(summary.managerial_result.operating_expense_cents)}</strong></span>
+              <span>Custos reais de entrega pagos <strong>{formatBRLExact(summary.managerial_result.delivery_cost_cents)}</strong></span>
+            </div>
+            {!summary.managerial_result.available && <p className="report-scope-note">{summary.managerial_result.missing_cost_line_count > 0 ? `${summary.managerial_result.missing_cost_line_count} item(ns) vendido(s) não têm custo congelado.` : ''}{summary.managerial_result.returned_order_count > 0 ? ` ${summary.managerial_result.returned_order_count} pedido(s) concluído(s) têm devolução física registrada, ainda sem regra de ajuste financeiro.` : ''} O resultado numérico fica oculto até ser possível calcular esses componentes sem presumir valores.</p>}
+            <p className="report-scope-note">Vendas e custo dos itens usam a data de entrega concluída ou retirada. Despesas e custos de entrega usam a data paga. Compra de estoque aparece no caixa e não é subtraída novamente no resultado. Reembolsos e ajustes financeiros ainda não são registrados neste módulo.</p>
+          </div>
+          <Link className="quiet-link report-related-link" to="/financeiro/saidas">Registrar saídas</Link>
+        </section>
+
+        <section className="surface-panel record-panel report-section" aria-labelledby="report-completed-title">
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">DATA DA ENTREGA OU RETIRADA</p><h2 id="report-completed-title">Vendas reconhecidas no resultado</h2></div><span className="neutral-status">{completedOrders.length}</span></div>
+          {completedOrders.length === 0 ? <p className="inline-state">Nenhuma entrega concluída ou retirada registrada neste período.</p> : <div aria-label="Vendas concluídas e custos congelados" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data</th><th>Pedido / cliente</th><th>Venda após desconto</th><th>Custo dos itens no pedido</th><th>Cobertura de custo</th></tr></thead><tbody>{completedOrders.map((order) => <tr key={order.id}><td>{reportDate(order.completed_at)}</td><td><Link className="report-order-link" to={`/pedidos/${order.id}`}>{order.customer_name_snapshot}</Link></td><td>{formatBRLExact(String(order.total_cents))}</td><td>{order.item_cost_cents === null ? 'Indisponível' : formatBRLExact(order.item_cost_cents.toString())}</td><td>{order.return_movement_count > 0 ? `${order.return_movement_count} devolução(ões)` : order.missing_cost_line_count > 0 ? `${order.missing_cost_line_count} item(ns) sem custo` : 'Completa'}</td></tr>)}</tbody></table></div>}
+          <p className="section-footnote">A venda entra no resultado quando a entrega é concluída ou o proprietário registra a retirada do cliente. Valores recebidos em parcelas são exibidos à parte e não determinam esta data.</p>
         </section>
 
         <section className="surface-panel record-panel report-section" aria-labelledby="report-sales-title">
@@ -406,6 +685,17 @@ export function ReportsPage() {
         <section className="surface-panel record-panel report-section" aria-labelledby="report-receipts-title">
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">DATA DO RECEBIMENTO</p><h2 id="report-receipts-title">Recebimentos informados</h2></div><span className="neutral-status">{payments.length}</span></div>
           {payments.length === 0 ? <p className="inline-state">Nenhum recebimento informado no período.</p> : <div aria-label="Tabela de recebimentos informados" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data</th><th>Pedido</th><th>Cliente</th><th>Forma informada</th><th>Valor</th></tr></thead><tbody>{payments.map((payment) => <tr key={payment.id}><td>{reportDate(payment.received_at)}</td><td><Link className="report-order-link" to={`/pedidos/${payment.order_id}`}>Abrir pedido</Link></td><td>{payment.customer_name}</td><td>{payment.payment_method || 'Não informada'}</td><td>{formatBRLExact(String(payment.amount_cents))}</td></tr>)}</tbody></table></div>}
+        </section>
+
+        <section className="surface-panel record-panel report-section" aria-labelledby="report-outflows-title">
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">DATA DO PAGAMENTO</p><h2 id="report-outflows-title">Saídas pagas informadas</h2></div><span className="neutral-status">{outflows.length}</span></div>
+          <div className="report-breakdown" aria-label="Totais de saídas pagas">
+            <span>Compras de estoque <strong>{formatBRLExact(summary.outflows.purchase_cents)}</strong></span>
+            <span>Despesas operacionais <strong>{formatBRLExact(summary.outflows.operating_expense_cents)}</strong></span>
+            <span>Custos reais de entrega <strong>{formatBRLExact(summary.outflows.delivery_cost_cents)}</strong></span>
+          </div>
+          {outflows.length === 0 ? <p className="inline-state">Nenhuma saída paga informada no período.</p> : <div aria-label="Tabela de saídas pagas do período" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data paga</th><th>Tipo</th><th>Descrição</th><th>Categoria</th><th>Quem recebeu</th><th>Pedido</th><th>Valor original</th><th>Situação</th></tr></thead><tbody>{outflows.map((outflow) => <tr key={outflow.id}><td>{formatBusinessDate(outflow.paid_on)}</td><td>{outflowTypeLabel(outflow.outflow_type)}</td><td>{outflow.description}</td><td>{outflow.category || '—'}</td><td>{outflow.counterparty_name || '—'}</td><td>{outflow.order_id ? <Link className="report-order-link" to={`/pedidos/${outflow.order_id}`}>Abrir pedido</Link> : '—'}</td><td>{formatBRLExact(String(outflow.amount_cents))}</td><td>{outflow.void_event ? <><strong>Anulado por erro</strong><small className="section-footnote">{formatBusinessDate(outflow.void_event.created_at)} · {outflow.void_event.reason}</small></> : 'Ativo'}</td></tr>)}</tbody></table></div>}
+          <p className="section-footnote">Cada linha é um valor já pago, informado manualmente. Compras de estoque afetam o movimento de caixa, mas não são descontadas do resultado nesta etapa.</p>
         </section>
 
         <section className="surface-panel record-panel report-section" aria-labelledby="report-receivables-title">
