@@ -126,6 +126,20 @@
 .settings-connection-list strong, .settings-connection-list small { display: block; }
 .settings-connection-list strong { color: var(--ink); font-size: 12px; }
 .settings-connection-list small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.settings-integration-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; margin-top: 18px; }
+.settings-integration-card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: #fdfdfa; }
+.settings-integration-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }
+.settings-integration-heading h3 { margin: 2px 0 0; color: var(--ink); font-size: 13px; font-weight: 620; line-height: 1.35; }
+.settings-integration-heading .neutral-status { flex: 0 0 auto; }
+.settings-integration-copy { min-height: 34px; margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.settings-integration-details { margin-top: 10px; }
+.settings-integration-details > div { grid-template-columns: minmax(90px, 0.85fr) minmax(0, 1fr); gap: 8px; padding: 9px 2px; }
+.settings-integration-details dt, .settings-integration-details dd { font-size: 10px; line-height: 1.45; }
+.settings-integration-note, .settings-records-note { margin: 12px 1px 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.settings-records-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
+.settings-records-shortcuts a { display: inline-flex; min-height: 42px; align-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; }
+.settings-records-shortcuts a:hover { background: var(--accent-soft); }
+.settings-records-shortcuts a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
 .auth-screen { display: grid; grid-template-columns: minmax(280px, 0.95fr) minmax(380px, 1.05fr); min-height: 100vh; background: var(--paper); }
 .auth-intro { display: flex; flex-direction: column; justify-content: space-between; min-height: 100vh; padding: clamp(28px, 5vw, 66px); color: #f6f7f2; background: #314b38; }
@@ -453,6 +467,7 @@
   .desktop-sidebar { width: 220px; }
   .app-column { margin-left: 220px; }
   .indicator-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-integration-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
@@ -484,6 +499,8 @@
   .dashboard-columns { grid-template-columns: 1fr; gap: 11px; }
   .quick-links { grid-template-columns: 1fr; gap: 8px; }
   .quick-link { min-height: 65px; }
+  .settings-integration-grid { grid-template-columns: 1fr; }
+  .settings-integration-copy { min-height: 0; }
   .module-empty-panel { min-height: 270px; padding: 25px 18px; }
   .module-link-list { grid-template-columns: 1fr; gap: 9px; }
   .settings-panel { padding: 17px; }
