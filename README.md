@@ -48,4 +48,4 @@ npm run preview
 
 ## Current setup status
 
-The first milestone establishes the application shell and database access foundation. A live Supabase project, owner identity, email delivery, production hostname, hosting account, bank/fiscal/WhatsApp providers, and historical source records still need to be supplied or confirmed before those workflows can be completed. The interface must not be treated as production-ready until the acceptance checks in `docs/technical-plan.md` are verified end to end.
+The repository now includes the application/auth foundation, owner-managed customer and product records, manual call history, and follow-up queue. A live Supabase project, owner identity, email delivery, production hostname, hosting account, bank/fiscal/WhatsApp providers, and historical source records still need to be supplied or confirmed before those workflows can be completed. The latest records migration has not been replayed against PostgreSQL, and the interface must not be treated as production-ready until the acceptance checks in `docs/technical-plan.md` are verified end to end.

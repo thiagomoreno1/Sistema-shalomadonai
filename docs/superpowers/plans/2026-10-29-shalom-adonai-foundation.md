@@ -80,3 +80,18 @@
 ## Scope Boundary
 
 This milestone does not enable business sign-up, create delivery-worker accounts, seed customer/business data, issue fiscal documents, sync a bank, connect WhatsApp, activate automated customer messages, calculate profit, migrate historical records, or configure production hosting. Those require the relevant client/provider facts and end-to-end proof described in `docs/technical-plan.md`.
+
+---
+
+## Task 4: Owner records and follow-up queue
+
+**Files:** `supabase/migrations/202610290002_customer_product_records.sql`, `apps/web/src/business/**`, `apps/web/src/pages/{CustomersPage,CustomerDetailPage,ProductsPage,FollowUpsPage}.tsx`, and the shared shell/data helpers.
+
+- [x] Add owner-only, business-scoped RLS tables and atomic interaction-plus-follow-up creation.
+- [x] Add customer and product list/create/edit/archive flows, manual contact history, and follow-up queue.
+- [x] Structure call outcomes, require same-day follow-up for missed calls, preserve paginated call history, and keep archived customer history readable/restorable.
+- [x] Detect multiple owner-business memberships rather than silently selecting one; ensure catalog copy and mutation feedback match implemented behavior.
+- [x] Add dashboard follow-up visibility and clear empty/error/loading states.
+- [ ] Replay the new migration and verify CRUD, RPC, anonymous denial, and business isolation against local Supabase. Blocked by unavailable Docker Desktop Linux engine.
+- [ ] Inspect the authenticated screens at desktop and phone sizes against a connected test project; no real Supabase owner account/project is configured.
+- [ ] Inventory and import existing customer/product records after their source files and duplicate-resolution rules are provided.

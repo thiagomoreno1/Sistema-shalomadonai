@@ -39,6 +39,11 @@ const routeLabels: Record<string, string> = {
   '/configuracoes': 'Configurações',
 }
 
+function getRouteLabel(pathname: string) {
+  if (pathname.startsWith('/clientes/')) return 'Cliente'
+  return routeLabels[pathname] ?? 'Operação'
+}
+
 export function AppShell() {
   const { session } = useAuth()
   const navigate = useNavigate()
@@ -89,7 +94,7 @@ export function AppShell() {
         <header className="topbar">
           <div className="topbar-greeting">
             <span className="mobile-mark" aria-hidden="true">SA</span>
-            <span><strong>{routeLabels[location.pathname] ?? 'Operação'}</strong><small className="topbar-email">{session?.user.email}</small></span>
+            <span><strong>{getRouteLabel(location.pathname)}</strong><small className="topbar-email">{session?.user.email}</small></span>
           </div>
           <div className="topbar-actions">
             <button className="signout-button" disabled={signingOut} onClick={handleSignOut} type="button">

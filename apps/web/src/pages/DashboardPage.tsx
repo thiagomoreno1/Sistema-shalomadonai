@@ -1,5 +1,9 @@
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
+import { businessToday, formatBusinessDate } from '../lib/formatters'
+import { supabaseClient } from '../lib/supabase'
 
 const businessDate = new Intl.DateTimeFormat('pt-BR', {
   dateStyle: 'full',
@@ -20,6 +24,47 @@ const integrations = [
 ]
 
 export function DashboardPage() {
+  const { id: businessId } = useBusiness()
+  const [followUps, setFollowUps] = useState<Array<{ id: string; title: string; due_on: string; customer_id: string | null; customerName: string | null }>>([])
+  const [followUpsLoading, setFollowUpsLoading] = useState(true)
+  const [followUpsError, setFollowUpsError] = useState(false)
+  const [today] = useState(businessToday)
+
+  const loadFollowUps = useCallback(async () => {
+    if (!supabaseClient) {
+      setFollowUpsLoading(false)
+      return
+    }
+    try {
+      const { data, error } = await supabaseClient.from('follow_up_tasks')
+        .select('id, title, due_on, customer_id')
+        .eq('business_id', businessId).eq('status', 'pending')
+        .order('due_on', { ascending: true }).limit(4)
+      if (error) {
+        setFollowUpsError(true)
+        return
+      }
+      const rows = data ?? []
+      const customerIds = Array.from(new Set(rows.flatMap((row) => row.customer_id ? [row.customer_id] : [])))
+      let names = new Map<string, string>()
+      if (customerIds.length > 0) {
+        const { data: customers, error: customerError } = await supabaseClient.from('customers').select('id, name')
+          .eq('business_id', businessId).in('id', customerIds)
+        if (customerError) throw customerError
+        names = new Map((customers ?? []).map((customer) => [customer.id, customer.name]))
+      }
+      setFollowUps(rows.map((row) => ({ ...row, customerName: row.customer_id ? names.get(row.customer_id) ?? null : null })))
+      setFollowUpsError(false)
+    } catch {
+      setFollowUpsError(true)
+    } finally {
+      setFollowUpsLoading(false)
+    }
+  }, [businessId])
+
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => { void loadFollowUps() }, [loadFollowUps])
+
   return (
     <div className="page-stack">
       <header className="page-heading">
@@ -33,19 +78,17 @@ export function DashboardPage() {
 
       <section className="attention-panel" aria-labelledby="attention-title">
         <div className="section-heading">
-          <div>
-            <p className="eyebrow">PRÓXIMAS AÇÕES</p>
-            <h2 id="attention-title">Precisa de atenção</h2>
-          </div>
-          <span className="neutral-status">Aguardando registros</span>
+          <div><p className="eyebrow">PRÓXIMAS AÇÕES</p><h2 id="attention-title">Retornos pendentes</h2></div>
+          <Link className="quiet-link" to="/atendimento">Abrir fila <Icon name="arrow" /></Link>
         </div>
-        <div className="empty-state">
-          <span className="empty-icon"><Icon name="check" /></span>
-          <div>
-            <h3>Nenhum acompanhamento registrado</h3>
-            <p>Chamadas, retornos, cobranças e entregas aparecerão aqui quando forem cadastrados no sistema.</p>
-          </div>
-        </div>
+        {followUpsLoading && <p className="inline-state" aria-live="polite">Carregando retornos…</p>}
+        {!followUpsLoading && followUpsError && <div className="empty-state"><span className="empty-icon"><Icon name="clock" /></span><div><h3>Não foi possível carregar os retornos</h3><button className="text-button" onClick={() => { setFollowUpsLoading(true); void loadFollowUps() }} type="button">Tentar novamente</button></div></div>}
+        {!followUpsLoading && !followUpsError && followUps.length === 0 && <div className="empty-state"><span className="empty-icon"><Icon name="check" /></span><div><h3>Nenhum retorno pendente</h3><p>Os próximos passos registrados nos clientes aparecerão aqui.</p></div></div>}
+        {!followUpsLoading && !followUpsError && followUps.length > 0 && (
+          <ul className="dashboard-follow-ups">
+            {followUps.map((task) => <li key={task.id}><span><strong>{task.title}</strong><small>{task.customerName ?? 'Sem cliente vinculado'}</small></span><span className={task.due_on < today ? 'dashboard-task-date is-overdue' : 'dashboard-task-date'}>{task.due_on < today ? 'Atrasado' : formatBusinessDate(task.due_on)}</span></li>)}
+          </ul>
+        )}
       </section>
 
       <section aria-labelledby="finance-title">
@@ -107,6 +150,7 @@ export function DashboardPage() {
         <Link className="quick-link" to="/atendimento"><Icon name="phone" /><span><strong>Atendimento</strong><small>Chamadas e retornos</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
         <Link className="quick-link" to="/pedidos"><Icon name="bag" /><span><strong>Pedidos</strong><small>Vendas e entregas</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
         <Link className="quick-link" to="/clientes"><Icon name="people" /><span><strong>Clientes</strong><small>Cadastros e histórico</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
+        <Link className="quick-link" to="/catalogo"><Icon name="box" /><span><strong>Catálogo</strong><small>Produtos e categorias</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
       </section>
     </div>
   )

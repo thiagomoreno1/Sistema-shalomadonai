@@ -1,4 +1,5 @@
 import { useAuth } from '../auth/AuthContext'
+import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 
 const pendingItems = [
@@ -9,6 +10,7 @@ const pendingItems = [
 
 export function SettingsPage() {
   const { session } = useAuth()
+  const business = useBusiness()
 
   return (
     <div className="page-stack">
@@ -30,6 +32,7 @@ export function SettingsPage() {
           <span className="connected-status"><span className="connected-dot" /> Sessão ativa</span>
         </div>
         <dl className="settings-detail-list">
+          <div><dt>Empresa</dt><dd>{business.name}</dd></div>
           <div><dt>E-mail</dt><dd>{session?.user.email ?? 'Conta autenticada'}</dd></div>
           <div><dt>Moeda</dt><dd>Real brasileiro (BRL)</dd></div>
           <div><dt>Fuso horário</dt><dd>America/Sao_Paulo</dd></div>
