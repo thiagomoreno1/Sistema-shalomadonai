@@ -207,11 +207,17 @@ export function CustomerDetailPage() {
   const [customerErrorScope, setCustomerErrorScope] = useState<string | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [interactionOpen, setInteractionOpen] = useState(false)
+  const [interactionFormMode, setInteractionFormMode] = useState<'general' | 'missed_call'>('general')
   const [interactionType, setInteractionType] = useState<Interaction['interaction_type']>('call')
+  const [interactionCallOutcome, setInteractionCallOutcome] = useState<NonNullable<Interaction['call_outcome']>>('answered')
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [interactionError, setInteractionError] = useState<string | null>(null)
+  const [interactionNotice, setInteractionNotice] = useState<string | null>(null)
   const ordersById = new Map(orders.map((order) => [order.id, order]))
+  const customerHeadingRef = useRef<HTMLHeadingElement>(null)
+  const interactionFormHeadingRef = useRef<HTMLHeadingElement>(null)
+  const wasInteractionOpenRef = useRef(false)
   const customerDataIsCurrent = loadedCustomerScope === customerScope
   const displayedCustomerError = customerErrorScope === customerScope ? error : null
   const customerOrdersAreCurrent = ordersScope === customerScope
@@ -228,6 +234,15 @@ export function CustomerDetailPage() {
   useLayoutEffect(() => {
     activeCustomerScopeRef.current = customerScope
   }, [customerScope])
+
+  useEffect(() => {
+    if (interactionOpen && customerDataIsCurrent) {
+      interactionFormHeadingRef.current?.focus()
+    } else if (!interactionOpen && wasInteractionOpenRef.current && customerDataIsCurrent) {
+      customerHeadingRef.current?.focus()
+    }
+    wasInteractionOpenRef.current = interactionOpen
+  }, [interactionOpen, customerDataIsCurrent, customerScope])
 
   const loadCustomer = useCallback(async () => {
     const requestScope = JSON.stringify([businessId, customerId])
@@ -468,6 +483,28 @@ export function CustomerDetailPage() {
     }
   }
 
+  function openGeneralInteraction() {
+    if (interactionOpen) {
+      setInteractionOpen(false)
+      return
+    }
+    setInteractionFormMode('general')
+    setInteractionType('call')
+    setInteractionCallOutcome('answered')
+    setInteractionError(null)
+    setInteractionNotice(null)
+    setInteractionOpen(true)
+  }
+
+  function openMissedCallInteraction() {
+    setInteractionFormMode('missed_call')
+    setInteractionType('call')
+    setInteractionCallOutcome('missed')
+    setInteractionError(null)
+    setInteractionNotice(null)
+    setInteractionOpen(true)
+  }
+
   async function handleCreateInteraction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!supabaseClient || !customer) return
@@ -504,6 +541,9 @@ export function CustomerDetailPage() {
         setInteractionError('Não foi possível registrar o contato e o retorno. Seus dados continuam no formulário; tente novamente.')
         return
       }
+      setInteractionNotice(interactionFormMode === 'missed_call'
+        ? 'Ligação não atendida registrada. O retorno de hoje, com prioridade alta, entrou na fila.'
+        : 'Contato registrado.')
       setInteractionOpen(false)
       await loadCustomer()
     } catch {
@@ -532,17 +572,20 @@ export function CustomerDetailPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">CLIENTE</p>
-          <h1>{customer.name}</h1>
+          <h1 className="customer-detail-heading" ref={customerHeadingRef} tabIndex={-1}>{customer.name}</h1>
           <p className="page-description">{customer.phone || 'Telefone não informado'}{customer.is_active ? '' : ' · Cadastro arquivado'}</p>
         </div>
-        <div className="record-heading-actions">
+        <div className="record-heading-actions customer-heading-actions">
           {customer.is_active ? <>
             <Link className="button button-primary" to={`/pedidos/novo?cliente=${encodeURIComponent(customer.id)}`}><Icon name="bag" /> Novo pedido</Link>
             <button className="button button-secondary" onClick={() => { setEditOpen((value) => !value); setFormError(null) }} type="button">{editOpen ? 'Fechar edição' : 'Editar'}</button>
-            <button className="button button-secondary" onClick={() => { setInteractionType('call'); setInteractionOpen((value) => !value); setInteractionError(null) }} type="button"><Icon name="plus" /> Registrar contato</button>
+            <button className="button button-secondary" disabled={saving} onClick={openGeneralInteraction} type="button">{interactionOpen ? 'Fechar contato' : <><Icon name="plus" /> Registrar contato</>}</button>
+            {!interactionOpen && <button className="button button-secondary" onClick={openMissedCallInteraction} type="button">Ligação não atendida</button>}
           </> : <button className="button button-primary" onClick={() => void handleReactivateCustomer()} type="button">Reativar cliente</button>}
         </div>
       </header>
+
+      {interactionNotice && <p className="form-message form-message-success" role="status">{interactionNotice}</p>}
 
       {editOpen && (
         <form className="surface-panel record-form" onSubmit={handleUpdateCustomer}>
@@ -560,25 +603,30 @@ export function CustomerDetailPage() {
 
       {interactionOpen && (
         <form className="surface-panel record-form" onSubmit={handleCreateInteraction}>
-          <div className="section-heading section-heading-compact"><div><p className="eyebrow">HISTÓRICO</p><h2>Registrar contato</h2></div></div>
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">HISTÓRICO</p><h2 className="customer-interaction-form-heading" ref={interactionFormHeadingRef} tabIndex={-1}>{interactionFormMode === 'missed_call' ? 'Registrar ligação não atendida' : 'Registrar contato'}</h2></div></div>
           <div className="record-form-grid">
-            <label className="record-field"><span className="field-label">Tipo de contato</span><select className="text-input" name="interaction_type" onChange={(event) => setInteractionType(event.target.value as Interaction['interaction_type'])} value={interactionType}><option value="call">Ligação (registro manual)</option><option value="whatsapp_manual">WhatsApp (anotação manual)</option><option value="note">Observação</option><option value="other">Outro contato</option></select></label>
+            {interactionFormMode === 'missed_call'
+              ? <><input name="interaction_type" type="hidden" value="call" /><input name="call_outcome" type="hidden" value="missed" /></>
+              : <label className="record-field"><span className="field-label">Tipo de contato</span><select className="text-input" name="interaction_type" onChange={(event) => setInteractionType(event.target.value as Interaction['interaction_type'])} value={interactionType}><option value="call">Ligação (registro manual)</option><option value="whatsapp_manual">WhatsApp (anotação manual)</option><option value="note">Observação</option><option value="other">Outro contato</option></select></label>}
             <label className="record-field"><span className="field-label">Direção</span><select className="text-input" name="direction"><option value="not_applicable">Não se aplica</option><option value="outgoing">Realizado pelo negócio</option><option value="incoming">Recebido do cliente</option></select></label>
-            {interactionType === 'call' && <><label className="record-field"><span className="field-label">Resultado da ligação</span><select className="text-input" defaultValue="answered" name="call_outcome" required><option value="answered">Atendida</option><option value="missed">Não atendida</option><option value="other">Outro resultado</option></select></label><label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">em branco = agora</span></span><input className="text-input" name="occurred_at" type="datetime-local" /></label></>}
+            {interactionFormMode === 'general' && interactionType === 'call' && <label className="record-field"><span className="field-label">Resultado da ligação</span><select className="text-input" name="call_outcome" onChange={(event) => setInteractionCallOutcome(event.target.value as NonNullable<Interaction['call_outcome']>)} required value={interactionCallOutcome}><option value="answered">Atendida</option><option value="missed">Não atendida</option><option value="other">Outro resultado</option></select></label>}
             {interactionType !== 'call' && <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">em branco = agora</span></span><input className="text-input" name="occurred_at" type="datetime-local" /></label>}
+            {(interactionFormMode === 'missed_call' || interactionType === 'call') && <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">em branco = agora</span></span><input className="text-input" name="occurred_at" type="datetime-local" /></label>}
             <label className="record-field record-field-wide"><span className="field-label">Pedido relacionado <span className="field-optional">opcional</span></span><select className="text-input" disabled={customerOrdersLoading || displayedOrders.length === 0} name="related_order_id"><option value="">{customerOrdersLoading ? 'Carregando pedidos…' : displayedOrderError && displayedOrders.length === 0 ? 'Pedidos indisponíveis' : 'Nenhum pedido'}</option>{displayedOrders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
             {displayedOrderError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{displayedOrderError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadCustomer()} type="button">Tentar novamente</button></div>}
             {displayedOrders.length === 0 && !displayedOrderError && !customerOrdersLoading && <p className="section-footnote record-field-wide">Este cliente ainda não tem pedidos para vincular.</p>}
             {customerHasMoreOrders && <button className="text-button record-field-wide" disabled={loadingMoreOrders || saving} onClick={() => void loadMoreOrders()} type="button">{loadingMoreOrders ? 'Carregando pedidos…' : 'Carregar mais pedidos'}</button>}
             {displayedMoreOrdersError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{displayedMoreOrdersError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadMoreOrders()} type="button">Tentar novamente</button></div>}
             <label className="record-field record-field-wide"><span className="field-label">Anotações <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" maxLength={4000} name="notes" rows={3} /></label>
-            <label className="record-field record-field-wide"><span className="field-label">Próximo passo <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" placeholder="Ex.: confirmar entrega" /></label>
-            <label className="record-field"><span className="field-label">Data do retorno</span><input className="text-input" name="follow_up_due_on" type="date" /></label>
-            <label className="record-field"><span className="field-label">Prioridade do retorno</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
+            {interactionFormMode === 'general' && <>
+              <label className="record-field record-field-wide"><span className="field-label">Próximo passo <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" placeholder="Ex.: confirmar entrega" /></label>
+              <label className="record-field"><span className="field-label">Data do retorno</span><input className="text-input" name="follow_up_due_on" type="date" /></label>
+              <label className="record-field"><span className="field-label">Prioridade do retorno</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
+            </>}
           </div>
-          <p className="section-footnote">O registro é manual. Uma ligação não atendida cria um retorno para hoje, com prioridade alta. Esta tela não lê chamadas nem conecta ao WhatsApp.</p>
+          <p className="section-footnote">{interactionFormMode === 'missed_call' ? 'Ao salvar, o retorno será incluído na fila para hoje com prioridade alta. O registro da ligação é manual.' : 'O registro é manual. Uma ligação não atendida cria um retorno para hoje, com prioridade alta. Esta tela não lê chamadas nem conecta ao WhatsApp.'}</p>
           {interactionError && <p className="form-message form-message-error" role="alert">{interactionError}</p>}
-          <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar contato'}</button>
+          <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : interactionFormMode === 'missed_call' ? 'Registrar ligação e retorno' : 'Salvar contato'}</button>
         </form>
       )}
 

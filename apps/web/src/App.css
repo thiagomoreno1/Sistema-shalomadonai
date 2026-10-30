@@ -45,6 +45,7 @@
 .page-stack { display: flex; flex-direction: column; gap: 27px; }
 .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding-bottom: 2px; }
 .page-heading h1 { margin: 5px 0 4px; color: var(--ink); font-size: clamp(26px, 3vw, 34px); font-weight: 650; letter-spacing: -0.045em; line-height: 1.16; }
+.customer-detail-heading:focus-visible, .customer-interaction-form-heading:focus-visible { outline: 3px solid var(--accent); outline-offset: 5px; border-radius: 3px; }
 .eyebrow { margin: 0; color: #657064; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 .page-description { margin: 0; color: var(--muted); font-size: 14px; }
 .period-badge, .neutral-status { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: #657064; background: #fbfcf9; font-size: 11px; white-space: nowrap; }
@@ -628,6 +629,8 @@
   .record-field-wide { grid-column: auto; }
   .record-heading-actions { width: 100%; }
   .record-heading-actions .button { flex: 1; }
+  .customer-heading-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .customer-heading-actions .button { width: 100%; }
   .order-list-link { align-items: flex-start; flex-wrap: wrap; }
   .order-list-main { flex-basis: calc(100% - 65px); }
   .order-financials { flex: 1 0 calc(100% - 64px); grid-template-columns: repeat(3, minmax(0, 1fr)); margin-left: 50px; }
