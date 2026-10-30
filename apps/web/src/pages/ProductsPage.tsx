@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type SyntheticEvent } from 'react'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { formatBRL, parseBrazilianCurrency } from '../lib/formatters'
@@ -23,6 +23,16 @@ type Product = {
 }
 type ComboComponent = { combo_product_id: string; component_product_id: string; quantity_per_combo: number }
 type ComboDraft = { key: string; componentProductId: string; quantity: string }
+type ProductPriceHistoryEntry = {
+  id: string
+  event_sequence: number | string
+  event_kind: 'baseline' | 'created' | 'updated'
+  old_sale_price_cents: number | null
+  new_sale_price_cents: number | null
+  old_cost_cents: number | null
+  new_cost_cents: number | null
+  changed_at: string
+}
 
 const PRODUCT_PHOTO_BUCKET = 'product-photos'
 const PRODUCT_PHOTO_MAX_BYTES = 5 * 1024 * 1024
@@ -31,6 +41,7 @@ const PRODUCT_PHOTO_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
   'image/webp': 'webp',
 }
+const PRODUCT_PRICE_HISTORY_PAGE_SIZE = 50
 
 function newKey() { return crypto.randomUUID() }
 
@@ -45,6 +56,137 @@ function parseQuantity(value: string, allowZero = false) {
 
 function quantityInput(value: number) {
   return String(value).replace('.', ',')
+}
+
+function formatPriceHistoryDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Data não disponível'
+  return new Intl.DateTimeFormat('pt-BR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'America/Sao_Paulo',
+  }).format(date)
+}
+
+function ProductPriceHistory({ businessId, productId, refreshToken }: { businessId: string; productId: string; refreshToken: number }) {
+  const [entries, setEntries] = useState<ProductPriceHistoryEntry[]>([])
+  const [isOpen, setIsOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [errorMode, setErrorMode] = useState<'initial' | 'more' | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  const entriesRef = useRef<ProductPriceHistoryEntry[]>([])
+  const requestIdRef = useRef(0)
+  const previousRefreshTokenRef = useRef(refreshToken)
+
+  const loadHistory = useCallback(async (reset: boolean) => {
+    if (!supabaseClient) {
+      setError('O histórico não está disponível agora. Tente novamente.')
+      setErrorMode(reset ? 'initial' : 'more')
+      return
+    }
+
+    const requestId = ++requestIdRef.current
+    const cursor = reset ? null : entriesRef.current.at(-1)?.event_sequence ?? null
+    if (!reset && cursor === null) return
+    setError(null)
+    setErrorMode(null)
+    if (reset) setLoading(true)
+    else setLoadingMore(true)
+
+    try {
+      let query = supabaseClient.from('product_price_history')
+        .select('id, event_sequence, event_kind, old_sale_price_cents, new_sale_price_cents, old_cost_cents, new_cost_cents, changed_at')
+        .eq('business_id', businessId)
+        .eq('product_id', productId)
+        .order('event_sequence', { ascending: false })
+        .limit(PRODUCT_PRICE_HISTORY_PAGE_SIZE)
+      if (cursor !== null) query = query.lt('event_sequence', String(cursor))
+      const { data, error: historyError } = await query
+
+      if (requestId !== requestIdRef.current) return
+      if (historyError) {
+        setError('Não foi possível carregar o histórico de preço e custo. Tente novamente.')
+        setErrorMode(reset ? 'initial' : 'more')
+        return
+      }
+
+      const page = (data ?? []) as ProductPriceHistoryEntry[]
+      const nextEntries = reset ? page : [...entriesRef.current, ...page]
+      entriesRef.current = nextEntries
+      setEntries(nextEntries)
+      setHasMore(page.length === PRODUCT_PRICE_HISTORY_PAGE_SIZE)
+    } catch {
+      if (requestId !== requestIdRef.current) return
+      setError('Não foi possível carregar o histórico de preço e custo. Tente novamente.')
+      setErrorMode(reset ? 'initial' : 'more')
+    } finally {
+      if (requestId === requestIdRef.current) {
+        setLoading(false)
+        setLoadingMore(false)
+      }
+    }
+  }, [businessId, productId])
+
+  // Refresh persisted history after the product write succeeds.
+  useEffect(() => {
+    if (previousRefreshTokenRef.current === refreshToken) return
+    previousRefreshTokenRef.current = refreshToken
+    // oxlint-disable-next-line react/set-state-in-effect
+    if (isOpen) void loadHistory(true)
+  }, [isOpen, loadHistory, refreshToken])
+
+  useEffect(() => () => { requestIdRef.current += 1 }, [])
+
+  function handleToggle(event: SyntheticEvent<HTMLDetailsElement>) {
+    const open = event.currentTarget.open
+    setIsOpen(open)
+    if (open && entries.length === 0 && !loading && !error) void loadHistory(true)
+  }
+
+  function valueLabel(value: number | null) {
+    return value === null ? 'Não informado' : formatBRL(value)
+  }
+
+  function historySummary(entry: ProductPriceHistoryEntry) {
+    if (entry.event_kind === 'baseline' || entry.event_kind === 'created') {
+      const prefix = entry.event_kind === 'baseline' ? 'Ponto de partida' : 'No cadastro'
+      return [
+        `${prefix} · preço de venda: ${valueLabel(entry.new_sale_price_cents)}`,
+        `${prefix} · custo: ${valueLabel(entry.new_cost_cents)}`,
+      ]
+    }
+    const changes: string[] = []
+    if (entry.old_sale_price_cents !== entry.new_sale_price_cents) {
+      changes.push(`Preço de venda: ${valueLabel(entry.old_sale_price_cents)} → ${valueLabel(entry.new_sale_price_cents)}`)
+    }
+    if (entry.old_cost_cents !== entry.new_cost_cents) {
+      changes.push(`Custo: ${valueLabel(entry.old_cost_cents)} → ${valueLabel(entry.new_cost_cents)}`)
+    }
+    return changes
+  }
+
+  return (
+    <details className="product-price-history" onToggle={handleToggle} open={isOpen}>
+      <summary>Histórico de preço e custo</summary>
+      <p className="product-price-history-note">O ponto de partida foi registrado na data exibida: ele mostra os valores atuais naquele momento; alterações anteriores não foram recuperadas.</p>
+      {loading && <p className="inline-state" aria-live="polite">Carregando histórico…</p>}
+      {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" disabled={loading || loadingMore} onClick={() => void loadHistory(errorMode !== 'more')} type="button">Tentar novamente</button></div>}
+      {!loading && !error && entries.length === 0 && <p className="inline-state">Nenhuma alteração registrada ainda.</p>}
+      {entries.length > 0 && (
+        <ol className="product-price-history-list">
+          {entries.map((entry) => (
+            <li key={entry.id}>
+              <div className="product-price-history-heading"><strong>{entry.event_kind === 'baseline' ? 'Ponto de partida do histórico' : entry.event_kind === 'created' ? 'Produto cadastrado' : 'Valores atualizados'}</strong><time dateTime={entry.changed_at}>{formatPriceHistoryDate(entry.changed_at)}</time></div>
+              <ul>{historySummary(entry).map((change) => <li key={change}>{change}</li>)}</ul>
+            </li>
+          ))}
+        </ol>
+      )}
+      {hasMore && errorMode !== 'more' && <div className="product-price-history-more"><button className="button button-secondary" disabled={loadingMore || loading} onClick={() => void loadHistory(false)} type="button">{loadingMore ? 'Carregando…' : 'Carregar mais alterações'}</button></div>}
+    </details>
+  )
 }
 
 export function ProductsPage() {
@@ -67,6 +209,7 @@ export function ProductsPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [categoryError, setCategoryError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [priceHistoryRefreshToken, setPriceHistoryRefreshToken] = useState(0)
   const [selectedPhoto, setSelectedPhoto] = useState<File | null>(null)
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null)
   const [photoError, setPhotoError] = useState<string | null>(null)
@@ -337,6 +480,7 @@ export function ProductsPage() {
         return
       }
       const productId = result.data.id as string
+      setPriceHistoryRefreshToken((current) => current + 1)
       let trackingWasConfigured = editingProduct?.inventory_tracked ?? false
       let comboWasConfigured = editingProduct?.is_combo ?? false
       const savedProduct = {
@@ -559,6 +703,7 @@ export function ProductsPage() {
             <label className="record-field"><span className="field-label">Unidade de estoque <span className="field-optional">{inventoryEnabled ? 'obrigatória para controlar' : 'opcional'}</span></span><input className="text-input" defaultValue={editingProduct?.inventory_unit ?? ''} disabled={saving || Boolean(editingProduct?.inventory_tracked)} maxLength={32} name="inventory_unit" placeholder="Ex.: un, kg" required={inventoryEnabled} /></label>
             <label className="record-field"><span className="field-label">Preço de venda <span className="field-optional">R$</span></span><input className="text-input" defaultValue={editingProduct?.sale_price_cents === null || !editingProduct ? '' : (editingProduct.sale_price_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="sale_price" placeholder="0,00" /></label>
             <label className="record-field"><span className="field-label">Custo atual <span className="field-optional">R$ · opcional</span></span><input className="text-input" defaultValue={editingProduct?.cost_cents === null || !editingProduct ? '' : (editingProduct.cost_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="cost" placeholder="0,00" /></label>
+            {editingProduct && <div className="record-field record-field-wide"><ProductPriceHistory businessId={businessId} productId={editingProduct.id} refreshToken={priceHistoryRefreshToken} /></div>}
             <label className="record-field record-field-wide"><span className="field-label">Descrição <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" defaultValue={editingProduct?.description ?? ''} maxLength={2000} name="description" rows={3} /></label>
             <div className="record-field record-field-wide product-photo-field">
               <span className="field-label">Foto do produto <span className="field-optional">opcional · JPEG, PNG ou WEBP · até 5 MB</span></span>
