@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEve
 import { Link, useParams } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
+import { businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
 type Customer = {
@@ -32,6 +32,30 @@ type CustomerOrder = {
   created_at: string
 }
 
+type CustomerInstallmentRecord = {
+  id: string
+  order_id: string
+  installment_number: number
+  amount_cents: number
+  due_on: string
+  payment_method: string | null
+}
+
+type CustomerInstallment = CustomerInstallmentRecord & {
+  received_cents: number
+  balance_cents: number
+  overdue: boolean
+}
+
+type CustomerPaymentRecord = { id: string; order_id: string; amount_cents: number }
+type CustomerAllocationRecord = { id: string; order_id: string; installment_id: string; amount_cents: number }
+
+type CustomerOrderHistory = CustomerOrder & {
+  received_cents: number | null
+  outstanding_cents: number | null
+  installments: CustomerInstallment[] | null
+}
+
 type FollowUp = {
   id: string
   title: string
@@ -50,8 +74,95 @@ const interactionLabels: Record<Interaction['interaction_type'], string> = {
 }
 const callOutcomeLabels = { answered: 'Atendida', missed: 'Não atendida', other: 'Outro resultado' }
 
+type PageResponse = { data: unknown[] | null; error: unknown | null }
+
+async function loadAllPages<T>(loadPage: (from: number, to: number) => PromiseLike<PageResponse>) {
+  const rows: T[] = []
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await loadPage(from, from + 999)
+    if (error) return { data: null, error }
+    const page = (data ?? []) as T[]
+    rows.push(...page)
+    if (page.length < 1000) return { data: rows, error: null }
+  }
+}
+
+function withoutOrderFinancials(orders: CustomerOrder[]): CustomerOrderHistory[] {
+  return orders.map((order) => ({ ...order, received_cents: null, outstanding_cents: null, installments: null }))
+}
+
+async function loadCustomerOrderHistory(
+  client: NonNullable<typeof supabaseClient>,
+  businessId: string,
+  orders: CustomerOrder[],
+  today: string,
+): Promise<CustomerOrderHistory[]> {
+  if (orders.length === 0) return []
+  const orderIds = orders.map((order) => order.id)
+  const [installmentsResult, paymentsResult, allocationsResult] = await Promise.all([
+    loadAllPages<CustomerInstallmentRecord>((from, to) => client.from('order_installments')
+      .select('id, order_id, installment_number, amount_cents, due_on, payment_method')
+      .eq('business_id', businessId).in('order_id', orderIds)
+      .order('order_id', { ascending: true }).order('installment_number', { ascending: true })
+      .range(from, to)),
+    loadAllPages<CustomerPaymentRecord>((from, to) => client.from('order_payments')
+      .select('id, order_id, amount_cents')
+      .eq('business_id', businessId).in('order_id', orderIds)
+      .order('id', { ascending: true }).range(from, to)),
+    loadAllPages<CustomerAllocationRecord>((from, to) => client.from('order_payment_allocations')
+      .select('id, order_id, installment_id, amount_cents')
+      .eq('business_id', businessId).in('order_id', orderIds)
+      .order('id', { ascending: true }).range(from, to)),
+  ])
+  if (installmentsResult.error || paymentsResult.error || allocationsResult.error) {
+    throw new Error('Could not load customer order balances.')
+  }
+
+  const receivedByOrder = new Map<string, number>()
+  for (const payment of paymentsResult.data ?? []) {
+    receivedByOrder.set(payment.order_id, (receivedByOrder.get(payment.order_id) ?? 0) + payment.amount_cents)
+  }
+  const receivedByInstallment = new Map<string, number>()
+  for (const allocation of allocationsResult.data ?? []) {
+    receivedByInstallment.set(allocation.installment_id, (receivedByInstallment.get(allocation.installment_id) ?? 0) + allocation.amount_cents)
+  }
+  const installmentsByOrder = new Map<string, CustomerInstallment[]>()
+  for (const installment of installmentsResult.data ?? []) {
+    const order = orders.find((candidate) => candidate.id === installment.order_id)
+    const received = receivedByInstallment.get(installment.id) ?? 0
+    const balance = order?.status === 'cancelled' ? 0 : Math.max(0, installment.amount_cents - received)
+    const item: CustomerInstallment = {
+      ...installment,
+      received_cents: received,
+      balance_cents: balance,
+      overdue: order?.status === 'open' && balance > 0 && installment.due_on < today,
+    }
+    const rows = installmentsByOrder.get(installment.order_id) ?? []
+    rows.push(item)
+    installmentsByOrder.set(installment.order_id, rows)
+  }
+
+  return orders.map((order) => {
+    const received = receivedByOrder.get(order.id) ?? 0
+    return {
+      ...order,
+      received_cents: received,
+      outstanding_cents: order.status === 'open' ? Math.max(0, order.total_cents - received) : 0,
+      installments: installmentsByOrder.get(order.id) ?? [],
+    }
+  })
+}
+
 function mergeCustomerOrders(...groups: CustomerOrder[][]) {
   const byId = new Map(groups.flat().map((order) => [order.id, order]))
+  return [...byId.values()].sort((left, right) =>
+    right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id),
+  )
+}
+
+function mergeCustomerOrderHistory(current: CustomerOrderHistory[], next: CustomerOrderHistory[]) {
+  const byId = new Map(current.map((order) => [order.id, order]))
+  for (const order of next) byId.set(order.id, order)
   return [...byId.values()].sort((left, right) =>
     right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id),
   )
@@ -72,10 +183,18 @@ function orderLabel(order: CustomerOrder) {
 export function CustomerDetailPage() {
   const { customerId = '' } = useParams()
   const { id: businessId } = useBusiness()
+  const today = businessToday()
   const customerScope = JSON.stringify([businessId, customerId])
   const activeCustomerScopeRef = useRef(customerScope)
   const [customer, setCustomer] = useState<Customer | null>(null)
+  const [loadedCustomerScope, setLoadedCustomerScope] = useState<string | null>(null)
   const [orders, setOrders] = useState<CustomerOrder[]>([])
+  const [ordersScope, setOrdersScope] = useState<string | null>(null)
+  const [ordersLoading, setOrdersLoading] = useState(true)
+  const [purchaseOrders, setPurchaseOrders] = useState<CustomerOrderHistory[]>([])
+  const [purchaseOrdersScope, setPurchaseOrdersScope] = useState<string | null>(null)
+  const [orderHistoryLoading, setOrderHistoryLoading] = useState(true)
+  const [orderHistoryError, setOrderHistoryError] = useState<string | null>(null)
   const [orderPageOffset, setOrderPageOffset] = useState(0)
   const [hasMoreOrders, setHasMoreOrders] = useState(false)
   const [loadingMoreOrders, setLoadingMoreOrders] = useState(false)
@@ -85,6 +204,7 @@ export function CustomerDetailPage() {
   const [followUps, setFollowUps] = useState<FollowUp[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [customerErrorScope, setCustomerErrorScope] = useState<string | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [interactionOpen, setInteractionOpen] = useState(false)
   const [interactionType, setInteractionType] = useState<Interaction['interaction_type']>('call')
@@ -92,6 +212,17 @@ export function CustomerDetailPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [interactionError, setInteractionError] = useState<string | null>(null)
   const ordersById = new Map(orders.map((order) => [order.id, order]))
+  const customerDataIsCurrent = loadedCustomerScope === customerScope
+  const displayedCustomerError = customerErrorScope === customerScope ? error : null
+  const customerOrdersAreCurrent = ordersScope === customerScope
+  const displayedOrders = customerOrdersAreCurrent ? orders : []
+  const displayedOrderError = customerOrdersAreCurrent ? orderError : null
+  const displayedMoreOrdersError = customerOrdersAreCurrent ? moreOrdersError : null
+  const customerOrdersLoading = !customerOrdersAreCurrent || ordersLoading
+  const customerHasMoreOrders = customerOrdersAreCurrent && hasMoreOrders
+  const purchaseOrdersAreCurrent = purchaseOrdersScope === customerScope
+  const displayedPurchaseOrders = purchaseOrdersAreCurrent ? purchaseOrders : []
+  const displayedOrderHistoryError = purchaseOrdersAreCurrent ? orderHistoryError : null
   const loadingMoreOrdersRef = useRef(false)
 
   useLayoutEffect(() => {
@@ -101,11 +232,20 @@ export function CustomerDetailPage() {
   const loadCustomer = useCallback(async () => {
     const requestScope = JSON.stringify([businessId, customerId])
     const client = supabaseClient
+    setCustomerErrorScope(requestScope)
+    setError(null)
     if (!client) {
       setError('A conexão da empresa não está disponível.')
       setLoading(false)
+      setOrdersLoading(false)
+      setOrderHistoryLoading(false)
       return
     }
+    setOrdersLoading(true)
+    setOrderHistoryLoading(true)
+    setOrderError(null)
+    setOrderHistoryError(null)
+    setMoreOrdersError(null)
     try {
       const [customerResult, interactionResult, followUpResult] = await Promise.all([
         client.from('customers')
@@ -127,6 +267,13 @@ export function CustomerDetailPage() {
       } else if (!customerResult.data) {
         setError('Este cliente não está disponível.')
       } else {
+        setCustomer(customerResult.data as Customer)
+        setInteractions((interactionResult.data ?? []) as Interaction[])
+        setFollowUps((followUpResult.data ?? []) as FollowUp[])
+        setError(null)
+        setLoadedCustomerScope(requestScope)
+        setLoading(false)
+
         let recentOrders: CustomerOrder[] = []
         let linkedOrders: CustomerOrder[] = []
         let recentOrdersLoaded = false
@@ -174,25 +321,39 @@ export function CustomerDetailPage() {
           }
         }
 
+        let recentOrderHistory = withoutOrderFinancials(recentOrders)
+        let orderHistoryFailed = !recentOrdersLoaded
+        if (recentOrdersLoaded) {
+          try {
+            recentOrderHistory = await loadCustomerOrderHistory(client, businessId, recentOrders, today)
+          } catch {
+            orderHistoryFailed = true
+          }
+        }
+
         if (activeCustomerScopeRef.current !== requestScope) return
-        setCustomer(customerResult.data as Customer)
         setOrders(mergeCustomerOrders(recentOrders, linkedOrders))
+        setOrdersScope(requestScope)
+        setPurchaseOrders(recentOrderHistory)
+        setPurchaseOrdersScope(requestScope)
         setOrderPageOffset(recentOrders.length)
         setHasMoreOrders(recentOrdersLoaded && recentOrders.length === customerOrderPageSize)
         setOrderError(orderLoadFailed ? 'Não foi possível carregar todos os pedidos. Você ainda pode registrar o contato sem vínculo ou tentar carregar novamente.' : null)
+        setOrderHistoryError(orderHistoryFailed ? 'Não foi possível carregar pedidos, parcelas e saldos completos. Os valores indisponíveis não serão tratados como zero.' : null)
         setMoreOrdersError(null)
-        setInteractions((interactionResult.data ?? []) as Interaction[])
-        setFollowUps((followUpResult.data ?? []) as FollowUp[])
-        setError(null)
       }
     } catch {
       if (activeCustomerScopeRef.current === requestScope) {
         setError('Não foi possível carregar o histórico deste cliente. Tente novamente.')
       }
     } finally {
-      if (activeCustomerScopeRef.current === requestScope) setLoading(false)
+      if (activeCustomerScopeRef.current === requestScope) {
+        setLoading(false)
+        setOrdersLoading(false)
+        setOrderHistoryLoading(false)
+      }
     }
-  }, [businessId, customerId])
+  }, [businessId, customerId, today])
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadCustomer() }, [loadCustomer])
@@ -200,7 +361,7 @@ export function CustomerDetailPage() {
   async function loadMoreOrders() {
     const requestScope = customerScope
     const client = supabaseClient
-    if (!client || loadingMoreOrdersRef.current || !hasMoreOrders) return
+    if (!client || loadingMoreOrdersRef.current || !hasMoreOrders || ordersScope !== customerScope || ordersLoading) return
     loadingMoreOrdersRef.current = true
     setLoadingMoreOrders(true)
     setMoreOrdersError(null)
@@ -216,7 +377,17 @@ export function CustomerDetailPage() {
         return
       }
       const nextOrders = (data ?? []) as CustomerOrder[]
+      let nextOrderHistory = withoutOrderFinancials(nextOrders)
+      try {
+        nextOrderHistory = await loadCustomerOrderHistory(client, businessId, nextOrders, today)
+      } catch {
+        if (activeCustomerScopeRef.current === requestScope) {
+          setOrderHistoryError('Não foi possível carregar pedidos, parcelas e saldos completos. Os valores indisponíveis não serão tratados como zero.')
+        }
+      }
+      if (activeCustomerScopeRef.current !== requestScope) return
       setOrders((current) => mergeCustomerOrders(current, nextOrders))
+      setPurchaseOrders((current) => mergeCustomerOrderHistory(current, nextOrderHistory))
       setOrderPageOffset((current) => current + nextOrders.length)
       setHasMoreOrders(nextOrders.length === customerOrderPageSize)
     } catch {
@@ -342,13 +513,13 @@ export function CustomerDetailPage() {
     }
   }
 
-  if (loading) return <p className="inline-state" aria-live="polite">Carregando cliente…</p>
-  if (error || !customer) {
+  if ((loading || !customerDataIsCurrent) && !displayedCustomerError) return <p className="inline-state" aria-live="polite">Carregando cliente…</p>
+  if (displayedCustomerError || !customer) {
     return (
       <div className="page-stack">
         <Link className="quiet-link" to="/clientes">← Voltar para clientes</Link>
         <div className="inline-state inline-state-error" role="alert">
-          <p>{error ?? 'Cliente não encontrado.'}</p>
+          <p>{displayedCustomerError ?? 'Cliente não encontrado.'}</p>
           <button className="text-button" onClick={() => { setLoading(true); void loadCustomer() }} type="button">Tentar novamente</button>
         </div>
       </div>
@@ -395,11 +566,11 @@ export function CustomerDetailPage() {
             <label className="record-field"><span className="field-label">Direção</span><select className="text-input" name="direction"><option value="not_applicable">Não se aplica</option><option value="outgoing">Realizado pelo negócio</option><option value="incoming">Recebido do cliente</option></select></label>
             {interactionType === 'call' && <><label className="record-field"><span className="field-label">Resultado da ligação</span><select className="text-input" defaultValue="answered" name="call_outcome" required><option value="answered">Atendida</option><option value="missed">Não atendida</option><option value="other">Outro resultado</option></select></label><label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">em branco = agora</span></span><input className="text-input" name="occurred_at" type="datetime-local" /></label></>}
             {interactionType !== 'call' && <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">em branco = agora</span></span><input className="text-input" name="occurred_at" type="datetime-local" /></label>}
-            <label className="record-field record-field-wide"><span className="field-label">Pedido relacionado <span className="field-optional">opcional</span></span><select className="text-input" disabled={orders.length === 0} name="related_order_id"><option value="">{orderError && orders.length === 0 ? 'Pedidos indisponíveis' : 'Nenhum pedido'}</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
-            {orderError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{orderError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadCustomer()} type="button">Tentar novamente</button></div>}
-            {orders.length === 0 && !orderError && <p className="section-footnote record-field-wide">Este cliente ainda não tem pedidos para vincular.</p>}
-            {hasMoreOrders && <button className="text-button record-field-wide" disabled={loadingMoreOrders || saving} onClick={() => void loadMoreOrders()} type="button">{loadingMoreOrders ? 'Carregando pedidos…' : 'Carregar mais pedidos'}</button>}
-            {moreOrdersError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{moreOrdersError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadMoreOrders()} type="button">Tentar novamente</button></div>}
+            <label className="record-field record-field-wide"><span className="field-label">Pedido relacionado <span className="field-optional">opcional</span></span><select className="text-input" disabled={customerOrdersLoading || displayedOrders.length === 0} name="related_order_id"><option value="">{customerOrdersLoading ? 'Carregando pedidos…' : displayedOrderError && displayedOrders.length === 0 ? 'Pedidos indisponíveis' : 'Nenhum pedido'}</option>{displayedOrders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
+            {displayedOrderError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{displayedOrderError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadCustomer()} type="button">Tentar novamente</button></div>}
+            {displayedOrders.length === 0 && !displayedOrderError && !customerOrdersLoading && <p className="section-footnote record-field-wide">Este cliente ainda não tem pedidos para vincular.</p>}
+            {customerHasMoreOrders && <button className="text-button record-field-wide" disabled={loadingMoreOrders || saving} onClick={() => void loadMoreOrders()} type="button">{loadingMoreOrders ? 'Carregando pedidos…' : 'Carregar mais pedidos'}</button>}
+            {displayedMoreOrdersError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{displayedMoreOrdersError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadMoreOrders()} type="button">Tentar novamente</button></div>}
             <label className="record-field record-field-wide"><span className="field-label">Anotações <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" maxLength={4000} name="notes" rows={3} /></label>
             <label className="record-field record-field-wide"><span className="field-label">Próximo passo <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" placeholder="Ex.: confirmar entrega" /></label>
             <label className="record-field"><span className="field-label">Data do retorno</span><input className="text-input" name="follow_up_due_on" type="date" /></label>
@@ -411,7 +582,7 @@ export function CustomerDetailPage() {
         </form>
       )}
 
-      {error && <p className="form-message form-message-error" role="alert">{error}</p>}
+      {displayedCustomerError && <p className="form-message form-message-error" role="alert">{displayedCustomerError}</p>}
 
       <div className="record-detail-grid">
         <section className="surface-panel record-panel" aria-labelledby="follow-up-title">
@@ -432,6 +603,66 @@ export function CustomerDetailPage() {
           {customer.is_active && <button className="text-button archive-button" onClick={() => void handleArchiveCustomer()} type="button">Arquivar cliente</button>}
         </section>
       </div>
+
+      <section className="surface-panel record-panel customer-order-history" aria-labelledby="customer-orders-heading">
+        <div className="section-heading section-heading-compact">
+          <div><p className="eyebrow">HISTÓRICO FINANCEIRO</p><h2 id="customer-orders-heading">Pedidos e parcelas</h2></div>
+          <span className="neutral-status">{displayedPurchaseOrders.length} carregados</span>
+        </div>
+        {displayedOrderHistoryError && <div className="form-message form-message-error" role="alert"><p>{displayedOrderHistoryError}</p><button className="text-button" disabled={orderHistoryLoading} onClick={() => void loadCustomer()} type="button">Tentar novamente</button></div>}
+        {!purchaseOrdersAreCurrent || orderHistoryLoading ? <p className="inline-state" aria-live="polite">Carregando pedidos e parcelas…</p> : displayedPurchaseOrders.length === 0 ? displayedOrderHistoryError ? null : <p className="inline-state">Este cliente ainda não tem pedidos registrados.</p> : (
+          <div className="customer-order-list">
+            {displayedPurchaseOrders.map((order) => {
+              const financeAvailable = order.received_cents !== null && order.outstanding_cents !== null
+              const statusLabel = order.status === 'cancelled'
+                ? 'Cancelado'
+                : financeAvailable
+                  ? order.outstanding_cents! > 0 ? 'Em aberto' : 'Recebido'
+                  : 'Financeiro indisponível'
+              const statusClass = order.status === 'cancelled'
+                ? 'order-status-cancelled'
+                : financeAvailable
+                  ? order.outstanding_cents! > 0 ? 'order-status-open' : 'order-status-received'
+                  : 'order-status-unavailable'
+              return (
+                <article className="customer-order-card" key={order.id}>
+                  <div className="customer-order-card-heading">
+                    <Link to={'/pedidos/' + order.id}>{orderLabel(order)}</Link>
+                    <span className={'order-status ' + statusClass}>{statusLabel}</span>
+                  </div>
+                  <dl className="customer-order-values">
+                    <div><dt>Total do pedido</dt><dd>{formatBRL(order.total_cents)}</dd></div>
+                    <div><dt>Recebido</dt><dd>{financeAvailable ? formatBRL(order.received_cents!) : 'Indisponível'}</dd></div>
+                    <div><dt>Saldo a receber</dt><dd>{financeAvailable ? formatBRL(order.outstanding_cents!) : 'Indisponível'}</dd></div>
+                  </dl>
+                  {order.installments && order.installments.length > 0 && (
+                    <details className="customer-installment-details">
+                      <summary>Ver parcelas ({order.installments.length})</summary>
+                      <ul className="customer-installment-list">
+                        {order.installments.map((installment) => (
+                          <li key={installment.id}>
+                            <div className="customer-installment-copy">
+                              <strong>Parcela {installment.installment_number} · {formatBusinessDate(installment.due_on)}</strong>
+                              <small className={installment.overdue ? 'customer-installment-overdue' : undefined}>{installment.overdue ? 'Vencida · ' : ''}{installment.payment_method || 'Forma não informada'}</small>
+                            </div>
+                            <div className="customer-installment-values">
+                              <strong>{formatBRL(installment.amount_cents)}</strong>
+                              <small>{order.status === 'cancelled' ? 'Cancelado · sem saldo a receber' : 'Recebido ' + formatBRL(installment.received_cents) + ' · saldo ' + formatBRL(installment.balance_cents)}</small>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                  {order.installments?.length === 0 && <p className="customer-order-no-installments">Nenhuma parcela registrada.</p>}
+                </article>
+              )
+            })}
+          </div>
+        )}
+        {displayedMoreOrdersError && <div className="form-message form-message-error" role="alert"><p>{displayedMoreOrdersError}</p><button className="text-button" disabled={loadingMoreOrders} onClick={() => void loadMoreOrders()} type="button">Tentar novamente</button></div>}
+        {customerHasMoreOrders && <button className="button button-secondary customer-order-more" disabled={loadingMoreOrders} onClick={() => void loadMoreOrders()} type="button">{loadingMoreOrders ? 'Carregando pedidos…' : 'Carregar mais pedidos'}</button>}
+      </section>
 
       <section className="surface-panel record-panel" aria-labelledby="interaction-title">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">HISTÓRICO</p><h2 id="interaction-title">Contatos registrados</h2></div><span className="neutral-status">{interactions.length}</span></div>

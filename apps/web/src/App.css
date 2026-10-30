@@ -511,6 +511,28 @@
 .customer-facts { display: grid; gap: 12px; margin: 0; }
 .customer-facts dt { color: var(--quiet); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.07em; }
 .customer-facts dd { margin: 2px 0 0; color: var(--ink); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.customer-order-history > .form-message { margin: 0; }
+.customer-order-list { display: grid; gap: 10px; }
+.customer-order-card { padding: 15px; border: 1px solid #e7ebe5; border-radius: 9px; background: #fcfdfb; }
+.customer-order-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.customer-order-card-heading > a { color: var(--accent); font-size: 12px; font-weight: 650; text-decoration: none; }
+.customer-order-card-heading > a:hover { text-decoration: underline; }
+.customer-order-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; }
+.customer-order-values dt { color: var(--quiet); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; }
+.customer-order-values dd { margin: 3px 0 0; color: var(--ink); font-size: 12px; font-weight: 620; }
+.customer-installment-details { margin-top: 13px; border-top: 1px solid #e7ebe5; }
+.customer-installment-details summary { min-height: 42px; padding-top: 13px; color: var(--accent); cursor: pointer; font-size: 11px; font-weight: 620; }
+.customer-installment-details summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.customer-installment-list { margin: 0; padding: 0; border-top: 1px solid #eef0ec; list-style: none; }
+.customer-installment-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, auto); align-items: center; gap: 12px; min-height: 60px; padding: 10px 2px; border-bottom: 1px solid #eef0ec; }
+.customer-installment-copy strong, .customer-installment-copy small, .customer-installment-values strong, .customer-installment-values small { display: block; }
+.customer-installment-copy strong, .customer-installment-values strong { color: var(--ink); font-size: 11px; }
+.customer-installment-copy small, .customer-installment-values small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.customer-installment-values { text-align: right; }
+.customer-installment-copy .customer-installment-overdue { color: #9a4c37; font-weight: 650; }
+.order-status-unavailable { color: #657064; background: #fbfcf9; box-shadow: inset 0 0 0 1px var(--line); }
+.customer-order-no-installments { margin: 12px 0 0; color: var(--quiet); font-size: 10px; }
+.customer-order-more { align-self: flex-start; }
 .archive-button { margin-top: 20px; color: var(--danger); }
 .timeline-list { border-top: 1px solid #eef0ec; }
 .timeline-list li { position: relative; display: flex; gap: 12px; padding: 14px 0; border-bottom: 1px solid #eef0ec; }
@@ -634,6 +656,12 @@
   .order-allocation-row { grid-template-columns: minmax(0, 1fr) minmax(115px, 0.45fr); gap: 9px; }
   .order-installment-list li { grid-template-columns: 27px minmax(0, 1fr); }
   .order-installment-values { grid-column: 2; text-align: left; }
+  .customer-order-card { padding: 13px; }
+  .customer-order-values { grid-template-columns: 1fr; gap: 7px; }
+  .customer-order-values > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .customer-order-values dd { margin: 0; text-align: right; }
+  .customer-installment-list li { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .customer-installment-values { text-align: left; }
   .category-inline-form { align-items: stretch; flex-direction: column; }
   .category-inline-form .button { align-self: flex-start; }
   .product-row { flex-wrap: wrap; }
