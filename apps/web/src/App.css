@@ -263,6 +263,18 @@
 .record-textarea { min-height: 92px; padding: 11px 12px; resize: vertical; }
 .record-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 2px; }
 .record-form-actions .section-footnote { margin: 0; }
+.product-photo-field { margin: 2px 0 15px; }
+.product-photo-layout { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.product-photo-preview { display: grid; flex: 0 0 auto; width: 88px; height: 88px; place-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; color: var(--accent); background: var(--accent-wash); }
+.product-photo-preview svg { width: 26px; height: 26px; }
+.product-photo-preview img { width: 100%; height: 100%; object-fit: cover; }
+.product-photo-copy { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.product-photo-copy .section-footnote { margin: 0; overflow-wrap: anywhere; }
+.product-photo-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.product-photo-picker { position: relative; overflow: hidden; cursor: pointer; }
+.product-photo-picker.is-disabled { opacity: 0.55; cursor: not-allowed; }
+.product-photo-picker:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
+.product-photo-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .record-checkbox { display: flex; flex-direction: row; align-items: center; gap: 9px; min-height: 42px; color: var(--ink); font-size: 12px; }
 .record-checkbox input { width: 18px; height: 18px; accent-color: var(--accent); }
 .record-field-actions { justify-content: flex-start; }
@@ -282,6 +294,7 @@
 .record-list-link:hover { background: #fafbf8; }
 .record-avatar { display: grid; flex: 0 0 auto; width: 38px; height: 38px; place-items: center; border-radius: 50%; color: var(--accent); background: var(--accent-wash); font-size: 13px; font-weight: 650; }
 .record-avatar svg { width: 19px; height: 19px; }
+.record-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .record-list-copy { min-width: 0; flex: 1; }
 .record-list-copy strong, .record-list-copy small { display: block; overflow: hidden; text-overflow: ellipsis; }
 .record-list-copy strong { color: var(--ink); font-size: 13px; font-weight: 620; }
