@@ -215,6 +215,20 @@
 .bank-history-pagination > div { display: flex; flex-wrap: wrap; gap: 7px; }
 .bank-history-pagination .button { min-height: 42px; }
 .bank-scope-note { margin: -8px 2px 0; }
+.bank-summary-loading, .bank-summary-error { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #fcfdfb; }
+.bank-summary-error { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 14px; color: var(--danger); background: var(--danger-soft); }
+.bank-summary-error p { margin: 0; font-size: 11px; }
+.bank-reconciliation-summary { margin: 14px 0 17px; padding: 15px; border: 1px solid #e1e8df; border-radius: 9px; background: #fbfcfa; }
+.bank-reconciliation-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.bank-reconciliation-summary-heading h3 { margin: 2px 0 0; color: var(--ink); font-size: 14px; font-weight: 640; }
+.bank-reconciliation-summary-heading > span { color: var(--muted); font-size: 11px; }
+.bank-reconciliation-summary-note { margin: 7px 0 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.bank-reconciliation-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 0; }
+.bank-reconciliation-summary-card { min-width: 0; padding: 11px 12px; border: 1px solid #e7ebe5; border-radius: 8px; background: #fff; }
+.bank-reconciliation-summary-card dt { color: var(--quiet); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; }
+.bank-reconciliation-summary-card dd { display: grid; gap: 4px; margin: 5px 0 0; }
+.bank-reconciliation-summary-card dd strong { color: var(--ink); font-size: 19px; font-weight: 650; line-height: 1.2; }
+.bank-reconciliation-summary-card dd span { color: var(--muted); font-size: 12px; line-height: 1.4; }
 
 .auth-screen { display: grid; grid-template-columns: minmax(280px, 0.95fr) minmax(380px, 1.05fr); min-height: 100vh; background: var(--paper); }
 .auth-intro { display: flex; flex-direction: column; justify-content: space-between; min-height: 100vh; padding: clamp(28px, 5vw, 66px); color: #f6f7f2; background: #314b38; }
@@ -633,6 +647,12 @@
   .bank-history-pagination { align-items: flex-start; flex-direction: column; }
   .bank-history-pagination > div { width: 100%; }
   .bank-history-pagination .button { flex: 1; }
+  .bank-reconciliation-summary { padding: 13px; }
+  .bank-reconciliation-summary-grid { grid-template-columns: 1fr; gap: 7px; }
+  .bank-reconciliation-summary-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+  .bank-reconciliation-summary-card dd { grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 8px; margin: 0; }
+  .bank-reconciliation-summary-card dd strong { font-size: 17px; }
+  .bank-reconciliation-summary-card dd span { text-align: right; }
   .module-empty-panel { min-height: 270px; padding: 25px 18px; }
   .module-link-list { grid-template-columns: 1fr; gap: 9px; }
   .settings-panel { padding: 17px; }

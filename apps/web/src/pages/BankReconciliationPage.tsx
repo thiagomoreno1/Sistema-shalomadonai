@@ -40,6 +40,18 @@ type BankMatch = {
 type MatchReversal = { match_id: string; reason: string; created_at: string }
 type DuplicateLink = { id: string; duplicate_transaction_id: string; original_transaction_id: string; reason: string; created_at: string }
 type DuplicateClear = { duplicate_id: string; reason: string; created_at: string }
+type ReconciliationStatusTotal = { count: string; gross_cents: string }
+type BankReconciliationSummary = {
+  movement_count: string
+  reconciled: ReconciliationStatusTotal
+  pending: ReconciliationStatusTotal
+  duplicate: ReconciliationStatusTotal
+}
+type BankReconciliationSummaryRow = {
+  status: 'reconciled' | 'pending' | 'duplicate'
+  movement_count: string
+  gross_cents: string
+}
 type QueryResponse = { data: unknown[] | null; error: unknown; count?: number | null }
 type MatchCandidate = {
   kind: 'receipt' | 'outflow'
@@ -113,6 +125,10 @@ export function BankReconciliationPage() {
   const [matchReversals, setMatchReversals] = useState<MatchReversal[]>([])
   const [duplicates, setDuplicates] = useState<DuplicateLink[]>([])
   const [duplicateClears, setDuplicateClears] = useState<DuplicateClear[]>([])
+  const [reconciliationSummary, setReconciliationSummary] = useState<BankReconciliationSummary | null>(null)
+  const [summaryBusinessId, setSummaryBusinessId] = useState<string | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(true)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
   const [matchLabels, setMatchLabels] = useState<Record<string, string>>({})
   const [page, setPage] = useState(0)
   const [total, setTotal] = useState(0)
@@ -166,6 +182,7 @@ export function BankReconciliationPage() {
   const returnFocusIdRef = useRef<string | null>(null)
   const actionRequestRef = useRef(newRequestId())
   const loadRequestRef = useRef(0)
+  const summaryRequestRef = useRef(0)
 
   const activeMatchByTransaction = useMemo(() => {
     const reversedMatchIds = new Set(matchReversals.map((row) => row.match_id))
@@ -339,10 +356,62 @@ export function BankReconciliationPage() {
     }
   }, [businessId])
 
+  const loadReconciliationSummary = useCallback(async () => {
+    const client = supabaseClient
+    const request = ++summaryRequestRef.current
+    setSummaryBusinessId(businessId)
+    setReconciliationSummary(null)
+    setSummaryLoading(true)
+    setSummaryError(null)
+    if (!client) {
+      setSummaryError('O resumo global dos movimentos não está disponível agora.')
+      setSummaryLoading(false)
+      return
+    }
+
+    try {
+      const { data, error } = await client.rpc('bank_reconciliation_global_summary', { p_business_id: businessId })
+      if (error) throw error
+      if (request !== summaryRequestRef.current) return
+
+      const rows = (data ?? []) as BankReconciliationSummaryRow[]
+      const totals: Partial<Record<BankReconciliationSummaryRow['status'], ReconciliationStatusTotal>> = {}
+      for (const row of rows) {
+        if (totals[row.status]) throw new Error('The bank summary returned a duplicate status.')
+        const count = BigInt(row.movement_count)
+        const grossCents = BigInt(row.gross_cents)
+        if (count < 0n || grossCents < 0n) throw new Error('The bank summary returned an invalid total.')
+        totals[row.status] = { count: count.toString(), gross_cents: grossCents.toString() }
+      }
+      if (!totals.reconciled || !totals.pending || !totals.duplicate) {
+        throw new Error('The complete bank reconciliation summary could not be loaded.')
+      }
+      const movementCount = BigInt(totals.reconciled.count) + BigInt(totals.pending.count) + BigInt(totals.duplicate.count)
+
+      setReconciliationSummary({
+        movement_count: movementCount.toString(),
+        reconciled: totals.reconciled,
+        pending: totals.pending,
+        duplicate: totals.duplicate,
+      })
+    } catch {
+      if (request === summaryRequestRef.current) {
+        setReconciliationSummary(null)
+        setSummaryError('Não foi possível carregar o resumo completo. Nenhum total parcial foi exibido.')
+      }
+    } finally {
+      if (request === summaryRequestRef.current) setSummaryLoading(false)
+    }
+  }, [businessId])
+
+  const refreshBankData = useCallback(async (nextPage: number) => {
+    await Promise.all([loadData(nextPage), loadReconciliationSummary()])
+  }, [loadData, loadReconciliationSummary])
+
   useEffect(() => {
-    const timer = window.setTimeout(() => { void loadData(0) }, 0)
+    const timer = window.setTimeout(() => { void refreshBankData(0) }, 0)
     return () => window.clearTimeout(timer)
-  }, [loadData])
+  }, [refreshBankData])
 
   useEffect(() => {
     if (accountFormOpen) accountFormHeadingRef.current?.focus()
@@ -402,7 +471,7 @@ export function BankReconciliationPage() {
       setAccountLastFour('')
       setAccountFormOpen(false)
       setNotice('Conta bancária cadastrada. Nenhuma conexão com o banco foi iniciada.')
-      await loadData(0)
+      await refreshBankData(0)
     } catch {
       setFormError('Não foi possível salvar a conta. Confira os dados e tente novamente.')
     } finally {
@@ -444,7 +513,7 @@ export function BankReconciliationPage() {
       setMovementFormOpen(false)
       setNotice('Movimento registrado manualmente. Nenhuma conexão bancária foi consultada.')
       clearActionForms()
-      await loadData(0)
+      await refreshBankData(0)
     } catch {
       setMovementUncertain(true)
       setFormError('Não foi possível confirmar o registro. Tente novamente com os mesmos dados; o envio usa o mesmo identificador para evitar duplicação.')
@@ -553,7 +622,7 @@ export function BankReconciliationPage() {
       if (error) throw error
       setNotice('Conciliação registrada e vinculada ao lançamento financeiro.')
       closeActionForms()
-      await loadData(page)
+      await refreshBankData(page)
     } catch {
       setActionError('Não foi possível conciliar. O lançamento pode ter sido usado em outra conciliação ou alterado; atualize a lista e tente novamente.')
     } finally {
@@ -580,7 +649,7 @@ export function BankReconciliationPage() {
       actionRequestRef.current = newRequestId()
       setNotice('Conciliação desfeita. O motivo permanece no histórico.')
       closeActionForms()
-      await loadData(page)
+      await refreshBankData(page)
     } catch {
       setActionError('Não foi possível desfazer a conciliação. Atualize os dados e tente novamente.')
     } finally {
@@ -608,7 +677,7 @@ export function BankReconciliationPage() {
       setDuplicateRequestId(newRequestId())
       setNotice('Lançamento sinalizado como duplicado e retirado das sugestões de conciliação.')
       closeActionForms()
-      await loadData(page)
+      await refreshBankData(page)
     } catch {
       setActionError('Não foi possível sinalizar o duplicado. Atualize os movimentos e tente novamente.')
     } finally {
@@ -635,7 +704,7 @@ export function BankReconciliationPage() {
       setClearDuplicateRequestId(newRequestId())
       setNotice('Sinalização removida. O movimento voltou à fila de conciliação.')
       closeActionForms()
-      await loadData(page)
+      await refreshBankData(page)
     } catch {
       setActionError('Não foi possível restaurar este movimento. Atualize a lista e tente novamente.')
     } finally {
@@ -662,7 +731,7 @@ export function BankReconciliationPage() {
       <FinanceNavigation active="banking" />
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
-      {loadError && <div className="form-message form-message-error" role="alert">{loadError} <button className="text-button" onClick={() => void loadData(page)} type="button">Atualizar</button></div>}
+      {loadError && <div className="form-message form-message-error" role="alert">{loadError} <button className="text-button" onClick={() => void refreshBankData(page)} type="button">Atualizar</button></div>}
 
       <section className="bank-connection-note" aria-labelledby="bank-connection-heading">
         <div className="bank-connection-note-icon" aria-hidden="true"><Icon name="shield" /></div>
@@ -693,7 +762,7 @@ export function BankReconciliationPage() {
           <div className="record-form-actions"><button className="button button-primary" disabled={savingAccount || loading || Boolean(loadError)} type="submit">{savingAccount ? 'Salvando…' : 'Salvar conta'}</button><button className="text-button" onClick={() => { setAccountFormOpen(false); setFormError(null) }} type="button">Cancelar</button></div>
         </form>}
 
-        {loading && accounts.length === 0 ? <p className="inline-state" aria-live="polite">Carregando contas…</p> : loadError && accounts.length === 0 ? <p className="inline-state inline-state-error" role="status">Não foi possível consultar as contas. <button className="text-button" onClick={() => void loadData(page)} type="button">Tentar novamente</button></p> : accounts.length === 0 ? <div className="empty-state"><span className="empty-icon"><Icon name="coin" /></span><div><h3>Nenhuma conta cadastrada</h3><p>Cadastre o banco e um identificador da conta para organizar os movimentos que serão conferidos.</p></div></div> : <ul className="bank-account-list">
+        {loading && accounts.length === 0 ? <p className="inline-state" aria-live="polite">Carregando contas…</p> : loadError && accounts.length === 0 ? <p className="inline-state inline-state-error" role="status">Não foi possível consultar as contas. <button className="text-button" onClick={() => void refreshBankData(page)} type="button">Tentar novamente</button></p> : accounts.length === 0 ? <div className="empty-state"><span className="empty-icon"><Icon name="coin" /></span><div><h3>Nenhuma conta cadastrada</h3><p>Cadastre o banco e um identificador da conta para organizar os movimentos que serão conferidos.</p></div></div> : <ul className="bank-account-list">
           {accounts.map((account) => <li key={account.id}>
             <span className="bank-account-mark" aria-hidden="true"><Icon name="coin" /></span>
             <span className="bank-account-copy"><strong>{account.account_label}</strong><small>{account.institution_name}{account.account_last_four ? ` · final ${account.account_last_four}` : ''}</small></span>
@@ -708,6 +777,21 @@ export function BankReconciliationPage() {
           <button className="button button-primary" disabled={activeAccounts.length === 0 || loading || Boolean(loadError)} onClick={() => { setAccountId(activeAccounts[0]?.id ?? ''); setMovementFormOpen((value) => !value); setFormError(null) }} ref={movementTriggerRef} type="button">{movementFormOpen ? 'Fechar' : 'Registrar movimento'}</button>
         </div>
         <p className="section-footnote">A conciliação é manual e exige confirmação. Cada movimento bancário pode ser ligado a um único recebimento ou saída, pelo valor exato; divisão e agrupamento ainda não estão disponíveis.</p>
+
+        {(summaryBusinessId !== businessId || summaryLoading) && <p className="inline-state bank-summary-loading" aria-live="polite">Carregando resumo de todos os movimentos…</p>}
+        {summaryBusinessId === businessId && !summaryLoading && summaryError && <div className="bank-summary-error" role="alert"><p>{summaryError}</p><button className="text-button" onClick={() => void loadReconciliationSummary()} type="button">Tentar novamente</button></div>}
+        {summaryBusinessId === businessId && !summaryLoading && !summaryError && reconciliationSummary && <section className="bank-reconciliation-summary" aria-labelledby="bank-reconciliation-summary-title">
+          <div className="bank-reconciliation-summary-heading">
+            <div><p className="eyebrow">RESUMO GLOBAL</p><h3 id="bank-reconciliation-summary-title">Todos os movimentos</h3></div>
+            <span>{reconciliationSummary.movement_count} {reconciliationSummary.movement_count === '1' ? 'movimento' : 'movimentos'}</span>
+          </div>
+          <p className="bank-reconciliation-summary-note">Valores brutos: soma dos valores absolutos; entradas e saídas não se compensam.</p>
+          <dl className="bank-reconciliation-summary-grid">
+            <div className="bank-reconciliation-summary-card"><dt>Conciliados</dt><dd><strong>{reconciliationSummary.reconciled.count}</strong><span>{formatAmount(reconciliationSummary.reconciled.gross_cents)}</span></dd></div>
+            <div className="bank-reconciliation-summary-card"><dt>Pendentes</dt><dd><strong>{reconciliationSummary.pending.count}</strong><span>{formatAmount(reconciliationSummary.pending.gross_cents)}</span></dd></div>
+            <div className="bank-reconciliation-summary-card"><dt>Duplicados</dt><dd><strong>{reconciliationSummary.duplicate.count}</strong><span>{formatAmount(reconciliationSummary.duplicate.gross_cents)}</span></dd></div>
+          </dl>
+        </section>}
 
         {movementFormOpen && <form className="record-form bank-inline-form" onSubmit={(event) => void saveMovement(event)}>
           <h2 ref={movementFormHeadingRef} tabIndex={-1}>Novo movimento do extrato</h2>
