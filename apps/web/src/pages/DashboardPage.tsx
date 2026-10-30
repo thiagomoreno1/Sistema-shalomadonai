@@ -15,19 +15,53 @@ type FinancialSummary = {
   managerial_result: { available: boolean; result_cents: string | null; missing_cost_line_count: number; returned_order_count: number; completed_order_count: number }
 }
 
+type DashboardPriorities = {
+  as_of_on: string
+  follow_ups: { pending_count: number; items: Array<{ id: string; title: string; due_on: string; priority: 'low' | 'normal' | 'high'; customer_id: string | null; customer_name: string | null }> }
+  receivables: {
+    overdue_count: number
+    overdue_balance_cents: string
+    due_today_count: number
+    due_today_balance_cents: string
+    items: Array<{ installment_id: string; order_id: string; installment_number: number; due_on: string; customer_name: string; balance_cents: string; overdue: boolean }>
+  }
+  deliveries: {
+    pending_count: number
+    items: Array<{ delivery_id: string; order_id: string; customer_name: string; status: 'awaiting_separation' | 'ready' | 'dispatched' | 'attempted' | 'rescheduled'; scheduled_on: string | null; time_window: string | null; delivery_worker_name: string | null }>
+  }
+  inventory: {
+    tracked_product_count: number
+    without_minimum_count: number
+    attention_count: number
+    items: Array<{ product_id: string; product_name: string; inventory_unit: string; minimum_stock: number | null; quantity_on_hand: number }>
+  }
+}
+
 const integrations = [
   { label: 'WhatsApp', state: 'Conexão pendente' },
-  { label: 'Banco', state: 'Método pendente' },
+  { label: 'Banco', state: 'Open Finance não conectado' },
   { label: 'Fiscal', state: 'Dados pendentes' },
 ]
+
+const deliveryStatusLabels: Record<DashboardPriorities['deliveries']['items'][number]['status'], string> = {
+  awaiting_separation: 'Aguardando separação',
+  ready: 'Pronta para despacho',
+  dispatched: 'Em rota',
+  attempted: 'Tentativa sem sucesso',
+  rescheduled: 'Reagendada',
+}
+
+function formatQuantity(value: number) {
+  return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(value)
+}
 
 export function DashboardPage() {
   const { id: businessId } = useBusiness()
   const today = useBusinessToday()
   const businessDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeZone: 'America/Sao_Paulo' }).format(new Date(`${today}T12:00:00Z`))
-  const [followUps, setFollowUps] = useState<Array<{ id: string; title: string; due_on: string; customer_id: string | null; customerName: string | null }>>([])
-  const [followUpsLoading, setFollowUpsLoading] = useState(true)
-  const [followUpsError, setFollowUpsError] = useState(false)
+  const [priorities, setPriorities] = useState<DashboardPriorities | null>(null)
+  const [prioritiesLoading, setPrioritiesLoading] = useState(true)
+  const [prioritiesError, setPrioritiesError] = useState(false)
   const [financeSummary, setFinanceSummary] = useState<FinancialSummary | null>(null)
   const [financeLoading, setFinanceLoading] = useState(true)
   const [financeError, setFinanceError] = useState(false)
@@ -56,40 +90,31 @@ export function DashboardPage() {
     }
   }, [businessId, today])
 
-  const loadFollowUps = useCallback(async () => {
+  const loadPriorities = useCallback(async () => {
     if (!supabaseClient) {
-      setFollowUpsLoading(false)
+      setPrioritiesError(true)
+      setPrioritiesLoading(false)
       return
     }
+    setPrioritiesLoading(true)
     try {
-      const { data, error } = await supabaseClient.from('follow_up_tasks')
-        .select('id, title, due_on, customer_id')
-        .eq('business_id', businessId).eq('status', 'pending')
-        .order('due_on', { ascending: true }).limit(4)
-      if (error) {
-        setFollowUpsError(true)
-        return
-      }
-      const rows = data ?? []
-      const customerIds = Array.from(new Set(rows.flatMap((row) => row.customer_id ? [row.customer_id] : [])))
-      let names = new Map<string, string>()
-      if (customerIds.length > 0) {
-        const { data: customers, error: customerError } = await supabaseClient.from('customers').select('id, name')
-          .eq('business_id', businessId).in('id', customerIds)
-        if (customerError) throw customerError
-        names = new Map((customers ?? []).map((customer) => [customer.id, customer.name]))
-      }
-      setFollowUps(rows.map((row) => ({ ...row, customerName: row.customer_id ? names.get(row.customer_id) ?? null : null })))
-      setFollowUpsError(false)
+      const { data, error } = await supabaseClient.rpc('get_dashboard_priorities', {
+        p_business_id: businessId,
+        p_today: today,
+      })
+      if (error || !data) throw error
+      setPriorities(data as DashboardPriorities)
+      setPrioritiesError(false)
     } catch {
-      setFollowUpsError(true)
+      setPriorities(null)
+      setPrioritiesError(true)
     } finally {
-      setFollowUpsLoading(false)
+      setPrioritiesLoading(false)
     }
-  }, [businessId])
+  }, [businessId, today])
 
   // oxlint-disable-next-line react/set-state-in-effect
-  useEffect(() => { void loadFollowUps() }, [loadFollowUps])
+  useEffect(() => { void loadPriorities() }, [loadPriorities])
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadFinanceSummary() }, [loadFinanceSummary])
 
@@ -106,17 +131,51 @@ export function DashboardPage() {
 
       <section className="attention-panel" aria-labelledby="attention-title">
         <div className="section-heading">
-          <div><p className="eyebrow">PRÓXIMAS AÇÕES</p><h2 id="attention-title">Retornos pendentes</h2></div>
-          <Link className="quiet-link" to="/atendimento">Abrir fila <Icon name="arrow" /></Link>
+          <div><p className="eyebrow">PRÓXIMAS AÇÕES</p><h2 id="attention-title">Atenção de hoje</h2></div>
+          <Link className="quiet-link" to="/atendimento">Abrir atendimento <Icon name="arrow" /></Link>
         </div>
-        {followUpsLoading && <p className="inline-state" aria-live="polite">Carregando retornos…</p>}
-        {!followUpsLoading && followUpsError && <div className="empty-state"><span className="empty-icon"><Icon name="clock" /></span><div><h3>Não foi possível carregar os retornos</h3><button className="text-button" onClick={() => { setFollowUpsLoading(true); void loadFollowUps() }} type="button">Tentar novamente</button></div></div>}
-        {!followUpsLoading && !followUpsError && followUps.length === 0 && <div className="empty-state"><span className="empty-icon"><Icon name="check" /></span><div><h3>Nenhum retorno pendente</h3><p>Os próximos passos registrados nos clientes aparecerão aqui.</p></div></div>}
-        {!followUpsLoading && !followUpsError && followUps.length > 0 && (
-          <ul className="dashboard-follow-ups">
-            {followUps.map((task) => <li key={task.id}><span><strong>{task.title}</strong><small>{task.customerName ?? 'Sem cliente vinculado'}</small></span><span className={task.due_on < today ? 'dashboard-task-date is-overdue' : 'dashboard-task-date'}>{task.due_on < today ? 'Atrasado' : formatBusinessDate(task.due_on)}</span></li>)}
-          </ul>
-        )}
+        {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
+        {!prioritiesLoading && prioritiesError && <div className="empty-state"><span className="empty-icon"><Icon name="clock" /></span><div><h3>Não foi possível carregar as prioridades</h3><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div></div>}
+        {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-priority-grid">
+          <section className="dashboard-priority-block" aria-labelledby="dashboard-followups-title">
+            <div className="dashboard-priority-heading"><h3 id="dashboard-followups-title">Retornos atrasados ou de hoje</h3><span>{priorities.follow_ups.pending_count}</span></div>
+            {priorities.follow_ups.items.length === 0 ? <p className="dashboard-priority-empty">Nenhum retorno vencido ou com prazo para hoje.</p> : <ul className="dashboard-priority-list">
+              {priorities.follow_ups.items.map((task) => <li key={task.id}>
+                <Link to="/atendimento"><strong>{task.title}</strong><small>{task.customer_name ?? 'Sem cliente vinculado'}</small></Link>
+                <span className={task.due_on < today ? 'dashboard-task-date is-overdue' : 'dashboard-task-date'}>{task.due_on < today ? 'Atrasado' : task.due_on === today ? 'Hoje' : formatBusinessDate(task.due_on)}</span>
+              </li>)}
+            </ul>}
+            {priorities.follow_ups.pending_count > priorities.follow_ups.items.length && <p className="section-footnote">Mostrando {priorities.follow_ups.items.length} de {priorities.follow_ups.pending_count} retornos com prazo até hoje.</p>}
+            <Link className="quiet-link" to="/atendimento">Ver retornos <Icon name="arrow" /></Link>
+          </section>
+
+          <section className="dashboard-priority-block" aria-labelledby="dashboard-receivables-title">
+            <div className="dashboard-priority-heading"><h3 id="dashboard-receivables-title">Contas a receber</h3><Link className="quiet-link" to="/financeiro">Abrir <Icon name="arrow" /></Link></div>
+            <dl className="dashboard-receivable-totals">
+              <div><dt>Vencidas · {priorities.receivables.overdue_count}</dt><dd>{formatBRLExact(priorities.receivables.overdue_balance_cents)}</dd></div>
+              <div><dt>Vencem hoje · {priorities.receivables.due_today_count}</dt><dd>{formatBRLExact(priorities.receivables.due_today_balance_cents)}</dd></div>
+            </dl>
+            {priorities.receivables.items.length > 0 && <ul className="dashboard-priority-list dashboard-receivable-list">
+              {priorities.receivables.items.map((item) => <li key={item.installment_id}>
+                <Link to={`/pedidos/${item.order_id}`}><strong>{item.customer_name}</strong><small>Vencimento {item.installment_number} · {item.overdue ? 'Atrasado' : 'Hoje'}</small></Link>
+                <span className="dashboard-task-date">{formatBRLExact(item.balance_cents)}</span>
+              </li>)}
+            </ul>}
+            {priorities.receivables.items.length > 0 && <p className="section-footnote">A lista mostra até quatro vencimentos prioritários; os totais incluem todos os saldos devidos.</p>}
+            {priorities.receivables.items.length === 0 && <p className="dashboard-priority-empty">Nenhum saldo vencido ou com vencimento hoje.</p>}
+          </section>
+
+          <section className="dashboard-priority-block" aria-labelledby="dashboard-deliveries-title">
+            <div className="dashboard-priority-heading"><div className="dashboard-priority-title"><h3 id="dashboard-deliveries-title">Entregas para tratar hoje</h3><span>{priorities.deliveries.pending_count}</span></div><Link className="quiet-link" to="/entregas">Abrir fila <Icon name="arrow" /></Link></div>
+            {priorities.deliveries.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma entrega precisa de atualização.</p> : <ul className="dashboard-priority-list">
+              {priorities.deliveries.items.map((delivery) => <li key={delivery.delivery_id}>
+                <Link to={`/pedidos/${delivery.order_id}`}><strong>{delivery.customer_name}</strong><small>{deliveryStatusLabels[delivery.status]}{delivery.delivery_worker_name ? ` · ${delivery.delivery_worker_name}` : ''}</small></Link>
+                <span className="dashboard-task-date">{delivery.scheduled_on === null ? 'Sem data' : delivery.scheduled_on < today ? 'Data vencida' : delivery.scheduled_on === today ? 'Hoje' : formatBusinessDate(delivery.scheduled_on)}</span>
+              </li>)}
+            </ul>}
+            {priorities.deliveries.pending_count > priorities.deliveries.items.length && <p className="section-footnote">Mostrando {priorities.deliveries.items.length} de {priorities.deliveries.pending_count} entregas que precisam de atenção.</p>}
+          </section>
+        </div>}
       </section>
 
       <section aria-labelledby="finance-title">
@@ -166,12 +225,18 @@ export function DashboardPage() {
               <p className="eyebrow">ESTOQUE</p>
               <h2 id="stock-title">Nível de atenção</h2>
             </div>
-            <Icon className="section-icon" name="box" />
+            {prioritiesLoading || prioritiesError ? <Icon className="section-icon" name="box" /> : <span className="dashboard-stock-count" aria-label={`${priorities?.inventory.attention_count ?? 0} produtos em atenção`}>{priorities?.inventory.attention_count ?? 0}</span>}
           </div>
-          <div className="small-empty-state">
-            <p>Cadastre os produtos e os limites mínimos para acompanhar o estoque.</p>
-            <Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link>
-          </div>
+          {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando saldos…</p>}
+          {!prioritiesLoading && prioritiesError && <div className="small-empty-state"><p>As informações de estoque fazem parte da atualização geral do painel. Use “Tentar novamente” acima.</p></div>}
+          {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count === 0 && <div className="small-empty-state"><p>Nenhum produto está configurado para controle de estoque.</p><Link className="quiet-link" to="/catalogo">Configurar produtos <Icon name="arrow" /></Link></div>}
+          {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count > 0 && priorities.inventory.attention_count === 0 && <div className="small-empty-state"><p>Nenhum saldo está negativo ou abaixo do mínimo definido.{priorities.inventory.without_minimum_count > 0 ? ` ${priorities.inventory.without_minimum_count} produto(s) ainda sem mínimo definido.` : ''}</p><Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link></div>}
+          {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.attention_count > 0 && <>
+            <ul className="dashboard-stock-list">{priorities.inventory.items.map((item) => <li key={item.product_id}><span><strong>{item.product_name}</strong><small>{item.minimum_stock === null ? 'Saldo negativo · sem mínimo definido' : `${item.quantity_on_hand < 0 ? 'Saldo negativo · ' : ''}Mínimo ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span><span className="dashboard-stock-quantity">{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span></li>)}</ul>
+            {priorities.inventory.attention_count > priorities.inventory.items.length && <p className="section-footnote">Mostrando {priorities.inventory.items.length} de {priorities.inventory.attention_count} produtos em atenção.</p>}
+            {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">{priorities.inventory.without_minimum_count} produto(s) controlado(s) ainda sem mínimo definido.</p>}
+            <Link className="quiet-link" to="/estoque">Ver produtos em atenção <Icon name="arrow" /></Link>
+          </>}
         </section>
       </div>
 
