@@ -54,7 +54,7 @@ export function SignInPage() {
     <main className="auth-screen">
       <aside className="auth-intro">
         <div className="brand-lockup">
-          <span className="brand-mark" aria-hidden="true">SA</span>
+          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
           <span>
             <strong>Shalom Adonai</strong>
             <small>Operação</small>
@@ -72,7 +72,7 @@ export function SignInPage() {
         <div className="auth-theme-toggle-wrap"><ThemeToggle /></div>
         <div className="auth-form-wrap">
           <div className="brand-lockup auth-mobile-brand">
-            <span className="brand-mark" aria-hidden="true">SA</span>
+            <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
             <span><strong>Shalom Adonai</strong><small>Operação</small></span>
           </div>
           <p className="eyebrow">BEM-VINDO</p>
@@ -175,7 +175,7 @@ export function PasswordRecoveryPage() {
     return (
       <main className="auth-screen auth-screen-single">
         <section className="auth-panel recovery-card" aria-live="polite">
-          <div className="brand-mark" aria-hidden="true">SA</div>
+          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
           <p className="eyebrow">ACESSO ATUALIZADO</p>
           <h1>Senha alterada</h1>
           <p className="auth-description">Sua nova senha foi salva. Você já pode entrar no sistema.</p>
@@ -189,7 +189,7 @@ export function PasswordRecoveryPage() {
     return (
       <main className="auth-screen auth-screen-single">
         <section className="auth-panel recovery-card" aria-labelledby="recovery-title">
-          <div className="brand-mark" aria-hidden="true">SA</div>
+          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
           <p className="eyebrow">RECUPERAÇÃO DE ACESSO</p>
           <h1 id="recovery-title">Abra o link enviado por e-mail</h1>
           <p className="auth-description">Para definir uma nova senha, use o link mais recente enviado para o e-mail da sua conta.</p>
@@ -202,7 +202,7 @@ export function PasswordRecoveryPage() {
   return (
     <main className="auth-screen auth-screen-single">
       <section className="auth-panel recovery-card" aria-labelledby="recovery-title">
-        <div className="brand-mark" aria-hidden="true">SA</div>
+        <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
         <p className="eyebrow">RECUPERAÇÃO DE ACESSO</p>
         <h1 id="recovery-title">Defina uma nova senha</h1>
         <p className="auth-description">Escolha uma senha segura que você ainda não usa em outro serviço.</p>

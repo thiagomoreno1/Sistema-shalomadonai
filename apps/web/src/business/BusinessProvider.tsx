@@ -103,7 +103,7 @@ function BusinessUnavailable({ issue, onRetry }: { issue: 'missing' | 'ambiguous
   return (
     <main className="setup-screen">
       <section className="setup-card" aria-labelledby="business-setup-title">
-        <div className="brand-mark" aria-hidden="true">SA</div>
+        <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
         <p className="eyebrow">Shalom Adonai · Operação</p>
         <h1 id="business-setup-title">A empresa ainda não está conectada</h1>
         <p className="setup-copy">

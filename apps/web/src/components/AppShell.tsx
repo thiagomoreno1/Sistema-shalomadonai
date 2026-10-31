@@ -78,8 +78,8 @@ export function AppShell() {
       <a className="skip-link" href="#main-content">Pular para o conteúdo</a>
       <aside className="desktop-sidebar" aria-label="Navegação principal">
         <div className="brand-lockup sidebar-brand">
-          <span className="brand-mark" aria-hidden="true">SA</span>
-          <span><strong>Xalonda</strong><small>Operação</small></span>
+          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
+          <span><strong>Shalom Adonai</strong><small>Operação</small></span>
         </div>
         <p className="sidebar-caption">OPERAÇÃO</p>
         <nav className="sidebar-nav">
@@ -97,8 +97,8 @@ export function AppShell() {
       <div className="app-column">
         <header className="topbar">
           <div className="topbar-greeting">
-            <span className="mobile-mark" aria-hidden="true">SA</span>
-            <span><strong>Xalonda</strong><small className="topbar-email">{getRouteLabel(location.pathname)}{session?.user.email ? ` · ${session.user.email}` : ''}</small></span>
+            <img className="mobile-mark" src="/shalom-adonai-logo.png" alt="" />
+            <span><strong>Shalom Adonai</strong><small className="topbar-email">{getRouteLabel(location.pathname)}{session?.user.email ? ` · ${session.user.email}` : ''}</small></span>
           </div>
           <div className="topbar-actions">
             <ThemeToggle />

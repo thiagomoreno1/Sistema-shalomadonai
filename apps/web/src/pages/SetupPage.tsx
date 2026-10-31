@@ -5,7 +5,7 @@ export function SetupPage() {
   return (
     <main className="setup-screen">
       <section className="setup-card" aria-labelledby="setup-title">
-        <div className="brand-mark" aria-hidden="true">SA</div>
+        <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
         <p className="eyebrow">Shalom Adonai · Operação</p>
         <h1 id="setup-title">Este ambiente ainda não foi conectado</h1>
         <p className="setup-copy">

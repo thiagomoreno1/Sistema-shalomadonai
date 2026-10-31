@@ -11,6 +11,7 @@
 .desktop-sidebar .brand-lockup small, .desktop-sidebar .account-copy small { color: var(--sidebar-muted); }
 .desktop-sidebar .sidebar-caption { color: var(--sidebar-muted); }
 .brand-mark { display: grid; flex: 0 0 auto; width: 38px; height: 38px; place-items: center; border-radius: 10px; color: var(--action-ink); background: var(--action); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; }
+.brand-image { display: block; flex: 0 0 auto; width: 42px; height: 42px; border-radius: 50%; object-fit: cover; background: var(--navy); }
 .sidebar-caption { margin: 37px 10px 10px; color: var(--quiet); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; }
 .sidebar-nav { display: flex; flex: 1; flex-direction: column; gap: 3px; overflow-y: auto; }
 .nav-link { display: flex; align-items: center; gap: 12px; min-height: 43px; padding: 0 11px; border-radius: 8px; color: var(--muted); text-decoration: none; transition: color 130ms ease, background-color 130ms ease; }
@@ -602,13 +603,13 @@
 .follow-up-item.is-overdue .follow-up-date, .follow-up-item.is-overdue .follow-up-date svg { color: var(--danger); }
 .auth-screen-single { grid-template-columns: 1fr; align-items: center; justify-items: center; padding: 25px; background: var(--canvas); }
 .recovery-card { display: block; width: min(100%, 470px); padding: clamp(25px, 5vw, 45px); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
-.recovery-card .brand-mark { margin-bottom: 24px; }
+.recovery-card .brand-image { margin-bottom: 24px; }
 .recovery-card h1 { margin: 5px 0 8px; color: var(--ink); font-size: 27px; font-weight: 640; letter-spacing: -0.04em; }
 .recovery-card .button { width: 100%; margin-top: 22px; }
 .recovery-card .text-button { margin-top: 18px; }
 .setup-screen, .loading-screen { display: grid; min-height: 100vh; place-items: center; padding: 24px; background: var(--canvas); }
 .setup-card { width: min(100%, 480px); padding: clamp(25px, 5vw, 42px); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); box-shadow: var(--shadow); }
-.setup-card .brand-mark { margin-bottom: 22px; }
+.setup-card .brand-image { margin-bottom: 22px; }
 .setup-card h1 { margin: 7px 0 10px; color: var(--ink); font-size: 26px; font-weight: 640; letter-spacing: -0.04em; line-height: 1.15; }
 .setup-copy { margin: 0; color: var(--muted); font-size: 13px; }
 .setup-note { display: flex; align-items: flex-start; gap: 10px; margin-top: 20px; padding: 13px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--success); background: var(--accent-wash); font-size: 11px; }
@@ -631,7 +632,7 @@
   .topbar { min-height: 62px; padding: 0 17px; }
   .topbar-greeting { gap: 9px; }
   .topbar-greeting strong { font-size: 13px; }
-  .mobile-mark { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 8px; color: var(--paper); background: var(--accent); font-size: 10px; font-weight: 700; }
+  .mobile-mark { display: block; width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: var(--navy); }
   .topbar-email, .topbar-date { display: none; }
   .signout-button { min-width: 53px; min-height: 40px; padding: 0 9px; font-size: 12px; }
   .main-content { padding: 25px 17px 106px; }
