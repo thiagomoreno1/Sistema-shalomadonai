@@ -149,6 +149,13 @@
 .module-link-icon svg { width: 18px; height: 18px; }
 
 .settings-panel { padding: 22px; }
+.settings-appearance-description { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+.accent-options { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.accent-option { display: inline-flex; min-height: 42px; align-items: center; gap: 9px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); background: var(--paper); font-size: 12px; font-weight: 550; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease; }
+.accent-option:hover { border-color: var(--accent); background: var(--accent-wash); transform: translateY(-1px); }
+.accent-option:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.accent-option.is-selected { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.accent-option-swatch { width: 17px; height: 17px; border: 2px solid var(--paper); border-radius: 50%; background: var(--swatch-color); box-shadow: 0 0 0 1px color-mix(in srgb, var(--swatch-color) 55%, transparent); }
 .connected-status { display: inline-flex; align-items: center; gap: 7px; color: var(--accent); font-size: 11px; font-weight: 600; }
 .connected-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--leaf); }
 .settings-detail-list { margin: 18px 0 0; border-top: 1px solid var(--line); }
@@ -165,10 +172,10 @@
 .settings-integration-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }
 .settings-integration-heading h3 { margin: 2px 0 0; color: var(--ink); font-size: 13px; font-weight: 620; line-height: 1.35; }
 .settings-integration-heading .neutral-status { flex: 0 0 auto; }
-.settings-integration-copy { min-height: 34px; margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.settings-integration-copy { min-height: 34px; margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .settings-integration-details { margin-top: 10px; }
 .settings-integration-details > div { grid-template-columns: minmax(90px, 0.85fr) minmax(0, 1fr); gap: 8px; padding: 9px 2px; }
-.settings-integration-details dt, .settings-integration-details dd { font-size: 10px; line-height: 1.45; }
+.settings-integration-details dt, .settings-integration-details dd { font-size: 12px; line-height: 1.45; }
 .settings-integration-note, .settings-records-note { margin: 12px 1px 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .settings-records-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
 .settings-records-shortcuts a { display: inline-flex; min-height: 42px; align-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; }
@@ -786,6 +793,65 @@
 .report-table tbody tr:last-child td { border-bottom: 0; }
 .report-order-link { color: var(--accent); font-weight: 620; text-decoration: none; }
 .report-order-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* Shared visual finish: navigation, controls and content surfaces. */
+.desktop-sidebar {
+  color: var(--sidebar-ink);
+  background: var(--sidebar);
+  box-shadow: 1px 0 8px rgba(20, 36, 58, 0.025);
+}
+.desktop-sidebar .nav-link { color: var(--sidebar-muted); }
+.desktop-sidebar .nav-link.is-active { color: var(--accent); background: var(--sidebar-active); }
+.desktop-sidebar .nav-link svg { color: currentColor; }
+.topbar { background: var(--paper); }
+.mobile-bottom-nav { background: var(--paper); }
+.surface-panel, .attention-panel, .module-empty-panel, .record-panel, .record-form,
+.dashboard-priority-block, .indicator-card, .quick-link, .module-link,
+.setup-card, .recovery-card {
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+.dashboard-priority-block, .indicator-card, .quick-link, .module-link {
+  background: var(--paper);
+}
+.theme-toggle:hover { border-color: var(--accent); background: var(--accent-soft); }
+.status-indicator { background: var(--accent); }
+.button-primary { color: var(--action-ink); background: var(--action); }
+.button-primary:hover { background: var(--action-hover); }
+.button:active, .theme-toggle:active, .signout-button:active { transform: translateY(1px); }
+.button:focus-visible, .text-button:focus-visible, .theme-toggle:focus-visible,
+.signout-button:focus-visible, .quiet-link:focus-visible, .nav-link:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+.text-input:focus { border-color: var(--accent); outline-color: var(--focus); }
+.finance-subnav a:focus-visible, .product-price-history summary:focus-visible,
+.customer-detail-heading:focus-visible, .customer-interaction-form-heading:focus-visible {
+  outline-color: var(--focus);
+}
+
+@supports (backdrop-filter: blur(1px)) {
+  .topbar, .mobile-bottom-nav {
+    background: color-mix(in srgb, var(--paper) 88%, transparent);
+    -webkit-backdrop-filter: blur(16px) saturate(1.35);
+    backdrop-filter: blur(16px) saturate(1.35);
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .quick-link, .module-link {
+    transition: transform 150ms ease, border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+  }
+  .quick-link:hover, .module-link:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
+    box-shadow: 0 5px 16px rgba(23, 39, 64, 0.075);
+  }
+  .nav-link, .button, .theme-toggle, .signout-button, .text-button, .quiet-link {
+    transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+  }
+  .button-primary:hover { box-shadow: 0 3px 10px rgba(23, 105, 210, 0.2); }
+}
 
 body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-panel, .module-empty-panel, .record-panel, .record-form, .setup-card, .recovery-card, .text-input { transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease; }
 

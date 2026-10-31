@@ -79,7 +79,7 @@ export function AppShell() {
       <aside className="desktop-sidebar" aria-label="Navegação principal">
         <div className="brand-lockup sidebar-brand">
           <span className="brand-mark" aria-hidden="true">SA</span>
-          <span><strong>Shalom Adonai</strong><small>Operação</small></span>
+          <span><strong>Xalonda</strong><small>Operação</small></span>
         </div>
         <p className="sidebar-caption">OPERAÇÃO</p>
         <nav className="sidebar-nav">
@@ -89,7 +89,7 @@ export function AppShell() {
           <NavigationLink item={{ to: '/configuracoes', label: 'Configurações', icon: 'settings' }} />
           <div className="sidebar-account">
             <span className="account-avatar" aria-hidden="true">{session?.user.email?.slice(0, 1).toUpperCase() ?? 'S'}</span>
-            <span className="account-copy"><strong>Proprietário</strong><small>{session?.user.email ?? 'Conta autenticada'}</small></span>
+            <span className="account-copy"><strong>Equipe de gestão</strong><small>{session?.user.email ?? 'Conta autenticada'}</small></span>
           </div>
         </div>
       </aside>
@@ -98,7 +98,7 @@ export function AppShell() {
         <header className="topbar">
           <div className="topbar-greeting">
             <span className="mobile-mark" aria-hidden="true">SA</span>
-            <span><strong>{getRouteLabel(location.pathname)}</strong><small className="topbar-email">{session?.user.email}</small></span>
+            <span><strong>Xalonda</strong><small className="topbar-email">{getRouteLabel(location.pathname)}{session?.user.email ? ` · ${session.user.email}` : ''}</small></span>
           </div>
           <div className="topbar-actions">
             <ThemeToggle />

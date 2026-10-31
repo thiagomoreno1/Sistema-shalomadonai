@@ -1,11 +1,14 @@
 import { Link } from 'react-router-dom'
+import type { CSSProperties } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
+import { ACCENT_COLORS, useTheme } from '../theme/ThemeProvider'
 
 export function SettingsPage() {
   const { session } = useAuth()
   const business = useBusiness()
+  const { accent, setAccent, theme } = useTheme()
 
   return (
     <div className="page-stack">
@@ -13,7 +16,7 @@ export function SettingsPage() {
         <div>
           <p className="eyebrow">SISTEMA</p>
           <h1>Configurações</h1>
-          <p className="page-description">Acesso do proprietário e preparação gradual das integrações.</p>
+          <p className="page-description">Conta da equipe de gestão e preparação gradual das integrações.</p>
         </div>
         <span className="module-heading-icon"><Icon name="settings" /></span>
       </header>
@@ -22,7 +25,7 @@ export function SettingsPage() {
         <div className="section-heading">
           <div>
             <p className="eyebrow">CONTA</p>
-            <h2 id="account-title">Acesso do proprietário</h2>
+            <h2 id="account-title">Equipe de gestão</h2>
           </div>
           <span className="connected-status"><span className="connected-dot" /> Sessão ativa</span>
         </div>
@@ -32,6 +35,30 @@ export function SettingsPage() {
           <div><dt>Moeda</dt><dd>Real brasileiro (BRL)</dd></div>
           <div><dt>Fuso horário</dt><dd>America/Sao_Paulo</dd></div>
         </dl>
+      </section>
+
+      <section className="surface-panel settings-panel" aria-labelledby="appearance-title">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">APARÊNCIA</p>
+            <h2 id="appearance-title">Cor de destaque</h2>
+          </div>
+        </div>
+        <p className="settings-appearance-description">Escolha a cor usada em botões, links e destaques. A preferência fica salva neste dispositivo.</p>
+        <div className="accent-options" role="group" aria-label="Escolha a cor de destaque">
+          {ACCENT_COLORS.map((color) => (
+            <button
+              aria-pressed={accent === color.id}
+              className={`accent-option${accent === color.id ? ' is-selected' : ''}`}
+              key={color.id}
+              onClick={() => setAccent(color.id)}
+              type="button"
+            >
+              <span aria-hidden="true" className="accent-option-swatch" style={{ '--swatch-color': theme === 'dark' ? color.dark : color.light } as CSSProperties} />
+              <span>{color.label}</span>
+            </button>
+          ))}
+        </div>
       </section>
 
       <section className="surface-panel settings-panel settings-integration-panel" aria-labelledby="connections-title">
