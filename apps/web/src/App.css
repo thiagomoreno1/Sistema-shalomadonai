@@ -294,6 +294,7 @@
 .record-field .field-label { min-height: 20px; }
 .field-optional { color: var(--quiet); font-size: 10px; font-weight: 450; }
 .record-field .text-input { margin-bottom: 14px; }
+.customer-whatsapp-hint { margin: -8px 0 14px; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .record-textarea { min-height: 92px; padding: 11px 12px; resize: vertical; }
 .record-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 2px; }
 .record-form-actions .section-footnote { margin: 0; }

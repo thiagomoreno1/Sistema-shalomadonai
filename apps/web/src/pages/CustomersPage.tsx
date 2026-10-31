@@ -8,10 +8,19 @@ type Customer = {
   id: string
   name: string
   phone: string | null
+  whatsapp_phone: string | null
   delivery_address: string | null
   notes: string | null
   created_at: string
   is_active: boolean
+}
+
+function getWhatsAppChatUrl(value: string) {
+  const trimmed = value.trim()
+  const digits = trimmed.replace(/\D/g, '')
+  return trimmed.startsWith('+') && digits.length >= 8 && digits.length <= 15 && !digits.startsWith('0')
+    ? `https://wa.me/${digits}`
+    : null
 }
 
 export function CustomersPage() {
@@ -34,7 +43,7 @@ export function CustomersPage() {
     try {
       const { data, error: queryError } = await supabaseClient
         .from('customers')
-        .select('id, name, phone, delivery_address, notes, created_at, is_active')
+        .select('id, name, phone, whatsapp_phone, delivery_address, notes, created_at, is_active')
         .eq('business_id', businessId)
         .eq('is_active', !showArchived)
         .order('name', { ascending: true })
@@ -59,7 +68,7 @@ export function CustomersPage() {
     const needle = search.trim().toLocaleLowerCase('pt-BR')
     if (!needle) return customers
     return customers.filter((customer) =>
-      `${customer.name} ${customer.phone ?? ''}`.toLocaleLowerCase('pt-BR').includes(needle),
+      `${customer.name} ${customer.phone ?? ''} ${customer.whatsapp_phone ?? ''}`.toLocaleLowerCase('pt-BR').includes(needle),
     )
   }, [customers, search])
 
@@ -68,8 +77,13 @@ export function CustomersPage() {
     if (!supabaseClient) return
     const form = new FormData(event.currentTarget)
     const name = String(form.get('name') ?? '').trim()
+    const whatsappPhone = String(form.get('whatsapp_phone') ?? '').trim()
     if (!name) {
       setSaveError('Informe o nome do cliente.')
+      return
+    }
+    if (whatsappPhone && !getWhatsAppChatUrl(whatsappPhone)) {
+      setSaveError('Informe o número começando com + e o código do país, por exemplo +55 21 99999-0000.')
       return
     }
 
@@ -82,6 +96,7 @@ export function CustomersPage() {
           business_id: businessId,
           name,
           phone: String(form.get('phone') ?? '').trim() || null,
+          whatsapp_phone: whatsappPhone || null,
           delivery_address: String(form.get('delivery_address') ?? '').trim() || null,
           notes: String(form.get('notes') ?? '').trim() || null,
         })
@@ -127,6 +142,11 @@ export function CustomersPage() {
               <span className="field-label">Telefone <span className="field-optional">opcional</span></span>
               <input autoComplete="tel" className="text-input" maxLength={64} name="phone" type="tel" />
             </label>
+            <label className="record-field">
+              <span className="field-label">WhatsApp <span className="field-optional">opcional</span></span>
+              <input autoComplete="tel" className="text-input" maxLength={64} name="whatsapp_phone" placeholder="+55 21 99999-0000" type="tel" />
+              <span className="customer-whatsapp-hint">Use +55 e DDD no Brasil; para outros países, informe + e o DDI.</span>
+            </label>
             <label className="record-field record-field-wide">
               <span className="field-label">Endereço de entrega <span className="field-optional">opcional</span></span>
               <input className="text-input" maxLength={1000} name="delivery_address" />
@@ -151,8 +171,8 @@ export function CustomersPage() {
         </div>
         <label className="search-field">
           <Icon name="search" />
-          <span className="visually-hidden">Buscar clientes por nome ou telefone</span>
-          <input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nome ou telefone" value={search} />
+          <span className="visually-hidden">Buscar clientes por nome, telefone ou WhatsApp</span>
+          <input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nome, telefone ou WhatsApp" value={search} />
         </label>
 
         {loading ? <p className="inline-state" aria-live="polite">Carregando clientes…</p> : null}
@@ -178,7 +198,7 @@ export function CustomersPage() {
               <li key={customer.id}>
                 <Link className="record-list-link" to={`/clientes/${customer.id}`}>
                   <span className="record-avatar" aria-hidden="true">{customer.name.slice(0, 1).toLocaleUpperCase('pt-BR')}</span>
-                  <span className="record-list-copy"><strong>{customer.name}</strong><small>{customer.phone || 'Telefone não informado'}{customer.is_active ? '' : ' · Arquivado'}</small></span>
+                  <span className="record-list-copy"><strong>{customer.name}</strong><small>{customer.phone || (customer.whatsapp_phone ? `WhatsApp: ${customer.whatsapp_phone}` : 'Telefone não informado')}{customer.is_active ? '' : ' · Arquivado'}</small></span>
                   <Icon className="quick-link-arrow" name="arrow" />
                 </Link>
               </li>

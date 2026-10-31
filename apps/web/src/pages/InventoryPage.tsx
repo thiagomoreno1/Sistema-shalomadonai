@@ -14,6 +14,7 @@ type Receipt = { id: string; supplier_name: string | null; purchase_reference: s
 type ReturnCandidate = { id: string; customer_name_snapshot: string; fulfillment_type: 'delivery' | 'pickup' }
 type ReturnableItem = { product_id: string; product_name: string; inventory_unit: string; remaining_quantity: number }
 type ReceiptLineDraft = { key: string; productId: string; quantity: string }
+type InventoryCountDraft = { productId: string; productName: string; inventoryUnit: string; expectedQuantity: number; quantity: string }
 type MovementKind = 'adjustment' | 'loss' | 'return'
 
 function newRequestId() { return crypto.randomUUID() }
@@ -30,6 +31,13 @@ function parseQuantity(value: string) {
   if (!/^\d+(?:\.\d{1,3})?$/.test(cleaned)) return null
   const quantity = Number(cleaned)
   return Number.isFinite(quantity) && quantity > 0 && quantity <= 99999999.999 ? quantity : null
+}
+
+function parseCountQuantity(value: string) {
+  const cleaned = value.trim().replace(',', '.')
+  if (!/^\d+(?:\.\d{1,3})?$/.test(cleaned)) return null
+  const quantity = Number(cleaned)
+  return Number.isFinite(quantity) && quantity >= 0 && quantity <= 99999999.999 ? quantity : null
 }
 
 function formatQuantity(value: number) {
@@ -63,6 +71,7 @@ export function InventoryPage() {
   const [error, setError] = useState<string | null>(null)
   const [showReceiptForm, setShowReceiptForm] = useState(false)
   const [showMovementForm, setShowMovementForm] = useState(false)
+  const [showCountForm, setShowCountForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [uncertain, setUncertain] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -79,16 +88,25 @@ export function InventoryPage() {
   const [movementReason, setMovementReason] = useState('')
   const [movementOrderId, setMovementOrderId] = useState('')
   const [movementDate, setMovementDate] = useState('')
+  const [countDrafts, setCountDrafts] = useState<InventoryCountDraft[]>([])
+  const [countSnapshotId, setCountSnapshotId] = useState<string | null>(null)
+  const [countStarting, setCountStarting] = useState(false)
+  const [countStartError, setCountStartError] = useState<string | null>(null)
+  const [countStartErrorKind, setCountStartErrorKind] = useState<'network' | 'empty' | 'over-limit' | 'begin' | null>(null)
   const [historyPage, setHistoryPage] = useState(0)
   const receiptRequestIdRef = useRef(newRequestId())
   const movementRequestIdRef = useRef(newRequestId())
+  const countBeginRequestIdRef = useRef(newRequestId())
   const returnItemsRequestRef = useRef(0)
   const receiptTriggerRef = useRef<HTMLButtonElement>(null)
   const movementTriggerRef = useRef<HTMLButtonElement>(null)
   const receiptHeadingRef = useRef<HTMLHeadingElement>(null)
   const movementHeadingRef = useRef<HTMLHeadingElement>(null)
+  const countTriggerRef = useRef<HTMLButtonElement>(null)
+  const countHeadingRef = useRef<HTMLHeadingElement>(null)
   const wasReceiptOpenRef = useRef(false)
   const wasMovementOpenRef = useRef(false)
+  const wasCountOpenRef = useRef(false)
 
   const loadData = useCallback(async (showLoading = true) => {
     if (!supabaseClient) {
@@ -153,15 +171,21 @@ export function InventoryPage() {
 
   useEffect(() => {
     if (showReceiptForm) receiptHeadingRef.current?.focus()
-    else if (wasReceiptOpenRef.current && !showMovementForm) receiptTriggerRef.current?.focus()
+    else if (wasReceiptOpenRef.current && !showMovementForm && !showCountForm) receiptTriggerRef.current?.focus()
     wasReceiptOpenRef.current = showReceiptForm
-  }, [showReceiptForm, showMovementForm])
+  }, [showReceiptForm, showMovementForm, showCountForm])
 
   useEffect(() => {
     if (showMovementForm) movementHeadingRef.current?.focus()
-    else if (wasMovementOpenRef.current && !showReceiptForm) movementTriggerRef.current?.focus()
+    else if (wasMovementOpenRef.current && !showReceiptForm && !showCountForm) movementTriggerRef.current?.focus()
     wasMovementOpenRef.current = showMovementForm
-  }, [showMovementForm, showReceiptForm])
+  }, [showMovementForm, showReceiptForm, showCountForm])
+
+  useEffect(() => {
+    if (showCountForm) countHeadingRef.current?.focus()
+    else if (wasCountOpenRef.current && !showReceiptForm && !showMovementForm) countTriggerRef.current?.focus()
+    wasCountOpenRef.current = showCountForm
+  }, [showCountForm, showReceiptForm, showMovementForm])
 
   const trackedProducts = products.filter((product) => product.inventory_tracked)
   const untrackedProducts = products.filter((product) => product.is_active && !product.inventory_tracked && !product.is_combo)
@@ -177,6 +201,7 @@ export function InventoryPage() {
     setFormError(null)
     setShowMovementForm(false)
     setShowReceiptForm(true)
+    setShowCountForm(false)
     setUncertain(false)
     setReceiptSupplier('')
     setReceiptReference('')
@@ -190,6 +215,7 @@ export function InventoryPage() {
     setNotice(null)
     setFormError(null)
     setShowReceiptForm(false)
+    setShowCountForm(false)
     setShowMovementForm(true)
     setUncertain(false)
     setMovementProductId('')
@@ -202,6 +228,114 @@ export function InventoryPage() {
     setReturnableItems([])
     setReturnItemsLoading(false)
     movementRequestIdRef.current = newRequestId()
+  }
+
+  async function loadCountSnapshot(inventoryCountId: string, manageLoading = true) {
+    if (!supabaseClient) return false
+    if (manageLoading) setCountStarting(true)
+    setCountStartError(null)
+    setCountStartErrorKind(null)
+    try {
+      const { data, error: queryError } = await supabaseClient.from('inventory_count_lines')
+        .select('product_id, product_name_snapshot, inventory_unit_snapshot, expected_quantity')
+        .eq('business_id', businessId).eq('inventory_count_id', inventoryCountId)
+        .order('product_name_snapshot', { ascending: true })
+      if (queryError) {
+        setCountStartError('A contagem foi iniciada, mas não foi possível carregar os saldos de referência. Tente carregar novamente.')
+        setCountStartErrorKind('network')
+        return false
+      }
+      const snapshots = data ?? []
+      if (snapshots.length === 0) {
+        setCountStartError('A referência desta contagem não contém produtos. Confira quais produtos têm controle de estoque configurado no catálogo.')
+        setCountStartErrorKind('empty')
+        return false
+      }
+      if (snapshots.length > 500) {
+        setCountStartError('Esta referência ultrapassa o limite de 500 produtos. A contagem não pode continuar com este estoque.')
+        setCountStartErrorKind('over-limit')
+        return false
+      }
+      setCountDrafts(snapshots.map((item) => ({
+        productId: item.product_id,
+        productName: item.product_name_snapshot,
+        inventoryUnit: item.inventory_unit_snapshot,
+        expectedQuantity: Number(item.expected_quantity),
+        quantity: '',
+      })))
+      return true
+    } catch {
+      setCountStartError('A contagem foi iniciada, mas não foi possível carregar os saldos de referência. Tente carregar novamente.')
+      setCountStartErrorKind('network')
+      return false
+    } finally {
+      if (manageLoading) setCountStarting(false)
+    }
+  }
+
+  async function beginCountSnapshot() {
+    if (!supabaseClient) {
+      setCountStartError('A conexão do estoque não está disponível.')
+      return
+    }
+    setCountStarting(true)
+    setCountStartError(null)
+    setCountStartErrorKind(null)
+    try {
+      const { data, error: rpcError, status } = await supabaseClient.rpc('begin_inventory_count', {
+        p_business_id: businessId,
+        p_request_id: countBeginRequestIdRef.current,
+      })
+      if (rpcError) {
+        if (status >= 400 && status < 500) {
+          countBeginRequestIdRef.current = newRequestId()
+          if (balances.length > 500) {
+            setCountStartError('A contagem física não está disponível para este estoque: o limite atual é 500 produtos.')
+            setCountStartErrorKind('over-limit')
+          } else {
+            setCountStartError('Não foi possível iniciar a contagem. Confira o estoque e tente novamente.')
+            setCountStartErrorKind('begin')
+          }
+        } else {
+          setCountStartError('Não foi possível confirmar se a contagem iniciou. Tente novamente para recuperar o mesmo registro.')
+          setCountStartErrorKind('network')
+        }
+        return
+      }
+      if (typeof data !== 'string') {
+        setCountStartError('A resposta do início da contagem não chegou completa. Tente novamente para recuperar o mesmo registro.')
+        setCountStartErrorKind('network')
+        return
+      }
+      setCountSnapshotId(data)
+      await loadCountSnapshot(data, false)
+    } catch {
+      setCountStartError('Não foi possível confirmar se a contagem iniciou. Tente novamente para recuperar o mesmo registro.')
+      setCountStartErrorKind('network')
+    } finally {
+      setCountStarting(false)
+    }
+  }
+
+  function retryCountStart() {
+    if (countSnapshotId) void loadCountSnapshot(countSnapshotId)
+    else void beginCountSnapshot()
+  }
+
+  function startCount() {
+    if (balances.length === 0 || balances.length > 500) return
+    setNotice(null)
+    setFormError(null)
+    setCountStartError(null)
+    setCountStartErrorKind(null)
+    setShowReceiptForm(false)
+    setShowMovementForm(false)
+    setShowCountForm(true)
+    setUncertain(false)
+    setCountSnapshotId(null)
+    setCountDrafts([])
+    countBeginRequestIdRef.current = newRequestId()
+    void beginCountSnapshot()
   }
 
   async function loadReturnableItems(orderId: string) {
@@ -398,6 +532,54 @@ export function InventoryPage() {
     }
   }
 
+  async function handleCountSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!supabaseClient || saving || !countSnapshotId || countDrafts.length === 0) return
+    const itemPayload = countDrafts.map((draft) => ({
+      product_id: draft.productId,
+      counted_quantity: parseCountQuantity(draft.quantity),
+    }))
+    if (itemPayload.length !== countDrafts.length || itemPayload.some((item) => !item.product_id || item.counted_quantity === null)) {
+      setFormError('Informe uma quantidade contada, inclusive zero, para cada produto da lista iniciada.')
+      return
+    }
+
+    setSaving(true)
+    setFormError(null)
+    try {
+      const { data, error: rpcError, status } = await supabaseClient.rpc('complete_inventory_count', {
+        p_business_id: businessId,
+        p_inventory_count_id: countSnapshotId,
+        p_items: itemPayload,
+      })
+      if (rpcError) {
+        if (status >= 400 && status < 500) {
+          setUncertain(false)
+          setFormError('A contagem não foi registrada. Confira as quantidades e tente novamente.')
+        } else {
+          setUncertain(true)
+          setFormError('Não foi possível confirmar se a contagem foi registrada. Tente novamente sem alterar os dados.')
+        }
+        return
+      }
+      if (typeof data !== 'string') {
+        setUncertain(true)
+        setFormError('A resposta da contagem não chegou completa. Tente novamente sem alterar os dados.')
+        return
+      }
+      setShowCountForm(false)
+      setUncertain(false)
+      setNotice('Contagem física registrada. As diferenças foram lançadas no histórico do estoque.')
+      setCountSnapshotId(null)
+      await loadData(false)
+    } catch {
+      setUncertain(true)
+      setFormError('Não foi possível confirmar se a contagem foi registrada. Tente novamente sem alterar os dados.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function loadMoreMovements() {
     if (!supabaseClient || loadingMore || movementOffset >= movementTotal) return
     setLoadingMore(true)
@@ -427,11 +609,34 @@ export function InventoryPage() {
     <div className="page-stack">
       <header className="page-heading">
         <div><p className="eyebrow">OPERAÇÃO · ESTOQUE</p><h1>Estoque</h1><p className="page-description">Saldos controlados, entradas recebidas e movimentações registradas.</p></div>
-        <div className="record-heading-actions"><button className="button button-secondary" onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Ajuste, perda ou retorno</button><button className="button button-primary" onClick={startReceipt} ref={receiptTriggerRef} type="button"><Icon name="box" /> Receber compra</button></div>
+        <div className="record-heading-actions"><button className="button button-secondary" disabled={countStarting} onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Ajuste, perda ou retorno</button><button className="button button-secondary" disabled={loading || countStarting || balances.length === 0 || balances.length > 500} onClick={startCount} ref={countTriggerRef} type="button"><Icon name="box" /> Contagem física</button><button className="button button-primary" disabled={countStarting} onClick={startReceipt} ref={receiptTriggerRef} type="button"><Icon name="box" /> Receber compra</button></div>
       </header>
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadData() }} type="button">Tentar novamente</button></div>}
+      {!loading && balances.length > 500 && <p className="form-message form-message-warning" role="status">A contagem física está indisponível para este estoque: há {balances.length} produtos controlados, e o limite atual é 500.</p>}
+
+      {showCountForm && <form className="surface-panel record-form" onSubmit={(event) => void handleCountSubmit(event)}>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">CONFERÊNCIA FÍSICA</p><h2 ref={countHeadingRef} tabIndex={-1}>Contagem de estoque</h2></div><button className="text-button" disabled={saving || uncertain || countStarting} onClick={() => setShowCountForm(false)} type="button">Fechar</button></div>
+        <p className="section-footnote inventory-form-hint">O saldo esperado é capturado ao iniciar. Fechar este painel não cancela a contagem; ao abrir novamente, a mesma referência será retomada. Entradas, vendas e outras movimentações depois do início são preservadas quando a diferença for aplicada.</p>
+        {countStarting && <p className="inline-state" aria-live="polite">Capturando os saldos de referência…</p>}
+        {countStartError && <div className="form-message form-message-error" role="alert"><p>{countStartError}</p>{countStartErrorKind === 'network' || countStartErrorKind === 'begin' ? <button className="text-button" disabled={countStarting} onClick={retryCountStart} type="button">{countSnapshotId ? 'Tentar carregar a referência' : 'Tentar iniciar ou retomar a contagem'}</button> : countStartErrorKind === 'empty' ? <Link className="quiet-link" to="/catalogo">Conferir produtos no catálogo →</Link> : null}</div>}
+        {!countStarting && countSnapshotId && countDrafts.length > 0 && <div className="inventory-line-list">
+          {countDrafts.map((draft) => {
+            const quantityText = draft.quantity
+            const counted = parseCountQuantity(quantityText)
+            const difference = counted === null ? null : Math.round((counted - draft.expectedQuantity) * 1000) / 1000
+            const differenceClass = difference === null || difference === 0 ? '' : difference < 0 ? ' stock-state-low' : ''
+            return <div className="inventory-line-row" key={draft.productId}>
+              <span className="inventory-balance-copy"><strong>{draft.productName}</strong><small>Saldo no início da contagem: {formatQuantity(draft.expectedQuantity)} {draft.inventoryUnit}</small></span>
+              <label className="record-field"><span className="field-label">Quantidade contada</span><input aria-invalid={quantityText !== '' && counted === null} aria-label={'Quantidade contada de ' + draft.productName} className="text-input" disabled={saving || uncertain} inputMode="decimal" onChange={(event) => setCountDrafts((current) => current.map((item) => item.productId === draft.productId ? { ...item, quantity: event.target.value } : item))} placeholder="0" value={quantityText} /></label>
+              <span className="inventory-balance-value"><strong>{difference === null ? '—' : `${difference > 0 ? '+' : ''}${formatQuantity(difference)}`} <small>{draft.inventoryUnit}</small></strong><span className={'stock-state' + differenceClass}>{difference === null ? quantityText ? 'Valor inválido' : 'Informe o contado' : difference === 0 ? 'Sem diferença' : 'Diferença'}</span></span>
+            </div>
+          })}
+        </div>}
+        {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
+        {countDrafts.length > 0 && <div className="record-form-actions"><button className="button button-primary" disabled={saving || countStarting || !countSnapshotId} type="submit">{saving ? 'Salvando contagem…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Confirmar contagem física'}</button></div>}
+      </form>}
 
       <section className="order-balance-grid inventory-summary" aria-label="Resumo do estoque">
         <article className="surface-panel order-balance-card"><span>Produtos controlados</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>Unidade e contagem inicial registradas.</small></article>

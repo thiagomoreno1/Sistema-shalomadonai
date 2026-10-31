@@ -9,6 +9,7 @@ type Customer = {
   id: string
   name: string
   phone: string | null
+  whatsapp_phone: string | null
   delivery_address: string | null
   notes: string | null
   is_active: boolean
@@ -73,6 +74,15 @@ const interactionLabels: Record<Interaction['interaction_type'], string> = {
   other: 'Outro contato',
 }
 const callOutcomeLabels = { answered: 'Atendida', missed: 'Não atendida', other: 'Outro resultado' }
+
+function getWhatsAppChatUrl(value: string | null) {
+  if (!value) return null
+  const trimmed = value.trim()
+  const digits = trimmed.replace(/\D/g, '')
+  return trimmed.startsWith('+') && digits.length >= 8 && digits.length <= 15 && !digits.startsWith('0')
+    ? `https://wa.me/${digits}`
+    : null
+}
 
 type PageResponse = { data: unknown[] | null; error: unknown | null }
 
@@ -264,7 +274,7 @@ export function CustomerDetailPage() {
     try {
       const [customerResult, interactionResult, followUpResult] = await Promise.all([
         client.from('customers')
-          .select('id, name, phone, delivery_address, notes, is_active')
+          .select('id, name, phone, whatsapp_phone, delivery_address, notes, is_active')
           .eq('business_id', businessId).eq('id', customerId).maybeSingle(),
         client.from('customer_interactions')
           .select('id, related_order_id, interaction_type, direction, call_outcome, outcome, notes, occurred_at')
@@ -420,8 +430,13 @@ export function CustomerDetailPage() {
     if (!supabaseClient || !customer) return
     const form = new FormData(event.currentTarget)
     const name = String(form.get('name') ?? '').trim()
+    const whatsappPhone = String(form.get('whatsapp_phone') ?? '').trim()
     if (!name) {
       setFormError('Informe o nome do cliente.')
+      return
+    }
+    if (whatsappPhone && !getWhatsAppChatUrl(whatsappPhone)) {
+      setFormError('Informe o número começando com + e o código do país, por exemplo +55 21 99999-0000.')
       return
     }
     setSaving(true)
@@ -431,6 +446,7 @@ export function CustomerDetailPage() {
         .update({
           name,
           phone: String(form.get('phone') ?? '').trim() || null,
+          whatsapp_phone: whatsappPhone || null,
           delivery_address: String(form.get('delivery_address') ?? '').trim() || null,
           notes: String(form.get('notes') ?? '').trim() || null,
         })
@@ -566,6 +582,8 @@ export function CustomerDetailPage() {
     )
   }
 
+  const whatsappChatUrl = getWhatsAppChatUrl(customer.whatsapp_phone)
+
   return (
     <div className="page-stack">
       <Link className="quiet-link" to="/clientes">← Voltar para clientes</Link>
@@ -573,9 +591,10 @@ export function CustomerDetailPage() {
         <div>
           <p className="eyebrow">CLIENTE</p>
           <h1 className="customer-detail-heading" ref={customerHeadingRef} tabIndex={-1}>{customer.name}</h1>
-          <p className="page-description">{customer.phone || 'Telefone não informado'}{customer.is_active ? '' : ' · Cadastro arquivado'}</p>
+          <p className="page-description">{customer.phone ? `Telefone: ${customer.phone}` : 'Telefone não informado'}{customer.whatsapp_phone ? ` · WhatsApp: ${customer.whatsapp_phone}` : ''}{customer.is_active ? '' : ' · Cadastro arquivado'}</p>
         </div>
         <div className="record-heading-actions customer-heading-actions">
+          {whatsappChatUrl && <a aria-label={`Abrir conversa no WhatsApp com ${customer.name}`} className="button button-secondary" href={whatsappChatUrl} rel="noopener noreferrer" target="_blank"><Icon name="message" /> Abrir WhatsApp</a>}
           {customer.is_active ? <>
             <Link className="button button-primary" to={`/pedidos/novo?cliente=${encodeURIComponent(customer.id)}`}><Icon name="bag" /> Novo pedido</Link>
             <button className="button button-secondary" onClick={() => { setEditOpen((value) => !value); setFormError(null) }} type="button">{editOpen ? 'Fechar edição' : 'Editar'}</button>
@@ -593,6 +612,7 @@ export function CustomerDetailPage() {
           <div className="record-form-grid">
             <label className="record-field record-field-wide"><span className="field-label">Nome *</span><input className="text-input" defaultValue={customer.name} maxLength={160} name="name" required /></label>
             <label className="record-field"><span className="field-label">Telefone <span className="field-optional">opcional</span></span><input className="text-input" defaultValue={customer.phone ?? ''} maxLength={64} name="phone" type="tel" /></label>
+            <label className="record-field"><span className="field-label">WhatsApp <span className="field-optional">opcional</span></span><input autoComplete="tel" className="text-input" defaultValue={customer.whatsapp_phone ?? ''} maxLength={64} name="whatsapp_phone" placeholder="+55 21 99999-0000" type="tel" /><span className="customer-whatsapp-hint">Use +55 e DDD no Brasil; para outros países, informe + e o DDI.</span></label>
             <label className="record-field record-field-wide"><span className="field-label">Endereço de entrega <span className="field-optional">opcional</span></span><input className="text-input" defaultValue={customer.delivery_address ?? ''} maxLength={1000} name="delivery_address" /></label>
             <label className="record-field record-field-wide"><span className="field-label">Observações <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" defaultValue={customer.notes ?? ''} maxLength={4000} name="notes" rows={3} /></label>
           </div>
@@ -624,7 +644,7 @@ export function CustomerDetailPage() {
               <label className="record-field"><span className="field-label">Prioridade do retorno</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
             </>}
           </div>
-          <p className="section-footnote">{interactionFormMode === 'missed_call' ? 'Ao salvar, o retorno será incluído na fila para hoje com prioridade alta. O registro da ligação é manual.' : 'O registro é manual. Uma ligação não atendida cria um retorno para hoje, com prioridade alta. Esta tela não lê chamadas nem conecta ao WhatsApp.'}</p>
+          <p className="section-footnote">{interactionFormMode === 'missed_call' ? 'Ao salvar, o retorno será incluído na fila para hoje com prioridade alta. O registro da ligação é manual.' : 'O registro é manual. Uma ligação não atendida cria um retorno para hoje, com prioridade alta. O atalho abre uma conversa no WhatsApp, mas não envia mensagens nem conecta a API do WhatsApp.'}</p>
           {interactionError && <p className="form-message form-message-error" role="alert">{interactionError}</p>}
           <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : interactionFormMode === 'missed_call' ? 'Registrar ligação e retorno' : 'Salvar contato'}</button>
         </form>
