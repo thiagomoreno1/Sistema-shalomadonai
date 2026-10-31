@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import { supabaseClient } from '../lib/supabase'
 import { Icon } from '../components/Icon'
 import { SetupPage } from './SetupPage'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 export function SignInPage() {
   const [mode, setMode] = useState<'signin' | 'recovery'>('signin')
@@ -68,6 +69,7 @@ export function SignInPage() {
       </aside>
 
       <section className="auth-panel" aria-labelledby="auth-title">
+        <div className="auth-theme-toggle-wrap"><ThemeToggle /></div>
         <div className="auth-form-wrap">
           <div className="brand-lockup auth-mobile-brand">
             <span className="brand-mark" aria-hidden="true">SA</span>

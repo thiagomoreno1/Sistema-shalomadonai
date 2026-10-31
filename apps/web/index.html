@@ -4,12 +4,24 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f4ef" />
+    <meta name="theme-color" content="#F5F1E8" />
     <meta name="robots" content="noindex, nofollow" />
     <title>Shalom Adonai · Operação</title>
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      try {
+        const savedTheme = localStorage.getItem('shalom-adonai-theme');
+        const theme = savedTheme === 'dark' || savedTheme === 'light' ? savedTheme : 'light';
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', theme === 'dark' ? '#07172D' : '#F5F1E8');
+      } catch {
+        document.documentElement.dataset.theme = 'light';
+        document.documentElement.style.colorScheme = 'light';
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

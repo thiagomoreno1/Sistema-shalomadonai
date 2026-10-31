@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { supabaseClient } from '../lib/supabase'
 import { Icon, type IconName } from './Icon'
+import { ThemeToggle } from './ThemeToggle'
 
 type NavItem = { to: string; label: string; icon: IconName }
 
@@ -100,6 +101,7 @@ export function AppShell() {
             <span><strong>{getRouteLabel(location.pathname)}</strong><small className="topbar-email">{session?.user.email}</small></span>
           </div>
           <div className="topbar-actions">
+            <ThemeToggle />
             <button className="signout-button" disabled={signingOut} onClick={handleSignOut} type="button">
               {signingOut ? 'Saindo…' : 'Sair'}
             </button>

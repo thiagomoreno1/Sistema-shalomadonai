@@ -12,3 +12,4 @@ Thumbs.db
 .wrangler/
 supabase/.branches/
 supabase/.temp/
+.local-tools/
