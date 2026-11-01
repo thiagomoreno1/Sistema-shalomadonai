@@ -37,6 +37,15 @@ type RecentOrder = {
   created_at: string
 }
 
+type ActionFilter = 'all' | 'followups' | 'receivables' | 'deliveries'
+
+const actionFilters: Array<{ value: ActionFilter; label: string }> = [
+  { value: 'all', label: 'Todos' },
+  { value: 'followups', label: 'Retornos' },
+  { value: 'receivables', label: 'Recebimentos' },
+  { value: 'deliveries', label: 'Entregas' },
+]
+
 const integrations = [
   { label: 'WhatsApp', state: 'Conexão pendente' },
   { label: 'Banco', state: 'Open Finance não conectado' },
@@ -98,6 +107,8 @@ export function DashboardPage() {
   const priorities = currentPriorities.data
   const prioritiesLoading = currentPriorities.loading
   const prioritiesError = currentPriorities.error
+  const [actionFilter, setActionFilter] = useState<ActionFilter>('all')
+  const noActions = priorities !== null && priorities.follow_ups.items.length === 0 && priorities.receivables.items.length === 0 && priorities.deliveries.items.length === 0
   const recentOrdersScopeKey = `${businessId}:${role}`
   const recentOrdersRequestId = useRef(0)
   const [recentOrdersState, setRecentOrdersState] = useState<{ scopeKey: string; loading: boolean; error: boolean; orders: RecentOrder[] }>({ scopeKey: '', loading: true, error: false, orders: [] })
@@ -182,108 +193,125 @@ export function DashboardPage() {
   }, [loadTrends])
 
   return (
-    <div className="page-stack">
-      <header className="page-heading">
+    <div className="page-stack dashboard-page">
+      <header className="page-heading dashboard-heading">
         <div>
           <p className="eyebrow">{businessDate}</p>
           <h1>Central do dia</h1>
           <p className="page-description">O que precisa de ação hoje?</p>
         </div>
-        <span className="period-badge">Operação</span>
       </header>
 
       <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
-        <Link className="dashboard-summary-link" to="/atendimento">
+        <Link className="dashboard-summary-link is-followups" to="/atendimento">
           <span className="dashboard-summary-icon"><Icon name="phone" /></span>
-          <span className="dashboard-summary-copy"><strong>Retornos prioritários</strong><small>Atrasados ou com prazo para hoje</small></span>
+          <span className="dashboard-summary-copy"><strong>Retornos prioritários</strong><small>Atrasados ou de hoje</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.follow_ups.pending_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
-        <Link className="dashboard-summary-link is-receivables" to="/financeiro">
+        <Link className="dashboard-summary-link is-overdue" to="/financeiro">
           <span className="dashboard-summary-icon"><Icon name="coin" /></span>
-          <span className="dashboard-summary-copy"><strong>Contas a receber</strong><small>Vencidas ou com vencimento hoje</small></span>
-          <span className="dashboard-summary-count">{priorities ? priorities.receivables.overdue_count + priorities.receivables.due_today_count : '—'}</span>
+          <span className="dashboard-summary-copy"><strong>Contas vencidas</strong><small>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : prioritiesLoading ? 'Carregando saldo…' : 'Saldo indisponível'}</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.receivables.overdue_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
-        <Link className="dashboard-summary-link" to="/entregas">
+        <Link className="dashboard-summary-link is-due-today" to="/financeiro">
+          <span className="dashboard-summary-icon"><Icon name="clock" /></span>
+          <span className="dashboard-summary-copy"><strong>Vencem hoje</strong><small>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando saldo…' : 'Saldo indisponível'}</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.receivables.due_today_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
+        <Link className="dashboard-summary-link is-deliveries" to="/entregas">
           <span className="dashboard-summary-icon"><Icon name="truck" /></span>
-          <span className="dashboard-summary-copy"><strong>Entregas em atenção</strong><small>Precisam de atualização hoje</small></span>
+          <span className="dashboard-summary-copy"><strong>Entregas em atenção</strong><small>Precisam de atualização</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.deliveries.pending_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
       </nav>
 
       <div className="dashboard-command-grid">
-      <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
-        <div className="section-heading">
-          <div><p className="eyebrow">PRÓXIMAS AÇÕES</p><h2 id="attention-title">Fila de ações</h2></div>
-          <span className="neutral-status">Hoje</span>
-        </div>
-        {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
-        {!prioritiesLoading && prioritiesError && <div className="empty-state"><span className="empty-icon"><Icon name="clock" /></span><div><h3>Não foi possível carregar as prioridades</h3><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div></div>}
-        {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-action-queue">
-          <section className="dashboard-priority-block dashboard-action-group" aria-labelledby="dashboard-followups-title">
-            <div className="dashboard-priority-heading"><div className="dashboard-priority-title"><Icon name="phone" /><h3 id="dashboard-followups-title">Retornos atrasados ou de hoje</h3><span>{priorities.follow_ups.pending_count}</span></div><Link className="quiet-link" to="/atendimento">Ver retornos <Icon name="arrow" /></Link></div>
-            {priorities.follow_ups.items.length === 0 ? <p className="dashboard-priority-empty">Nenhum retorno vencido ou com prazo para hoje.</p> : <ul className="dashboard-priority-list">
-              {priorities.follow_ups.items.map((task) => <li key={task.id}>
-                <Link to="/atendimento"><strong>{task.title}</strong><small>{task.customer_name ?? 'Sem cliente vinculado'}</small></Link>
-                <span className={task.due_on < today ? 'dashboard-task-date is-overdue' : 'dashboard-task-date'}>{task.due_on < today ? 'Atrasado' : task.due_on === today ? 'Hoje' : formatBusinessDate(task.due_on)}</span>
+        <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
+          <div className="section-heading">
+            <h2 id="attention-title">Fila de ações do dia</h2>
+            <span className="dashboard-today-label"><Icon name="clock" /> Hoje</span>
+          </div>
+          <div className="dashboard-action-filters" role="group" aria-label="Filtrar fila por tipo de ação">
+            {actionFilters.map((filter) => <button aria-pressed={actionFilter === filter.value} key={filter.value} onClick={() => setActionFilter(filter.value)} type="button">{filter.label}</button>)}
+          </div>
+          {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
+          {!prioritiesLoading && prioritiesError && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="clock" /></span><h3>Não foi possível carregar as prioridades</h3><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>}
+          {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-action-queue" aria-live="polite">
+            {actionFilter === 'all' && noActions ? <div className="dashboard-panel-state is-clear"><span className="empty-icon"><Icon name="check" /></span><h3>Tudo em dia</h3><p>Nenhum retorno, vencimento ou entrega precisa de atenção hoje.</p></div> : <>
+              {(actionFilter === 'followups' || (actionFilter === 'all' && priorities.follow_ups.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-followups-title">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-followups-title">Retornos</h3><Link className="quiet-link" to="/atendimento">Ver retornos <Icon name="arrow" /></Link></div>
+                {priorities.follow_ups.items.length === 0 ? <p className="dashboard-priority-empty">Nenhum retorno vencido ou com prazo para hoje.</p> : <ul className="dashboard-action-list">
+                  {priorities.follow_ups.items.map((task) => <li key={task.id}>
+                    <Link to="/atendimento">
+                      <span className={`dashboard-action-symbol${task.due_on < today ? ' is-overdue' : ' is-today'}`}><Icon name="phone" /></span>
+                      <span className="dashboard-action-copy"><strong>{task.title}</strong><small>{task.customer_name ?? 'Sem cliente vinculado'}</small></span>
+                      <span className={`dashboard-row-state${task.due_on < today ? ' is-overdue' : ' is-today'}`}>{task.due_on < today ? 'Atrasado' : task.due_on === today ? 'Hoje' : formatBusinessDate(task.due_on)}</span>
+                      <Icon className="dashboard-row-arrow" name="arrow" />
+                    </Link>
+                  </li>)}
+                </ul>}
+                {priorities.follow_ups.pending_count > priorities.follow_ups.items.length && <p className="section-footnote">Mostrando {priorities.follow_ups.items.length} de {priorities.follow_ups.pending_count} retornos com prazo até hoje.</p>}
+              </section>}
+
+              {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.receivables.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-receivables-title">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Recebimentos a acompanhar</h3><Link className="quiet-link" to="/financeiro">Ver contas <Icon name="arrow" /></Link></div>
+                {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma conta vencida ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
+                  {priorities.receivables.items.map((item) => <li key={item.installment_id}>
+                    <Link to={`/pedidos/${item.order_id}`}>
+                      <span className={`dashboard-action-symbol${item.overdue ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
+                      <span className="dashboard-action-copy"><strong>{item.customer_name}</strong><small>Parcela {item.installment_number} · {formatBusinessDate(item.due_on)}</small></span>
+                      <span className="dashboard-action-meta"><strong>{formatBRLExact(item.balance_cents)}</strong><span className={`dashboard-row-state${item.overdue ? ' is-overdue' : ' is-today'}`}>{item.overdue ? 'Vencido' : 'Vence hoje'}</span></span>
+                      <Icon className="dashboard-row-arrow" name="arrow" />
+                    </Link>
+                  </li>)}
+                </ul>}
+                {priorities.receivables.items.length > 0 && <p className="section-footnote">Até quatro vencimentos prioritários; os indicadores incluem todos os saldos devidos.</p>}
+              </section>}
+
+              {(actionFilter === 'deliveries' || (actionFilter === 'all' && priorities.deliveries.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-deliveries-title">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-deliveries-title">Entregas</h3><Link className="quiet-link" to="/entregas">Ver fila <Icon name="arrow" /></Link></div>
+                {priorities.deliveries.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma entrega precisa de atualização.</p> : <ul className="dashboard-action-list">
+                  {priorities.deliveries.items.map((delivery) => <li key={delivery.delivery_id}>
+                    <Link to={`/pedidos/${delivery.order_id}`}>
+                      <span className={`dashboard-action-symbol${delivery.status === 'attempted' ? ' is-overdue' : ' is-delivery'}`}><Icon name="truck" /></span>
+                      <span className="dashboard-action-copy"><strong>{delivery.customer_name}</strong><small>{delivery.delivery_worker_name ?? 'Entrega a acompanhar'}</small></span>
+                      <span className="dashboard-action-meta"><span className={`dashboard-row-state${delivery.status === 'attempted' ? ' is-overdue' : ' is-delivery'}`}>{deliveryStatusLabels[delivery.status]}</span><small>{delivery.scheduled_on === null ? 'Sem data' : delivery.scheduled_on < today ? 'Data vencida' : delivery.scheduled_on === today ? 'Hoje' : formatBusinessDate(delivery.scheduled_on)}</small></span>
+                      <Icon className="dashboard-row-arrow" name="arrow" />
+                    </Link>
+                  </li>)}
+                </ul>}
+                {priorities.deliveries.pending_count > priorities.deliveries.items.length && <p className="section-footnote">Mostrando {priorities.deliveries.items.length} de {priorities.deliveries.pending_count} entregas em atenção.</p>}
+              </section>}
+            </>}
+          </div>}
+        </section>
+
+        <section className="surface-panel dashboard-recent-panel" aria-labelledby="dashboard-recent-orders-title">
+          <div className="section-heading">
+            <h2 id="dashboard-recent-orders-title">Pedidos recentes</h2>
+            {role === 'owner' && <Link className="quiet-link" to="/pedidos">Ver todos <Icon name="arrow" /></Link>}
+          </div>
+          {role !== 'owner' ? <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="shield" /></span><h3>Acesso indisponível</h3><p>Seu perfil atual não tem permissão para consultar pedidos recentes.</p></div> : <>
+            {currentRecentOrders.loading && <p className="inline-state" aria-live="polite">Carregando pedidos recentes…</p>}
+            {!currentRecentOrders.loading && currentRecentOrders.error && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="bag" /></span><h3>Não foi possível carregar os pedidos</h3><p>Tente novamente para atualizar esta lista.</p><button className="text-button" onClick={() => void loadRecentOrders()} type="button">Tentar novamente</button></div>}
+            {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length === 0 && <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="bag" /></span><h3>Ainda não há pedidos registrados</h3><p>Os últimos quatro pedidos aparecerão aqui.</p><Link className="quiet-link" to="/pedidos/novo">Criar primeiro pedido <Icon name="arrow" /></Link></div>}
+            {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length > 0 && <ul className="dashboard-recent-order-list">
+              {currentRecentOrders.orders.map((order) => <li key={order.id}>
+                <Link to={`/pedidos/${order.id}`}>
+                  <span className={`dashboard-order-dot${order.status === 'cancelled' ? ' is-cancelled' : ''}`} aria-hidden="true" />
+                  <span className="dashboard-recent-order-copy"><strong>{order.customer_name_snapshot}</strong><small>{formatOrderDate(order.created_at)} · {order.requires_delivery ? 'Entrega' : 'Retirada'}</small></span>
+                  <span className={`dashboard-recent-order-status${order.status === 'cancelled' ? ' is-cancelled' : ''}`}>{order.status === 'cancelled' ? 'Cancelado' : 'Pedido ativo'}</span>
+                  <Icon className="dashboard-row-arrow" name="arrow" />
+                </Link>
               </li>)}
             </ul>}
-            {priorities.follow_ups.pending_count > priorities.follow_ups.items.length && <p className="section-footnote">Mostrando {priorities.follow_ups.items.length} de {priorities.follow_ups.pending_count} retornos com prazo até hoje.</p>}
-          </section>
-
-          <section className="dashboard-priority-block dashboard-action-group" aria-labelledby="dashboard-receivables-title">
-            <div className="dashboard-priority-heading"><div className="dashboard-priority-title"><Icon name="coin" /><h3 id="dashboard-receivables-title">Contas a receber</h3></div><Link className="quiet-link" to="/financeiro">Abrir <Icon name="arrow" /></Link></div>
-            <dl className="dashboard-receivable-totals">
-              <div><dt>Vencidas · {priorities.receivables.overdue_count}</dt><dd>{formatBRLExact(priorities.receivables.overdue_balance_cents)}</dd></div>
-              <div><dt>Vencem hoje · {priorities.receivables.due_today_count}</dt><dd>{formatBRLExact(priorities.receivables.due_today_balance_cents)}</dd></div>
-            </dl>
-            {priorities.receivables.items.length > 0 && <ul className="dashboard-priority-list dashboard-receivable-list">
-              {priorities.receivables.items.map((item) => <li key={item.installment_id}>
-                <Link to={`/pedidos/${item.order_id}`}><strong>{item.customer_name}</strong><small>Vencimento {item.installment_number} · {item.overdue ? 'Atrasado' : 'Hoje'}</small></Link>
-                <span className="dashboard-task-date">{formatBRLExact(item.balance_cents)}</span>
-              </li>)}
-            </ul>}
-            {priorities.receivables.items.length > 0 && <p className="section-footnote">A lista mostra até quatro vencimentos prioritários; os totais incluem todos os saldos devidos.</p>}
-            {priorities.receivables.items.length === 0 && <p className="dashboard-priority-empty">Nenhum saldo vencido ou com vencimento hoje.</p>}
-          </section>
-
-          <section className="dashboard-priority-block dashboard-action-group" aria-labelledby="dashboard-deliveries-title">
-            <div className="dashboard-priority-heading"><div className="dashboard-priority-title"><Icon name="truck" /><h3 id="dashboard-deliveries-title">Entregas para tratar hoje</h3><span>{priorities.deliveries.pending_count}</span></div><Link className="quiet-link" to="/entregas">Abrir fila <Icon name="arrow" /></Link></div>
-            {priorities.deliveries.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma entrega precisa de atualização.</p> : <ul className="dashboard-priority-list">
-              {priorities.deliveries.items.map((delivery) => <li key={delivery.delivery_id}>
-                <Link to={`/pedidos/${delivery.order_id}`}><strong>{delivery.customer_name}</strong><small>{deliveryStatusLabels[delivery.status]}{delivery.delivery_worker_name ? ` · ${delivery.delivery_worker_name}` : ''}</small></Link>
-                <span className="dashboard-task-date">{delivery.scheduled_on === null ? 'Sem data' : delivery.scheduled_on < today ? 'Data vencida' : delivery.scheduled_on === today ? 'Hoje' : formatBusinessDate(delivery.scheduled_on)}</span>
-              </li>)}
-            </ul>}
-            {priorities.deliveries.pending_count > priorities.deliveries.items.length && <p className="section-footnote">Mostrando {priorities.deliveries.items.length} de {priorities.deliveries.pending_count} entregas que precisam de atenção.</p>}
-          </section>
-        </div>}
-      </section>
-
-      <section className="surface-panel dashboard-recent-panel" aria-labelledby="dashboard-recent-orders-title">
-        <div className="section-heading section-heading-compact">
-          <div><p className="eyebrow">ACOMPANHAMENTO</p><h2 id="dashboard-recent-orders-title">Pedidos recentes</h2></div>
-          {role === 'owner' && <Link className="quiet-link" to="/pedidos">Ver todos <Icon name="arrow" /></Link>}
-        </div>
-        {role !== 'owner' ? <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="shield" /></span><h3>Acesso indisponível</h3><p>Seu perfil atual não tem permissão para consultar pedidos recentes.</p></div> : <>
-          {currentRecentOrders.loading && <p className="inline-state" aria-live="polite">Carregando pedidos recentes…</p>}
-          {!currentRecentOrders.loading && currentRecentOrders.error && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="bag" /></span><h3>Não foi possível carregar os pedidos</h3><p>Tente novamente para atualizar esta lista.</p><button className="text-button" onClick={() => void loadRecentOrders()} type="button">Tentar novamente</button></div>}
-          {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length === 0 && <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="bag" /></span><h3>Ainda não há pedidos registrados</h3><p>Os últimos quatro pedidos aparecerão aqui para facilitar o acompanhamento.</p><Link className="quiet-link" to="/pedidos/novo">Criar primeiro pedido <Icon name="arrow" /></Link></div>}
-          {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length > 0 && <ul className="dashboard-recent-order-list">
-            {currentRecentOrders.orders.map((order) => <li key={order.id}>
-              <Link to={`/pedidos/${order.id}`}>
-                <span className="dashboard-order-mark"><Icon name="bag" /></span>
-                <span className="dashboard-recent-order-copy"><strong>{order.customer_name_snapshot}</strong><small>{formatOrderDate(order.created_at)} · {order.requires_delivery ? 'Entrega' : 'Retirada'}</small><span className={`dashboard-recent-order-status${order.status === 'cancelled' ? ' is-cancelled' : ''}`}>{order.status === 'cancelled' ? 'Cancelado' : 'Pedido ativo'}</span></span>
-                <Icon className="dashboard-recent-order-arrow" name="arrow" />
-              </Link>
-            </li>)}
-          </ul>}
-        </>}
-      </section>
+          </>}
+        </section>
       </div>
-
       <DashboardTrends
         days={currentTrends.days}
         endOn={today}
