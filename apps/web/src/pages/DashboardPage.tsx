@@ -29,6 +29,14 @@ type DashboardPriorities = {
   }
 }
 
+type RecentOrder = {
+  id: string
+  customer_name_snapshot: string
+  status: 'open' | 'cancelled'
+  requires_delivery: boolean
+  created_at: string
+}
+
 const integrations = [
   { label: 'WhatsApp', state: 'Conexão pendente' },
   { label: 'Banco', state: 'Open Finance não conectado' },
@@ -45,6 +53,10 @@ const deliveryStatusLabels: Record<DashboardPriorities['deliveries']['items'][nu
 
 function formatQuantity(value: number) {
   return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(value)
+}
+
+function formatOrderDate(value: string) {
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeZone: 'America/Sao_Paulo' }).format(new Date(value))
 }
 
 function shiftCalendarDate(value: string, offset: number) {
@@ -76,12 +88,20 @@ function readTrendDays(value: unknown, startOn: string, period: DashboardTrendPe
 }
 
 export function DashboardPage() {
-  const { id: businessId } = useBusiness()
+  const { id: businessId, role } = useBusiness()
   const today = useBusinessToday()
   const businessDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeZone: 'America/Sao_Paulo' }).format(new Date(`${today}T12:00:00Z`))
-  const [priorities, setPriorities] = useState<DashboardPriorities | null>(null)
-  const [prioritiesLoading, setPrioritiesLoading] = useState(true)
-  const [prioritiesError, setPrioritiesError] = useState(false)
+  const prioritiesScopeKey = `${businessId}:${role}:${today}`
+  const prioritiesRequestId = useRef(0)
+  const [priorityState, setPriorityState] = useState<{ scopeKey: string; loading: boolean; error: boolean; data: DashboardPriorities | null }>({ scopeKey: '', loading: true, error: false, data: null })
+  const currentPriorities = priorityState.scopeKey === prioritiesScopeKey ? priorityState : { loading: true, error: false, data: null }
+  const priorities = currentPriorities.data
+  const prioritiesLoading = currentPriorities.loading
+  const prioritiesError = currentPriorities.error
+  const recentOrdersScopeKey = `${businessId}:${role}`
+  const recentOrdersRequestId = useRef(0)
+  const [recentOrdersState, setRecentOrdersState] = useState<{ scopeKey: string; loading: boolean; error: boolean; orders: RecentOrder[] }>({ scopeKey: '', loading: true, error: false, orders: [] })
+  const currentRecentOrders = recentOrdersState.scopeKey === recentOrdersScopeKey ? recentOrdersState : { loading: true, error: false, orders: [] }
   const [trendPeriod, setTrendPeriod] = useState<DashboardTrendPeriod>(7)
   const trendStartOn = shiftCalendarDate(today, 1 - trendPeriod)
   const trendScopeKey = `${businessId}:${trendStartOn}:${today}`
@@ -108,30 +128,53 @@ export function DashboardPage() {
   }, [businessId, today, trendPeriod, trendScopeKey, trendStartOn])
 
   const loadPriorities = useCallback(async () => {
-    if (!supabaseClient) {
-      setPrioritiesError(true)
-      setPrioritiesLoading(false)
-      return
-    }
-    setPrioritiesLoading(true)
+    const requestId = ++prioritiesRequestId.current
+    setPriorityState({ scopeKey: prioritiesScopeKey, loading: true, error: false, data: null })
     try {
+      if (!supabaseClient) throw new Error('Authentication service unavailable.')
       const { data, error } = await supabaseClient.rpc('get_dashboard_priorities', {
         p_business_id: businessId,
         p_today: today,
       })
       if (error || !data) throw error
-      setPriorities(data as DashboardPriorities)
-      setPrioritiesError(false)
+      if (requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data: data as DashboardPriorities })
     } catch {
-      setPriorities(null)
-      setPrioritiesError(true)
-    } finally {
-      setPrioritiesLoading(false)
+      if (requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: true, data: null })
     }
-  }, [businessId, today])
+  }, [businessId, today, prioritiesScopeKey])
+
+  const loadRecentOrders = useCallback(async () => {
+    const requestId = ++recentOrdersRequestId.current
+    if (role !== 'owner') {
+      setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: false, orders: [] })
+      return
+    }
+    setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: true, error: false, orders: [] })
+    try {
+      if (!supabaseClient) throw new Error('Authentication service unavailable.')
+      const { data, error } = await supabaseClient.from('orders')
+        .select('id, customer_name_snapshot, status, requires_delivery, created_at')
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(4)
+      if (error) throw error
+      if (requestId === recentOrdersRequestId.current) setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: false, orders: (data ?? []) as RecentOrder[] })
+    } catch {
+      if (requestId === recentOrdersRequestId.current) setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: true, orders: [] })
+    }
+  }, [businessId, role, recentOrdersScopeKey])
 
   // oxlint-disable-next-line react/set-state-in-effect
-  useEffect(() => { void loadPriorities() }, [loadPriorities])
+  useEffect(() => {
+    void loadPriorities()
+    return () => { prioritiesRequestId.current += 1 }
+  }, [loadPriorities])
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => {
+    void loadRecentOrders()
+    return () => { recentOrdersRequestId.current += 1 }
+  }, [loadRecentOrders])
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
     void loadTrends()
@@ -143,22 +186,44 @@ export function DashboardPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">{businessDate}</p>
-          <h1>Visão geral</h1>
-          <p className="page-description">O que precisa de atenção hoje?</p>
+          <h1>Central do dia</h1>
+          <p className="page-description">O que precisa de ação hoje?</p>
         </div>
         <span className="period-badge">Operação</span>
       </header>
 
-      <section className="attention-panel" aria-labelledby="attention-title">
+      <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
+        <Link className="dashboard-summary-link" to="/atendimento">
+          <span className="dashboard-summary-icon"><Icon name="phone" /></span>
+          <span className="dashboard-summary-copy"><strong>Retornos prioritários</strong><small>Atrasados ou com prazo para hoje</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.follow_ups.pending_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
+        <Link className="dashboard-summary-link is-receivables" to="/financeiro">
+          <span className="dashboard-summary-icon"><Icon name="coin" /></span>
+          <span className="dashboard-summary-copy"><strong>Contas a receber</strong><small>Vencidas ou com vencimento hoje</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.receivables.overdue_count + priorities.receivables.due_today_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
+        <Link className="dashboard-summary-link" to="/entregas">
+          <span className="dashboard-summary-icon"><Icon name="truck" /></span>
+          <span className="dashboard-summary-copy"><strong>Entregas em atenção</strong><small>Precisam de atualização hoje</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.deliveries.pending_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
+      </nav>
+
+      <div className="dashboard-command-grid">
+      <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
         <div className="section-heading">
-          <div><p className="eyebrow">PRÓXIMAS AÇÕES</p><h2 id="attention-title">Atenção de hoje</h2></div>
-          <Link className="quiet-link" to="/atendimento">Abrir atendimento <Icon name="arrow" /></Link>
+          <div><p className="eyebrow">PRÓXIMAS AÇÕES</p><h2 id="attention-title">Fila de ações</h2></div>
+          <span className="neutral-status">Hoje</span>
         </div>
         {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
         {!prioritiesLoading && prioritiesError && <div className="empty-state"><span className="empty-icon"><Icon name="clock" /></span><div><h3>Não foi possível carregar as prioridades</h3><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div></div>}
-        {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-priority-grid">
-          <section className="dashboard-priority-block" aria-labelledby="dashboard-followups-title">
-            <div className="dashboard-priority-heading"><h3 id="dashboard-followups-title">Retornos atrasados ou de hoje</h3><span>{priorities.follow_ups.pending_count}</span></div>
+        {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-action-queue">
+          <section className="dashboard-priority-block dashboard-action-group" aria-labelledby="dashboard-followups-title">
+            <div className="dashboard-priority-heading"><div className="dashboard-priority-title"><Icon name="phone" /><h3 id="dashboard-followups-title">Retornos atrasados ou de hoje</h3><span>{priorities.follow_ups.pending_count}</span></div><Link className="quiet-link" to="/atendimento">Ver retornos <Icon name="arrow" /></Link></div>
             {priorities.follow_ups.items.length === 0 ? <p className="dashboard-priority-empty">Nenhum retorno vencido ou com prazo para hoje.</p> : <ul className="dashboard-priority-list">
               {priorities.follow_ups.items.map((task) => <li key={task.id}>
                 <Link to="/atendimento"><strong>{task.title}</strong><small>{task.customer_name ?? 'Sem cliente vinculado'}</small></Link>
@@ -166,11 +231,10 @@ export function DashboardPage() {
               </li>)}
             </ul>}
             {priorities.follow_ups.pending_count > priorities.follow_ups.items.length && <p className="section-footnote">Mostrando {priorities.follow_ups.items.length} de {priorities.follow_ups.pending_count} retornos com prazo até hoje.</p>}
-            <Link className="quiet-link" to="/atendimento">Ver retornos <Icon name="arrow" /></Link>
           </section>
 
-          <section className="dashboard-priority-block" aria-labelledby="dashboard-receivables-title">
-            <div className="dashboard-priority-heading"><h3 id="dashboard-receivables-title">Contas a receber</h3><Link className="quiet-link" to="/financeiro">Abrir <Icon name="arrow" /></Link></div>
+          <section className="dashboard-priority-block dashboard-action-group" aria-labelledby="dashboard-receivables-title">
+            <div className="dashboard-priority-heading"><div className="dashboard-priority-title"><Icon name="coin" /><h3 id="dashboard-receivables-title">Contas a receber</h3></div><Link className="quiet-link" to="/financeiro">Abrir <Icon name="arrow" /></Link></div>
             <dl className="dashboard-receivable-totals">
               <div><dt>Vencidas · {priorities.receivables.overdue_count}</dt><dd>{formatBRLExact(priorities.receivables.overdue_balance_cents)}</dd></div>
               <div><dt>Vencem hoje · {priorities.receivables.due_today_count}</dt><dd>{formatBRLExact(priorities.receivables.due_today_balance_cents)}</dd></div>
@@ -185,8 +249,8 @@ export function DashboardPage() {
             {priorities.receivables.items.length === 0 && <p className="dashboard-priority-empty">Nenhum saldo vencido ou com vencimento hoje.</p>}
           </section>
 
-          <section className="dashboard-priority-block" aria-labelledby="dashboard-deliveries-title">
-            <div className="dashboard-priority-heading"><div className="dashboard-priority-title"><h3 id="dashboard-deliveries-title">Entregas para tratar hoje</h3><span>{priorities.deliveries.pending_count}</span></div><Link className="quiet-link" to="/entregas">Abrir fila <Icon name="arrow" /></Link></div>
+          <section className="dashboard-priority-block dashboard-action-group" aria-labelledby="dashboard-deliveries-title">
+            <div className="dashboard-priority-heading"><div className="dashboard-priority-title"><Icon name="truck" /><h3 id="dashboard-deliveries-title">Entregas para tratar hoje</h3><span>{priorities.deliveries.pending_count}</span></div><Link className="quiet-link" to="/entregas">Abrir fila <Icon name="arrow" /></Link></div>
             {priorities.deliveries.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma entrega precisa de atualização.</p> : <ul className="dashboard-priority-list">
               {priorities.deliveries.items.map((delivery) => <li key={delivery.delivery_id}>
                 <Link to={`/pedidos/${delivery.order_id}`}><strong>{delivery.customer_name}</strong><small>{deliveryStatusLabels[delivery.status]}{delivery.delivery_worker_name ? ` · ${delivery.delivery_worker_name}` : ''}</small></Link>
@@ -197,6 +261,28 @@ export function DashboardPage() {
           </section>
         </div>}
       </section>
+
+      <section className="surface-panel dashboard-recent-panel" aria-labelledby="dashboard-recent-orders-title">
+        <div className="section-heading section-heading-compact">
+          <div><p className="eyebrow">ACOMPANHAMENTO</p><h2 id="dashboard-recent-orders-title">Pedidos recentes</h2></div>
+          {role === 'owner' && <Link className="quiet-link" to="/pedidos">Ver todos <Icon name="arrow" /></Link>}
+        </div>
+        {role !== 'owner' ? <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="shield" /></span><h3>Acesso indisponível</h3><p>Seu perfil atual não tem permissão para consultar pedidos recentes.</p></div> : <>
+          {currentRecentOrders.loading && <p className="inline-state" aria-live="polite">Carregando pedidos recentes…</p>}
+          {!currentRecentOrders.loading && currentRecentOrders.error && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="bag" /></span><h3>Não foi possível carregar os pedidos</h3><p>Tente novamente para atualizar esta lista.</p><button className="text-button" onClick={() => void loadRecentOrders()} type="button">Tentar novamente</button></div>}
+          {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length === 0 && <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="bag" /></span><h3>Ainda não há pedidos registrados</h3><p>Os últimos quatro pedidos aparecerão aqui para facilitar o acompanhamento.</p><Link className="quiet-link" to="/pedidos/novo">Criar primeiro pedido <Icon name="arrow" /></Link></div>}
+          {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length > 0 && <ul className="dashboard-recent-order-list">
+            {currentRecentOrders.orders.map((order) => <li key={order.id}>
+              <Link to={`/pedidos/${order.id}`}>
+                <span className="dashboard-order-mark"><Icon name="bag" /></span>
+                <span className="dashboard-recent-order-copy"><strong>{order.customer_name_snapshot}</strong><small>{formatOrderDate(order.created_at)} · {order.requires_delivery ? 'Entrega' : 'Retirada'}</small><span className={`dashboard-recent-order-status${order.status === 'cancelled' ? ' is-cancelled' : ''}`}>{order.status === 'cancelled' ? 'Cancelado' : 'Pedido ativo'}</span></span>
+                <Icon className="dashboard-recent-order-arrow" name="arrow" />
+              </Link>
+            </li>)}
+          </ul>}
+        </>}
+      </section>
+      </div>
 
       <DashboardTrends
         days={currentTrends.days}
