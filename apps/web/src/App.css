@@ -974,12 +974,8 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .dashboard-day-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .dashboard-summary-link { display: grid; grid-template-columns: 28px minmax(0, 1fr) 12px; align-items: start; gap: 5px 8px; min-width: 0; min-height: 90px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--accent-wash); text-decoration: none; transition: border-color 140ms ease, background-color 140ms ease; }
 .dashboard-summary-link:hover { border-color: var(--accent); background: var(--accent-soft); }
-.dashboard-summary-link.is-followups { background: color-mix(in srgb, var(--paper) 55%, var(--danger-soft)); }
-.dashboard-summary-link.is-overdue { background: color-mix(in srgb, var(--paper) 30%, var(--warning-soft)); }
 .dashboard-summary-icon { display: grid; grid-row: 1 / span 2; width: 28px; height: 28px; place-items: center; border-radius: 50%; color: var(--accent); background: var(--accent-soft); }
 .dashboard-summary-icon svg { width: 15px; height: 15px; }
-.dashboard-summary-link.is-followups .dashboard-summary-icon { color: var(--danger); background: var(--danger-soft); }
-.dashboard-summary-link.is-overdue .dashboard-summary-icon { color: var(--warning); background: var(--warning-soft); }
 .dashboard-summary-copy { grid-column: 2; min-width: 0; }
 .dashboard-summary-copy strong, .dashboard-summary-copy small { display: block; }
 .dashboard-summary-copy strong { color: var(--ink); font-size: 12px; font-weight: 650; line-height: 1.4; }
