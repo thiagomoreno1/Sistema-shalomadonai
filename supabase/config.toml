@@ -1,6 +1,6 @@
 # Supabase local development configuration.
 # https://supabase.com/docs/guides/local-development/cli/config
-project_id = "shalom-adonai-operations"
+project_id = "mnsfdcqcsluhqtzqiiun"
 
 [api]
 enabled = true
