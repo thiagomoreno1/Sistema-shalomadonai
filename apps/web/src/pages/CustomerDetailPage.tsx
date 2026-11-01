@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEve
 import { Link, useParams } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
+import { businessLocalDateTimeToIso, businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
 type Customer = {
@@ -74,6 +74,15 @@ const interactionLabels: Record<Interaction['interaction_type'], string> = {
   other: 'Outro contato',
 }
 const callOutcomeLabels = { answered: 'Atendida', missed: 'Não atendida', other: 'Outro resultado' }
+
+function businessDateTimeInputValue() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date())
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`
+}
 
 function getWhatsAppChatUrl(value: string | null) {
   if (!value) return null
@@ -529,6 +538,12 @@ export function CustomerDetailPage() {
     const dueOn = String(form.get('follow_up_due_on') ?? '').trim()
     const type = String(form.get('interaction_type')) as Interaction['interaction_type']
     const callOutcome = type === 'call' ? String(form.get('call_outcome') ?? '') : null
+    const occurredAtInput = String(form.get('occurred_at') ?? '').trim()
+    const occurredAt = occurredAtInput ? businessLocalDateTimeToIso(occurredAtInput) : currentTimestamp()
+    if (!occurredAt) {
+      setInteractionError('Confira a data e o horário do contato.')
+      return
+    }
     if (callOutcome !== 'missed' && Boolean(nextAction) !== Boolean(dueOn)) {
       setInteractionError('Preencha o próximo passo e a data juntos, ou deixe os dois em branco.')
       return
@@ -545,9 +560,7 @@ export function CustomerDetailPage() {
         p_call_outcome: callOutcome || null,
         p_outcome: null,
         p_notes: String(form.get('notes') ?? '').trim() || null,
-        p_occurred_at: String(form.get('occurred_at') ?? '').trim()
-          ? new Date(String(form.get('occurred_at'))).toISOString()
-          : currentTimestamp(),
+        p_occurred_at: occurredAt,
         p_follow_up_title: nextAction || null,
         p_follow_up_due_on: dueOn || null,
         p_follow_up_priority: String(form.get('priority') ?? '').trim() || null,
@@ -630,8 +643,7 @@ export function CustomerDetailPage() {
               : <label className="record-field"><span className="field-label">Tipo de contato</span><select className="text-input" name="interaction_type" onChange={(event) => setInteractionType(event.target.value as Interaction['interaction_type'])} value={interactionType}><option value="call">Ligação (registro manual)</option><option value="whatsapp_manual">WhatsApp (anotação manual)</option><option value="note">Observação</option><option value="other">Outro contato</option></select></label>}
             <label className="record-field"><span className="field-label">Direção</span><select className="text-input" name="direction"><option value="not_applicable">Não se aplica</option><option value="outgoing">Realizado pelo negócio</option><option value="incoming">Recebido do cliente</option></select></label>
             {interactionFormMode === 'general' && interactionType === 'call' && <label className="record-field"><span className="field-label">Resultado da ligação</span><select className="text-input" name="call_outcome" onChange={(event) => setInteractionCallOutcome(event.target.value as NonNullable<Interaction['call_outcome']>)} required value={interactionCallOutcome}><option value="answered">Atendida</option><option value="missed">Não atendida</option><option value="other">Outro resultado</option></select></label>}
-            {interactionType !== 'call' && <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">em branco = agora</span></span><input className="text-input" name="occurred_at" type="datetime-local" /></label>}
-            {(interactionFormMode === 'missed_call' || interactionType === 'call') && <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">em branco = agora</span></span><input className="text-input" name="occurred_at" type="datetime-local" /></label>}
+            <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">padrão: agora · horário de Brasília · alterável</span></span><input className="text-input" defaultValue={businessDateTimeInputValue()} name="occurred_at" type="datetime-local" /></label>
             <label className="record-field record-field-wide"><span className="field-label">Pedido relacionado <span className="field-optional">opcional</span></span><select className="text-input" disabled={customerOrdersLoading || displayedOrders.length === 0} name="related_order_id"><option value="">{customerOrdersLoading ? 'Carregando pedidos…' : displayedOrderError && displayedOrders.length === 0 ? 'Pedidos indisponíveis' : 'Nenhum pedido'}</option>{displayedOrders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
             {displayedOrderError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{displayedOrderError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadCustomer()} type="button">Tentar novamente</button></div>}
             {displayedOrders.length === 0 && !displayedOrderError && !customerOrdersLoading && <p className="section-footnote record-field-wide">Este cliente ainda não tem pedidos para vincular.</p>}
@@ -640,7 +652,7 @@ export function CustomerDetailPage() {
             <label className="record-field record-field-wide"><span className="field-label">Anotações <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" maxLength={4000} name="notes" rows={3} /></label>
             {interactionFormMode === 'general' && <>
               <label className="record-field record-field-wide"><span className="field-label">Próximo passo <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" placeholder="Ex.: confirmar entrega" /></label>
-              <label className="record-field"><span className="field-label">Data do retorno</span><input className="text-input" name="follow_up_due_on" type="date" /></label>
+              <label className="record-field"><span className="field-label">Data do retorno <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="follow_up_due_on" type="date" /></label>
               <label className="record-field"><span className="field-label">Prioridade do retorno</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
             </>}
           </div>

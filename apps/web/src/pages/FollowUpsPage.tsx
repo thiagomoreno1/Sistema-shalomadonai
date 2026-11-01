@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { businessToday, currentTimestamp, formatBusinessDate } from '../lib/formatters'
+import { businessLocalDateTimeToIso, businessToday, currentTimestamp, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
 type FollowUp = {
@@ -19,6 +19,15 @@ type RecentCall = { id: string; customer_id: string | null; call_outcome: 'answe
 const pageBusinessDate = businessToday()
 const callPageSize = 20
 const callOutcomeLabels: Record<RecentCall['call_outcome'], string> = { answered: 'Atendida', missed: 'Não atendida', other: 'Outro resultado' }
+
+function businessDateTimeInputValue() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date())
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`
+}
 
 export function FollowUpsPage() {
   const { id: businessId } = useBusiness()
@@ -177,6 +186,12 @@ export function FollowUpsPage() {
     const followUpTitle = String(form.get('follow_up_title') ?? '').trim()
     const dueOn = String(form.get('follow_up_due_on') ?? '').trim()
     const callOutcome = String(form.get('call_outcome') ?? '')
+    const occurredAtInput = String(form.get('occurred_at') ?? '').trim()
+    const occurredAt = occurredAtInput ? businessLocalDateTimeToIso(occurredAtInput) : currentTimestamp()
+    if (!occurredAt) {
+      setCallError('Confira a data e o horário da ligação.')
+      return
+    }
     if (callOutcome !== 'missed' && Boolean(followUpTitle) !== Boolean(dueOn)) {
       setCallError('Preencha o próximo passo e a data juntos, ou deixe os dois em branco.')
       return
@@ -192,9 +207,7 @@ export function FollowUpsPage() {
         p_call_outcome: callOutcome,
         p_outcome: null,
         p_notes: String(form.get('notes') ?? '').trim() || null,
-        p_occurred_at: String(form.get('occurred_at') ?? '').trim()
-          ? new Date(String(form.get('occurred_at'))).toISOString()
-          : currentTimestamp(),
+        p_occurred_at: occurredAt,
         p_follow_up_title: followUpTitle || null,
         p_follow_up_due_on: dueOn || null,
         p_follow_up_priority: String(form.get('priority') ?? '').trim() || null,
@@ -229,10 +242,10 @@ export function FollowUpsPage() {
             <label className="record-field"><span className="field-label">Cliente <span className="field-optional">opcional</span></span><select className="text-input" defaultValue="" name="customer_id"><option value="">Não identificado</option>{customers.filter((customer) => customer.is_active).map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
             <label className="record-field"><span className="field-label">Direção</span><select className="text-input" name="direction"><option value="outgoing">Realizada pelo negócio</option><option value="incoming">Recebida do cliente</option></select></label>
             <label className="record-field"><span className="field-label">Resultado da ligação</span><select className="text-input" defaultValue="answered" name="call_outcome" required><option value="answered">Atendida</option><option value="missed">Não atendida</option><option value="other">Outro resultado</option></select></label>
-            <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">em branco = agora</span></span><input className="text-input" name="occurred_at" type="datetime-local" /></label>
+            <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">padrão: agora · horário de Brasília · alterável</span></span><input className="text-input" defaultValue={businessDateTimeInputValue()} name="occurred_at" type="datetime-local" /></label>
             <label className="record-field record-field-wide"><span className="field-label">Anotações <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" maxLength={4000} name="notes" rows={3} /></label>
             <label className="record-field record-field-wide"><span className="field-label">Próximo passo <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" /></label>
-            <label className="record-field"><span className="field-label">Data do retorno</span><input className="text-input" name="follow_up_due_on" type="date" /></label>
+            <label className="record-field"><span className="field-label">Data do retorno <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="follow_up_due_on" type="date" /></label>
             <label className="record-field"><span className="field-label">Prioridade do retorno</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
           </div>
           <p className="section-footnote">Chamadas não são importadas do celular. Uma ligação não atendida cria automaticamente um retorno para hoje, com prioridade alta.</p>
@@ -246,7 +259,7 @@ export function FollowUpsPage() {
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETE MANUAL</p><h2>Novo retorno</h2></div></div>
           <div className="record-form-grid">
             <label className="record-field record-field-wide"><span className="field-label">Próximo passo *</span><input autoFocus className="text-input" maxLength={240} name="title" required /></label>
-            <label className="record-field"><span className="field-label">Data do retorno *</span><input className="text-input" name="due_on" required type="date" /></label>
+            <label className="record-field"><span className="field-label">Data do retorno * <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="due_on" required type="date" /></label>
             <label className="record-field"><span className="field-label">Prioridade</span><select className="text-input" name="priority"><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
             <label className="record-field record-field-wide"><span className="field-label">Cliente <span className="field-optional">opcional</span></span><select className="text-input" defaultValue="" name="customer_id"><option value="">Sem cliente vinculado</option>{customers.filter((customer) => customer.is_active).map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
           </div>

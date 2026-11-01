@@ -27,6 +27,7 @@ const statusLabels: Record<DeliveryStatus, string> = {
 }
 
 const statusOrder: DeliveryStatus[] = ['awaiting_separation', 'ready', 'dispatched', 'attempted', 'rescheduled', 'delivered', 'returned']
+const deliveryWindowPresets = ['Manhã', '13h–15h', '15h–17h', '17h–19h']
 
 function newRequestId() { return crypto.randomUUID() }
 function formatQuantity(value: number) { return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(Number(value)) }
@@ -64,6 +65,7 @@ export function DeliveriesPage() {
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null)
   const [planWorkerId, setPlanWorkerId] = useState('')
   const [planDate, setPlanDate] = useState('')
+  const [planScheduleEnabled, setPlanScheduleEnabled] = useState(false)
   const [planWindow, setPlanWindow] = useState('')
   const [planNotes, setPlanNotes] = useState('')
   const [planSaving, setPlanSaving] = useState(false)
@@ -184,7 +186,8 @@ export function DeliveriesPage() {
     setExpandedId(delivery.id)
     setEditingPlanId(delivery.id)
     setPlanWorkerId(delivery.delivery_worker_id ?? '')
-    setPlanDate(delivery.scheduled_on ?? '')
+    setPlanDate(delivery.scheduled_on ?? businessToday())
+    setPlanScheduleEnabled(Boolean(delivery.scheduled_on || delivery.time_window))
     setPlanWindow(delivery.time_window ?? '')
     setPlanNotes(delivery.notes ?? '')
     setPlanError(null)
@@ -251,8 +254,8 @@ export function DeliveriesPage() {
         p_business_id: businessId,
         p_delivery_id: delivery.id,
         p_delivery_worker_id: planWorkerId || null,
-        p_scheduled_on: planDate || null,
-        p_time_window: planWindow.trim() || null,
+        p_scheduled_on: planScheduleEnabled ? planDate || null : null,
+        p_time_window: planScheduleEnabled ? planWindow.trim() || null : null,
         p_notes: planNotes.trim() || null,
         p_request_id: planRequestIdRef.current,
       })
@@ -425,7 +428,8 @@ export function DeliveriesPage() {
 
                 {isEditingPlan && <form className="delivery-action-form" onSubmit={(event) => void handlePlanSubmit(event, delivery)}>
                   <div className="section-heading section-heading-compact"><div><p className="eyebrow">PLANEJAMENTO</p><h3 ref={planHeadingRef} tabIndex={-1}>Atribuição e horário</h3></div></div>
-                  <div className="record-form-grid"><label className="record-field"><span className="field-label">Entregador <span className="field-optional">opcional</span></span><select className="text-input" disabled={planSaving || planUncertain} onChange={(event) => setPlanWorkerId(event.target.value)} value={planWorkerId}><option value="">Sem atribuição</option>{workers.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="record-field"><span className="field-label">Data agendada <span className="field-optional">opcional</span></span><input className="text-input" disabled={planSaving || planUncertain} onChange={(event) => setPlanDate(event.target.value)} type="date" value={planDate} /></label><label className="record-field"><span className="field-label">Janela ou horário <span className="field-optional">texto livre</span></span><input className="text-input" disabled={planSaving || planUncertain} maxLength={120} onChange={(event) => setPlanWindow(event.target.value)} placeholder="Ex.: manhã, 14h–16h" value={planWindow} /></label><label className="record-field"><span className="field-label">Observações da entrega</span><input className="text-input" disabled={planSaving || planUncertain} maxLength={2000} onChange={(event) => setPlanNotes(event.target.value)} value={planNotes} /></label></div>
+                  <div className="record-form-grid"><label className="record-field"><span className="field-label">Entregador <span className="field-optional">opcional</span></span><select className="text-input" disabled={planSaving || planUncertain} onChange={(event) => setPlanWorkerId(event.target.value)} value={planWorkerId}><option value="">Sem atribuição</option>{workers.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><div className="record-field"><span className="field-label">Data agendada <span className="field-optional">opcional · {delivery.scheduled_on ? 'data salva' : 'padrão: hoje · alterável'}</span></span><label className="field-label"><input checked={planScheduleEnabled} disabled={planSaving || planUncertain} onChange={(event) => setPlanScheduleEnabled(event.target.checked)} type="checkbox" /> Agendar entrega para esta data</label><input className="text-input" disabled={planSaving || planUncertain || !planScheduleEnabled} onChange={(event) => { setPlanDate(event.target.value); setPlanScheduleEnabled(true) }} type="date" value={planDate} /></div><div className="record-field record-field-wide"><span className="field-label">Janela rápida <span className="field-optional">opcional</span></span><div className="record-form-actions" aria-label="Escolher janela de entrega">{deliveryWindowPresets.map((window) => <button aria-pressed={planWindow === window} className="button button-secondary" disabled={planSaving || planUncertain} key={window} onClick={() => { setPlanWindow(window); setPlanScheduleEnabled(true) }} type="button">{window}</button>)}</div></div><label className="record-field"><span className="field-label">Personalizar janela ou horário <span className="field-optional">opcional</span></span><input className="text-input" disabled={planSaving || planUncertain} maxLength={120} onChange={(event) => { setPlanWindow(event.target.value); if (event.target.value.trim()) setPlanScheduleEnabled(true) }} placeholder="Ex.: manhã, 14h–16h" value={planWindow} /></label><label className="record-field"><span className="field-label">Observações da entrega</span><input className="text-input" disabled={planSaving || planUncertain} maxLength={2000} onChange={(event) => setPlanNotes(event.target.value)} value={planNotes} /></label></div>
+                  <p className="section-footnote">A data começa preenchida com hoje, mas só será aplicada se você marcar “Agendar entrega”. Assim, salvar apenas a atribuição do entregador não agenda a entrega.</p>
                   {planError && <p className="form-message form-message-error" role="alert">{planError}</p>}
                   <div className="record-form-actions"><button className="button button-primary" disabled={planSaving} type="submit">{planSaving ? 'Salvando…' : planUncertain ? 'Tentar novamente sem alterar os dados' : 'Salvar planejamento'}</button><button className="text-button" disabled={planSaving || planUncertain} onClick={() => setEditingPlanId(null)} type="button">Cancelar</button></div>
                 </form>}

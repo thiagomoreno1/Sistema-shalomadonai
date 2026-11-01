@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { formatBRL, parseBrazilianCurrency } from '../lib/formatters'
+import { formatBRL, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
 type Customer = { id: string; name: string; delivery_address: string | null }
@@ -12,14 +12,43 @@ type InstallmentDraft = { key: string; amount: string; dueOn: string; paymentMet
 type OrderCopySummary = { customerName: string; copiedItems: number; skippedItems: number }
 type ScheduleEntry = { ordinal: number; amount_bps: number; days_after_base: number; payment_method: string | null }
 type ScheduleTemplate = { id: string; name: string; schedule: ScheduleEntry[] }
+type InstallmentSuggestionStatus = 'pending' | 'applied' | 'preserved' | 'incompatible' | 'none' | 'chosen_other'
+type CustomerOrderSuggestion = { customerName: string; sourceOrderId: string; sourceCreatedAt: string; copiedItems: number; skippedItems: number; itemsApplied: boolean; addressApplied: boolean; deliveryApplied: boolean; feeApplied: boolean; installmentStatus: InstallmentSuggestionStatus; preservedFields: string[] }
 
 function newKey() {
   return crypto.randomUUID()
 }
 
-function localDateInputValue() {
-  const now = new Date()
-  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+function businessDateForTimestamp(value: string | Date, timezone: string) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const values = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date).map((part) => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day}`
+}
+
+function daysBetweenDates(start: string, end: string) {
+  if (!isCalendarDate(start) || !isCalendarDate(end)) return null
+  const [startYear, startMonth, startDay] = start.split('-').map(Number)
+  const [endYear, endMonth, endDay] = end.split('-').map(Number)
+  return Math.round((Date.UTC(endYear, endMonth - 1, endDay) - Date.UTC(startYear, startMonth - 1, startDay)) / 86400000)
+}
+
+function installmentsFromSchedule(schedule: ScheduleEntry[], baseDate: string, totalCents: number) {
+  if (schedule.length === 0 || schedule.length > 120 || !Number.isSafeInteger(totalCents) || totalCents <= 0 || schedule.length > totalCents) return null
+  const total = BigInt(totalCents)
+  const amounts = schedule.map((entry) => total * BigInt(entry.amount_bps) / 10000n)
+  amounts[amounts.length - 1] += total - amounts.reduce((sum, amount) => sum + amount, 0n)
+  if (amounts.some((amount) => amount <= 0n)) return null
+  const result = schedule.map((entry, index) => {
+    const dueOn = addDaysToDate(baseDate, entry.days_after_base)
+    return dueOn ? { key: newKey(), amount: centsToInput(amounts[index]), dueOn, paymentMethod: entry.payment_method ?? '' } : null
+  })
+  return result.some((entry) => entry === null) ? null : result as InstallmentDraft[]
 }
 
 function readLastPaymentTemplate(businessId: string) {
@@ -99,7 +128,7 @@ function centsToInput(cents: bigint) {
 }
 
 export function NewOrderPage() {
-  const { id: businessId } = useBusiness()
+  const { id: businessId, timezone } = useBusiness()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const requestedCustomerId = searchParams.get('cliente') ?? ''
@@ -110,6 +139,11 @@ export function NewOrderPage() {
   const [choiceError, setChoiceError] = useState<string | null>(null)
   const [orderCopySummary, setOrderCopySummary] = useState<OrderCopySummary | null>(null)
   const [orderCopyWarning, setOrderCopyWarning] = useState<string | null>(null)
+  const [customerOrderSuggestion, setCustomerOrderSuggestion] = useState<CustomerOrderSuggestion | null>(null)
+  const [customerSuggestedItems, setCustomerSuggestedItems] = useState<ItemDraft[]>([])
+  const [customerPaymentPattern, setCustomerPaymentPattern] = useState<ScheduleEntry[] | null>(null)
+  const [customerPrefillNotice, setCustomerPrefillNotice] = useState<string | null>(null)
+  const [customerPrefillLoading, setCustomerPrefillLoading] = useState(false)
   const [customerId, setCustomerId] = useState(requestedCustomerId)
   const [requiresDelivery, setRequiresDelivery] = useState(false)
   const [deliveryAddress, setDeliveryAddress] = useState('')
@@ -121,7 +155,7 @@ export function NewOrderPage() {
   const [scheduleTemplates, setScheduleTemplates] = useState<ScheduleTemplate[]>([])
   const [scheduleTemplateLoadError, setScheduleTemplateLoadError] = useState<string | null>(null)
   const [selectedScheduleTemplateId, setSelectedScheduleTemplateId] = useState('')
-  const [scheduleBaseDate, setScheduleBaseDate] = useState(localDateInputValue)
+  const [scheduleBaseDate, setScheduleBaseDate] = useState(() => businessDateForTimestamp(new Date(), timezone))
   const [newTemplateName, setNewTemplateName] = useState('')
   const [scheduleTemplateMessage, setScheduleTemplateMessage] = useState<string | null>(null)
   const [scheduleTemplateError, setScheduleTemplateError] = useState<string | null>(null)
@@ -133,6 +167,9 @@ export function NewOrderPage() {
   const choicesRequestIdRef = useRef(0)
   const autoScheduleRef = useRef(true)
   const scheduleTemplateBusinessRef = useRef<string | null>(null)
+  const customerOrderRequestRef = useRef(0)
+  const initialCustomerPrefillRef = useRef('')
+  const customerPrefillManualRef = useRef({ items: false, address: false, delivery: false, fee: false, installments: false, baseDate: false })
   const disabled = saving || uncertain
 
   const loadChoices = useCallback(async () => {
@@ -253,6 +290,147 @@ export function NewOrderPage() {
     return () => { choicesRequestIdRef.current += 1 }
   }, [loadChoices])
 
+  const loadCustomerOrderSuggestion = useCallback(async (nextCustomerId: string) => {
+    const requestId = ++customerOrderRequestRef.current
+    const manual = customerPrefillManualRef.current
+    const restoreDefaultSchedule = () => {
+      if (manual.installments || selectedScheduleTemplateId) return
+      const lastUsedTemplateId = readLastPaymentTemplate(businessId)
+      if (scheduleTemplates.some((template) => template.id === lastUsedTemplateId)) {
+        setSelectedScheduleTemplateId(lastUsedTemplateId!)
+        autoScheduleRef.current = true
+      }
+    }
+    setCustomerOrderSuggestion(null)
+    setCustomerSuggestedItems([])
+    setCustomerPaymentPattern(null)
+    setCustomerPrefillNotice(null)
+    setCustomerPrefillLoading(Boolean(nextCustomerId && supabaseClient))
+
+    if (!manual.items) setItems([{ key: newKey(), productId: '', quantity: '1' }])
+    if (!manual.delivery) setRequiresDelivery(false)
+    if (!manual.fee) setDeliveryFee('')
+    if (!manual.installments) {
+      setInstallments([{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
+      if (!manual.baseDate) setScheduleBaseDate(businessDateForTimestamp(new Date(), timezone))
+      autoScheduleRef.current = true
+    }
+
+    if (!nextCustomerId || !supabaseClient) return
+    const customer = customers.find((candidate) => candidate.id === nextCustomerId)
+    if (!manual.address) setDeliveryAddress(customer?.delivery_address ?? '')
+
+    try {
+      const { data: sourceOrder, error: orderError } = await supabaseClient.from('orders')
+        .select('id, created_at, requires_delivery, delivery_fee_cents')
+        .eq('business_id', businessId).eq('customer_id', nextCustomerId).neq('status', 'cancelled')
+        .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      if (requestId !== customerOrderRequestRef.current) return
+      if (orderError) {
+        setCustomerPrefillNotice('Não consegui buscar o pedido anterior. O formulário continua disponível para um pedido novo.')
+        return
+      }
+      if (!sourceOrder) {
+        restoreDefaultSchedule()
+        setCustomerPrefillNotice('Sem pedido anterior para reaproveitar: carreguei o endereço do cadastro e reiniciei entrega e taxa para este cliente.')
+        return
+      }
+
+      const [linesResult, installmentsResult] = await Promise.all([
+        supabaseClient.from('order_lines').select('product_id, quantity')
+          .eq('business_id', businessId).eq('order_id', sourceOrder.id).order('line_number', { ascending: true }),
+        supabaseClient.from('order_installments').select('amount_cents, due_on, payment_method')
+          .eq('business_id', businessId).eq('order_id', sourceOrder.id).order('installment_number', { ascending: true }),
+      ])
+      if (requestId !== customerOrderRequestRef.current) return
+      if (linesResult.error || installmentsResult.error) {
+        setCustomerPrefillNotice('Encontrei o pedido anterior, mas não consegui carregar todos os detalhes. Você pode continuar com um pedido novo.')
+        return
+      }
+
+      const activeProductIds = new Set(products.map((product) => product.id))
+      const sourceLines = linesResult.data ?? []
+      const copiedItems = sourceLines
+        .filter((line) => activeProductIds.has(line.product_id))
+        .map((line) => ({ key: newKey(), productId: line.product_id, quantity: String(line.quantity) }))
+      const skippedItems = sourceLines.length - copiedItems.length
+      setCustomerSuggestedItems(copiedItems)
+      if (!manual.items && copiedItems.length > 0) setItems(copiedItems)
+
+      const deliveryApplied = !manual.delivery
+      const feeApplied = !manual.fee
+      if (deliveryApplied) setRequiresDelivery(Boolean(sourceOrder.requires_delivery))
+      if (feeApplied) {
+        const feeCents = Number(sourceOrder.delivery_fee_cents)
+        setDeliveryFee(Number.isSafeInteger(feeCents) && feeCents > 0 ? centsToInput(BigInt(feeCents)) : '')
+      }
+
+      const sourceInstallments = installmentsResult.data ?? []
+      const originalAmounts = sourceInstallments.map((installment) => Number(installment.amount_cents))
+      const basisPoints = scheduleBasisPoints(originalAmounts)
+      const originalBaseDate = businessDateForTimestamp(sourceOrder.created_at, timezone)
+      const paymentPattern = basisPoints && basisPoints.length === sourceInstallments.length
+        ? sourceInstallments.map((installment, index) => {
+          const offset = daysBetweenDates(originalBaseDate, installment.due_on)
+          return offset === null || offset > 36500 ? null : {
+            ordinal: index + 1,
+            amount_bps: basisPoints[index],
+            days_after_base: Math.max(0, offset),
+            payment_method: installment.payment_method,
+          }
+        })
+        : []
+      const validPaymentPattern = paymentPattern.length > 0 && paymentPattern.every((entry) => entry !== null)
+        ? paymentPattern as ScheduleEntry[]
+        : null
+      if (validPaymentPattern) setCustomerPaymentPattern(validPaymentPattern)
+      if (validPaymentPattern && !manual.installments) {
+        setSelectedScheduleTemplateId('')
+        if (!manual.baseDate) setScheduleBaseDate(businessDateForTimestamp(new Date(), timezone))
+        customerPrefillManualRef.current.installments = false
+        autoScheduleRef.current = false
+      } else if (!validPaymentPattern) restoreDefaultSchedule()
+
+      const currentCustomer = customers.find((candidate) => candidate.id === nextCustomerId)
+      setCustomerOrderSuggestion({
+        customerName: currentCustomer?.name ?? 'este cliente',
+        sourceOrderId: sourceOrder.id,
+        sourceCreatedAt: sourceOrder.created_at,
+        copiedItems: copiedItems.length,
+        skippedItems,
+        itemsApplied: !manual.items && copiedItems.length > 0,
+        addressApplied: !manual.address,
+        deliveryApplied,
+        feeApplied,
+        installmentStatus: !validPaymentPattern
+          ? sourceInstallments.length > 0 ? 'incompatible' : 'none'
+          : manual.installments ? 'preserved' : 'pending',
+        preservedFields: [
+          manual.items ? 'itens' : null,
+          manual.address ? 'endereço' : null,
+          manual.delivery ? 'opção de entrega' : null,
+          manual.fee ? 'taxa' : null,
+          manual.installments ? 'parcelas' : null,
+          manual.baseDate ? 'data-base' : null,
+        ].filter((field): field is string => Boolean(field)),
+      })
+      if (copiedItems.length === 0 && !deliveryApplied && !feeApplied && !validPaymentPattern) {
+        setCustomerPrefillNotice('O pedido anterior não tem itens ativos para reaproveitar. O formulário continua editável.')
+      }
+    } catch {
+      if (requestId === customerOrderRequestRef.current) setCustomerPrefillNotice('Não consegui buscar os detalhes do pedido anterior. O formulário continua disponível para um pedido novo.')
+    } finally {
+      if (requestId === customerOrderRequestRef.current) setCustomerPrefillLoading(false)
+    }
+  }, [businessId, customers, products, scheduleTemplates, selectedScheduleTemplateId, timezone])
+
+  useEffect(() => {
+    if (sourceOrderId || !requestedCustomerId || loadingChoices || customerId !== requestedCustomerId) return
+    if (initialCustomerPrefillRef.current === requestedCustomerId) return
+    initialCustomerPrefillRef.current = requestedCustomerId
+    void loadCustomerOrderSuggestion(requestedCustomerId)
+  }, [customerId, loadCustomerOrderSuggestion, loadingChoices, requestedCustomerId, sourceOrderId])
+
   const selectedCustomer = customers.find((customer) => customer.id === customerId)
   const productById = new Map(products.map((product) => [product.id, product]))
   const estimate = useMemo(() => {
@@ -277,21 +455,68 @@ export function NewOrderPage() {
   const totalCents = estimate.subtotal + safeFeeCents - safeDiscountCents
 
   function updateItem(key: string, changes: Partial<ItemDraft>) {
+    customerPrefillManualRef.current.items = true
     setItems((current) => current.map((item) => item.key === key ? { ...item, ...changes } : item))
     setFormError(null)
   }
 
   function updateInstallment(key: string, changes: Partial<InstallmentDraft>) {
     autoScheduleRef.current = false
+    customerPrefillManualRef.current.installments = true
+    setCustomerOrderSuggestion((current) => current ? {
+      ...current,
+      installmentStatus: 'preserved',
+      preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'],
+    } : current)
     setInstallments((current) => current.map((installment) => installment.key === key ? { ...installment, ...changes } : installment))
     setFormError(null)
   }
 
   function handleCustomerChange(nextId: string) {
     setCustomerId(nextId)
-    const nextCustomer = customers.find((customer) => customer.id === nextId)
-    setDeliveryAddress(nextCustomer?.delivery_address ?? '')
+    if (nextId !== customerId) {
+      // These fields belong to the selected customer; do not carry customer A's
+      // address or delivery fee into a new customer's draft.
+      customerPrefillManualRef.current.address = false
+      customerPrefillManualRef.current.delivery = false
+      customerPrefillManualRef.current.fee = false
+    }
+    void loadCustomerOrderSuggestion(nextId)
     setFormError(null)
+  }
+
+  function applyCustomerSuggestedItems() {
+    if (customerSuggestedItems.length === 0) return
+    customerPrefillManualRef.current.items = false
+    setItems(customerSuggestedItems.map((item) => ({ ...item, key: newKey() })))
+    setCustomerOrderSuggestion((current) => current ? {
+      ...current,
+      itemsApplied: true,
+      preservedFields: current.preservedFields.filter((field) => field !== 'itens'),
+    } : current)
+  }
+
+  function applyCustomerPaymentSuggestion() {
+    if (!customerPaymentPattern) return
+    const baseDate = businessDateForTimestamp(new Date(), timezone)
+    const nextInstallments = installmentsFromSchedule(customerPaymentPattern, baseDate, totalCents)
+    if (!nextInstallments) {
+      setScheduleTemplateError('O total atual não permite reaproveitar esta distribuição de parcelas. Ajuste o pedido ou as parcelas manualmente.')
+      setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'incompatible' } : current)
+      return
+    }
+    customerPrefillManualRef.current.installments = false
+    customerPrefillManualRef.current.baseDate = false
+    autoScheduleRef.current = false
+    setSelectedScheduleTemplateId('')
+    setScheduleBaseDate(baseDate)
+    setInstallments(nextInstallments)
+    setScheduleTemplateError(null)
+    setCustomerOrderSuggestion((current) => current ? {
+      ...current,
+      installmentStatus: 'applied',
+      preservedFields: current.preservedFields.filter((field) => field !== 'parcelas' && field !== 'data-base'),
+    } : current)
   }
 
   const scheduleTotalCents = installments.reduce((sum, installment) => {
@@ -317,29 +542,51 @@ export function NewOrderPage() {
       if (!automatic) setScheduleTemplateError('O total atual é menor que a quantidade de parcelas. Reduza as parcelas ou altere os percentuais do modelo.')
       return
     }
-    const totalCentsBigInt = BigInt(totalCents)
-    const amounts = template.schedule.map((entry) => totalCentsBigInt * BigInt(entry.amount_bps) / 10000n)
-    const residual = totalCentsBigInt - amounts.reduce((sum, amount) => sum + amount, 0n)
-    amounts[amounts.length - 1] += residual
-    if (amounts.some((amount) => amount <= 0n)) {
-      if (!automatic) setScheduleTemplateError('Este total não permite valores positivos em todas as parcelas. Reduza a quantidade ou ajuste os percentuais do modelo.')
-      return
-    }
-    const nextInstallments = template.schedule.map((entry, index) => {
-      const dueOn = addDaysToDate(scheduleBaseDate, entry.days_after_base)
-      return dueOn ? { key: newKey(), amount: centsToInput(amounts[index]), dueOn, paymentMethod: entry.payment_method ?? '' } : null
-    })
-    if (nextInstallments.some((entry) => entry === null)) {
+    const nextInstallments = installmentsFromSchedule(template.schedule, scheduleBaseDate, totalCents)
+    if (!nextInstallments) {
       if (!automatic) setScheduleTemplateError('Não foi possível calcular uma das datas deste modelo. Confira a data-base e os prazos.')
       return
     }
     autoScheduleRef.current = true
-    setInstallments(nextInstallments as InstallmentDraft[])
+    setInstallments(nextInstallments)
     setScheduleTemplateError(null)
     setScheduleTemplateMessage(automatic
       ? `Modelo “${template.name}” preenchido automaticamente para o total atual. Confira os vencimentos; você pode editá-los.`
       : `Modelo “${template.name}” aplicado sobre o total atual. Confira valores e datas; eles continuam editáveis.`)
   }, [scheduleTemplates, selectedScheduleTemplateId, scheduleBaseDate, estimate.invalid, totalCents])
+
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => {
+    if (!customerPaymentPattern) return
+    if (estimate.invalid || !Number.isSafeInteger(totalCents) || totalCents <= 0) {
+      setCustomerOrderSuggestion((current) => current && current.installmentStatus !== 'incompatible' ? {
+        ...current,
+        installmentStatus: 'incompatible',
+      } : current)
+      return
+    }
+    const nextInstallments = installmentsFromSchedule(customerPaymentPattern, scheduleBaseDate, totalCents)
+    if (!nextInstallments) {
+      setCustomerOrderSuggestion((current) => current && current.installmentStatus !== 'incompatible' ? {
+        ...current,
+        installmentStatus: 'incompatible',
+      } : current)
+      return
+    }
+    if (customerPrefillManualRef.current.installments) {
+      setCustomerOrderSuggestion((current) => current && current.installmentStatus !== 'preserved' ? {
+        ...current,
+        installmentStatus: 'preserved',
+      } : current)
+      return
+    }
+    setInstallments(nextInstallments)
+    setCustomerOrderSuggestion((current) => current && current.installmentStatus !== 'applied' ? {
+      ...current,
+      installmentStatus: 'applied',
+      preservedFields: current.preservedFields.filter((field) => field !== 'parcelas'),
+    } : current)
+  }, [customerPaymentPattern, estimate.invalid, scheduleBaseDate, totalCents])
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
@@ -391,6 +638,9 @@ export function NewOrderPage() {
       }
       setScheduleTemplates((current) => [...current, data as ScheduleTemplate].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR')))
       autoScheduleRef.current = true
+      customerPrefillManualRef.current.installments = true
+      setCustomerPaymentPattern(null)
+      setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current)
       setSelectedScheduleTemplateId(data.id)
       rememberPaymentTemplate(businessId, data.id)
       setNewTemplateName('')
@@ -508,6 +758,23 @@ export function NewOrderPage() {
     }
   }
 
+  const installmentSuggestionMessage = (() => {
+    switch (customerOrderSuggestion?.installmentStatus) {
+      case 'applied':
+        return 'A distribuição e os intervalos do pedido anterior foram aplicados ao total atual, com vencimentos recalculados a partir de hoje.'
+      case 'preserved':
+        return 'Encontrei as parcelas anteriores, mas mantive os vencimentos que você já editou. Você pode reaplicar a sugestão abaixo.'
+      case 'incompatible':
+        return `A distribuição anterior não cabe no total atual. Ajuste o total ou a quantidade/valores das parcelas antes de reaplicá-la.${customerOrderSuggestion.preservedFields.includes('parcelas') ? ' Suas edições foram preservadas.' : ''}`
+      case 'pending':
+        return 'Parcelas anteriores encontradas; calculando para o total atual.'
+      case 'chosen_other':
+        return 'A distribuição do pedido anterior não está sendo usada porque você escolheu outro modelo ou alterou o seletor.'
+      default:
+        return 'O pedido anterior não tinha parcelas para reaproveitar.'
+    }
+  })()
+
   return (
     <div className="page-stack">
       <Link className="quiet-link" to="/pedidos">← Voltar para pedidos</Link>
@@ -522,6 +789,16 @@ export function NewOrderPage() {
         {orderCopySummary.skippedItems > 0 && <p>{orderCopySummary.skippedItems} {orderCopySummary.skippedItems === 1 ? 'item não foi copiado' : 'itens não foram copiados'} porque não está ativo com preço no catálogo.</p>}
       </div>}
       {orderCopyWarning && <p className="form-message form-message-warning" role="status">{orderCopyWarning}</p>}
+      {customerPrefillNotice && <p className="form-message form-message-warning" role="status">{customerPrefillNotice}</p>}
+      {customerPrefillLoading && <p className="form-message" role="status">Buscando o pedido anterior deste cliente…</p>}
+      {customerOrderSuggestion && <div className="form-message form-message-success" role="status">
+        <p>Rascunho preenchido com o pedido de <strong>{customerOrderSuggestion.customerName}</strong>, de {formatBusinessDate(businessDateForTimestamp(customerOrderSuggestion.sourceCreatedAt, timezone))}. <Link className="quiet-link" to={`/pedidos/${customerOrderSuggestion.sourceOrderId}`}>Ver pedido usado</Link></p>
+        <p>{customerOrderSuggestion.itemsApplied ? `${customerOrderSuggestion.copiedItems} ${customerOrderSuggestion.copiedItems === 1 ? 'item carregado' : 'itens carregados'} com preços atuais.` : `${customerOrderSuggestion.copiedItems} ${customerOrderSuggestion.copiedItems === 1 ? 'item encontrado' : 'itens encontrados'} no pedido anterior.`} {customerOrderSuggestion.addressApplied ? 'Endereço atual carregado do cadastro.' : 'Endereço que você digitou foi mantido.'} {customerOrderSuggestion.deliveryApplied ? 'Opção de entrega' : 'Opção de entrega que você escolheu'} e {customerOrderSuggestion.feeApplied ? 'taxa anterior' : 'taxa digitada'} foram considerados. {installmentSuggestionMessage} Recebimentos, anotações e eventos antigos não foram copiados; nada foi salvo ainda.</p>
+        {customerOrderSuggestion.skippedItems > 0 && <p>{customerOrderSuggestion.skippedItems} {customerOrderSuggestion.skippedItems === 1 ? 'item não foi copiado' : 'itens não foram copiados'} porque não está ativo com preço no catálogo.</p>}
+        {customerOrderSuggestion.preservedFields.length > 0 && <p>Preservei suas alterações em: {customerOrderSuggestion.preservedFields.join(', ')}.</p>}
+        {customerPrefillManualRef.current.items && customerSuggestedItems.length > 0 && <button className="text-button" disabled={disabled} onClick={applyCustomerSuggestedItems} type="button">Usar os itens deste pedido</button>}
+        {customerOrderSuggestion.installmentStatus === 'preserved' && customerPaymentPattern && <button className="text-button" disabled={disabled} onClick={applyCustomerPaymentSuggestion} type="button">Usar as parcelas deste pedido, recalculadas para hoje</button>}
+      </div>}
       {loadingChoices ? <p className="inline-state" aria-live="polite">Carregando clientes e produtos ativos…</p> : (
         <form className="order-create-form" onSubmit={handleSubmit}>
           <section className="surface-panel record-form" aria-labelledby="order-customer-heading">
@@ -535,9 +812,9 @@ export function NewOrderPage() {
                   </select>
                 </label>
                 {requestedCustomerId && !selectedCustomer && <p className="form-message form-message-warning record-field-wide">O cliente do atalho não está ativo. Selecione outro cliente disponível.</p>}
-                <label className="record-checkbox record-field-wide order-delivery-toggle"><input checked={requiresDelivery} disabled={disabled} onChange={(event) => setRequiresDelivery(event.target.checked)} type="checkbox" /><span><strong>Este pedido precisa ser entregue</strong><small>Só pedidos marcados aqui entram na fila de entregas.</small></span></label>
+                <label className="record-checkbox record-field-wide order-delivery-toggle"><input checked={requiresDelivery} disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.delivery = true; setRequiresDelivery(event.target.checked) }} type="checkbox" /><span><strong>Este pedido precisa ser entregue</strong><small>Só pedidos marcados aqui entram na fila de entregas.</small></span></label>
                 <label className="record-field record-field-wide"><span className="field-label">Endereço registrado para este pedido <span className="field-optional">{requiresDelivery ? 'obrigatório para entrega' : 'opcional'}</span></span>
-                  <textarea className="text-input record-textarea" disabled={disabled} maxLength={1000} onChange={(event) => setDeliveryAddress(event.target.value)} placeholder="Pode ajustar ou deixar em branco" required={requiresDelivery} rows={2} value={deliveryAddress} />
+                  <textarea className="text-input record-textarea" disabled={disabled} maxLength={1000} onChange={(event) => { customerPrefillManualRef.current.address = true; setDeliveryAddress(event.target.value) }} placeholder="Pode ajustar ou deixar em branco" required={requiresDelivery} rows={2} value={deliveryAddress} />
                 </label>
                 <label className="record-field record-field-wide"><span className="field-label">Observações do pedido <span className="field-optional">opcional</span></span>
                   <textarea className="text-input record-textarea" disabled={disabled} maxLength={4000} onChange={(event) => setNotes(event.target.value)} rows={3} value={notes} />
@@ -548,7 +825,7 @@ export function NewOrderPage() {
 
           <section className="surface-panel record-form" aria-labelledby="order-items-heading">
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">02 · PRODUTOS</p><h2 id="order-items-heading">Itens do pedido</h2></div>
-              <button className="button button-secondary" disabled={disabled || products.length === 0} onClick={() => setItems((current) => [...current, { key: newKey(), productId: '', quantity: '1' }])} type="button"><Icon name="plus" /> Adicionar item</button>
+              <button className="button button-secondary" disabled={disabled || products.length === 0} onClick={() => { customerPrefillManualRef.current.items = true; setItems((current) => [...current, { key: newKey(), productId: '', quantity: '1' }]) }} type="button"><Icon name="plus" /> Adicionar item</button>
             </div>
             {products.length === 0 ? <p className="inline-state">Não há produtos ativos com preço de venda. <Link to="/catalogo">Abrir catálogo</Link></p> : (
               <div className="order-draft-list">
@@ -567,7 +844,7 @@ export function NewOrderPage() {
                         <input className="text-input" disabled={disabled} inputMode="decimal" maxLength={16} onChange={(event) => updateItem(item.key, { quantity: event.target.value })} placeholder="1" value={item.quantity} />
                       </label>
                       <div className="order-line-total"><span className="field-label">Valor do item</span><strong>{lineCents === null ? '—' : formatBRL(lineCents)}</strong></div>
-                      <button aria-label={`Remover item ${index + 1}`} className="text-button order-remove-button" disabled={disabled || items.length === 1} onClick={() => setItems((current) => current.filter((row) => row.key !== item.key))} type="button">Remover</button>
+                      <button aria-label={`Remover item ${index + 1}`} className="text-button order-remove-button" disabled={disabled || items.length === 1} onClick={() => { customerPrefillManualRef.current.items = true; setItems((current) => current.filter((row) => row.key !== item.key)) }} type="button">Remover</button>
                     </div>
                   )
                 })}
@@ -575,7 +852,7 @@ export function NewOrderPage() {
             )}
             <div className="record-form-grid order-adjustments">
               <label className="record-field"><span className="field-label">Taxa de entrega <span className="field-optional">opcional</span></span>
-                <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => setDeliveryFee(event.target.value)} placeholder="0,00" value={deliveryFee} />
+                <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => { customerPrefillManualRef.current.fee = true; setDeliveryFee(event.target.value) }} placeholder="0,00" value={deliveryFee} />
               </label>
               <label className="record-field"><span className="field-label">Desconto <span className="field-optional">opcional</span></span>
                 <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => setDiscount(event.target.value)} placeholder="0,00" value={discount} />
@@ -592,23 +869,23 @@ export function NewOrderPage() {
 
           <section className="surface-panel record-form" aria-labelledby="order-installments-heading">
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO COMBINADO</p><h2 id="order-installments-heading">Vencimentos informados neste pedido</h2></div>
-              <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => { autoScheduleRef.current = false; setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: '' }]) }} type="button"><Icon name="plus" /> Adicionar vencimento</button>
+              <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: '' }]) }} type="button"><Icon name="plus" /> Adicionar vencimento</button>
             </div>
             <p className="section-footnote order-payment-hint">Com um modelo salvo, valores e datas são preenchidos automaticamente conforme o total e a data-base. Você pode ajustar qualquer vencimento antes de salvar.</p>
             <p className="section-footnote">Cada pedido pode ter no máximo 120 vencimentos.</p>
             {scheduleTemplateLoadError && <p className="form-message form-message-warning" role="status">{scheduleTemplateLoadError}</p>}
             {scheduleTemplates.length > 0 && <div className="record-form-grid order-adjustments" aria-label="Aplicar modelo de vencimentos">
               <label className="record-field"><span className="field-label">Modelo salvo</span>
-                <select className="text-input" disabled={disabled} onChange={(event) => { const nextId = event.target.value; autoScheduleRef.current = Boolean(nextId); setSelectedScheduleTemplateId(nextId); if (nextId) rememberPaymentTemplate(businessId, nextId); setScheduleTemplateError(null); setScheduleTemplateMessage(null) }} value={selectedScheduleTemplateId}>
+                <select className="text-input" disabled={disabled} onChange={(event) => { const nextId = event.target.value; customerPrefillManualRef.current.installments = true; autoScheduleRef.current = Boolean(nextId); setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); setSelectedScheduleTemplateId(nextId); if (nextId) rememberPaymentTemplate(businessId, nextId); setScheduleTemplateError(null); setScheduleTemplateMessage(null) }} value={selectedScheduleTemplateId}>
                   <option value="">Selecione um modelo</option>
                   {scheduleTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
                 </select>
               </label>
               <label className="record-field"><span className="field-label">Data-base <span className="field-optional">padrão: hoje</span></span>
-                <input className="text-input" disabled={disabled} onChange={(event) => { setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
+                <input className="text-input" disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.baseDate = true; setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
               </label>
               <div className="record-form-actions record-field-wide">
-                <button className="button button-secondary" disabled={disabled || !selectedScheduleTemplateId} onClick={() => applyScheduleTemplate()} type="button">Reaplicar modelo</button>
+                <button className="button button-secondary" disabled={disabled || !selectedScheduleTemplateId} onClick={() => { customerPrefillManualRef.current.installments = true; setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); applyScheduleTemplate() }} type="button">Reaplicar modelo</button>
                 <span className="section-footnote">Ao trocar o modelo, os vencimentos são recalculados. O ajuste de centavos fica na última parcela; datas e valores continuam editáveis.</span>
               </div>
             </div>}
@@ -626,7 +903,7 @@ export function NewOrderPage() {
                   <label className="record-field order-method-field"><span className="field-label">Forma combinada <span className="field-optional">texto opcional</span></span>
                     <input className="text-input" disabled={disabled} maxLength={64} onChange={(event) => updateInstallment(installment.key, { paymentMethod: event.target.value })} placeholder="Ex.: Pix, dinheiro, boleto" value={installment.paymentMethod} />
                   </label>
-                  <button aria-label={`Remover vencimento ${index + 1}`} className="text-button order-remove-button" disabled={disabled || installments.length === 1} onClick={() => { autoScheduleRef.current = false; setInstallments((current) => current.filter((row) => row.key !== installment.key)) }} type="button">Remover</button>
+                  <button aria-label={`Remover vencimento ${index + 1}`} className="text-button order-remove-button" disabled={disabled || installments.length === 1} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => current.filter((row) => row.key !== installment.key)) }} type="button">Remover</button>
                 </div>
               ))}
             </div>
@@ -635,7 +912,7 @@ export function NewOrderPage() {
             </p>
             {!scheduleTemplateLoadError && <div className="record-form-grid order-adjustments">
               {scheduleTemplates.length === 0 && !scheduleTemplateLoadError && <label className="record-field"><span className="field-label">Data-base do modelo</span>
-                <input className="text-input" disabled={disabled} onChange={(event) => { setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
+                <input className="text-input" disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.baseDate = true; setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
                 <span className="section-footnote">Escolha antes de salvar. Ela não cria vencimentos por conta própria.</span>
               </label>}
               <label className="record-field"><span className="field-label">Nome para salvar este cronograma como modelo</span>
@@ -650,8 +927,8 @@ export function NewOrderPage() {
 
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
           <div className="record-form-actions order-submit-actions">
-            <button className="button button-primary" disabled={saving || (!uncertain && (customers.length === 0 || products.length === 0))} type="submit">
-              {saving ? 'Salvando pedido…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Criar pedido'}
+            <button className="button button-primary" disabled={saving || customerPrefillLoading || (!uncertain && (customers.length === 0 || products.length === 0))} type="submit">
+              {saving ? 'Salvando pedido…' : customerPrefillLoading ? 'Buscando pedido anterior…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Criar pedido'}
             </button>
             <span className="section-footnote">Os vencimentos são registros manuais; nenhuma cobrança ou pagamento será processado.</span>
           </div>
