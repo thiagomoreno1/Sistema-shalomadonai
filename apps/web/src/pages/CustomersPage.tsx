@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
@@ -14,6 +14,7 @@ type Customer = {
   created_at: string
   is_active: boolean
 }
+type PhoneMatch = { id: string; name: string; matched_phone_masked: string }
 
 function getWhatsAppChatUrl(value: string) {
   const trimmed = value.trim()
@@ -34,6 +35,14 @@ export function CustomersPage() {
   const [showForm, setShowForm] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [phone, setPhone] = useState('')
+  const [whatsappPhone, setWhatsappPhone] = useState('')
+  const [phoneMatches, setPhoneMatches] = useState<PhoneMatch[]>([])
+  const [phoneLookupBusy, setPhoneLookupBusy] = useState(false)
+  const [phoneLookupUnavailable, setPhoneLookupUnavailable] = useState(false)
+  const [duplicateConfirmation, setDuplicateConfirmation] = useState('')
+  const [lookupUnavailableConfirmed, setLookupUnavailableConfirmed] = useState(false)
+  const phoneLookupSequence = useRef(0)
 
   const loadCustomers = useCallback(async () => {
     if (!supabaseClient) {
@@ -64,6 +73,48 @@ export function CustomersPage() {
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadCustomers() }, [loadCustomers])
 
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => {
+    const phoneDigits = phone.replace(/\D/g, '')
+    const whatsappDigits = whatsappPhone.replace(/\D/g, '')
+    const hasSearchableNumber = [phoneDigits, whatsappDigits].some((digits) => digits.length >= 8 && digits.length <= 15)
+    if (!showForm || !hasSearchableNumber || !supabaseClient) {
+      setPhoneMatches([])
+      setPhoneLookupBusy(false)
+      setPhoneLookupUnavailable(false)
+      return
+    }
+    let active = true
+    const requestId = ++phoneLookupSequence.current
+    const timeout = window.setTimeout(async () => {
+      setPhoneLookupBusy(true)
+      try {
+        const { data, error: lookupError } = await supabaseClient.rpc('find_customer_phone_matches', {
+          p_phone: phone,
+          p_whatsapp_phone: whatsappPhone,
+        })
+        if (!active || requestId !== phoneLookupSequence.current) return
+        if (lookupError) {
+          setPhoneMatches([])
+          setPhoneLookupUnavailable(true)
+        } else {
+          setPhoneMatches((data ?? []) as PhoneMatch[])
+          setPhoneLookupUnavailable(false)
+        }
+      } catch {
+        if (!active || requestId !== phoneLookupSequence.current) return
+        setPhoneMatches([])
+        setPhoneLookupUnavailable(true)
+      } finally {
+        if (active && requestId === phoneLookupSequence.current) setPhoneLookupBusy(false)
+      }
+    }, 350)
+    return () => {
+      active = false
+      window.clearTimeout(timeout)
+    }
+  }, [phone, phoneLookupSequence, showForm, whatsappPhone])
+
   const filteredCustomers = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase('pt-BR')
     if (!needle) return customers
@@ -71,6 +122,7 @@ export function CustomersPage() {
       `${customer.name} ${customer.phone ?? ''} ${customer.whatsapp_phone ?? ''}`.toLocaleLowerCase('pt-BR').includes(needle),
     )
   }, [customers, search])
+  const phoneMatchSignature = phoneMatches.map((match) => match.id).sort().join('|')
 
   async function handleCreateCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -78,6 +130,7 @@ export function CustomersPage() {
     const form = new FormData(event.currentTarget)
     const name = String(form.get('name') ?? '').trim()
     const whatsappPhone = String(form.get('whatsapp_phone') ?? '').trim()
+    const phone = String(form.get('phone') ?? '').trim()
     if (!name) {
       setSaveError('Informe o nome do cliente.')
       return
@@ -85,6 +138,45 @@ export function CustomersPage() {
     if (whatsappPhone && !getWhatsAppChatUrl(whatsappPhone)) {
       setSaveError('Informe o número começando com + e o código do país, por exemplo +55 21 99999-0000.')
       return
+    }
+
+    const phoneDigits = phone.replace(/\D/g, '')
+    const whatsappDigits = whatsappPhone.replace(/\D/g, '')
+    const hasSearchableNumber = [phoneDigits, whatsappDigits].some((digits) => digits.length >= 8 && digits.length <= 15)
+    if (hasSearchableNumber && !lookupUnavailableConfirmed) {
+      setSaving(true)
+      setSaveError(null)
+      try {
+        const { data, error: lookupError } = await supabaseClient.rpc('find_customer_phone_matches', {
+          p_phone: phone,
+          p_whatsapp_phone: whatsappPhone,
+        })
+        if (lookupError) {
+          setPhoneLookupUnavailable(true)
+          if (!lookupUnavailableConfirmed) {
+            setSaveError('Não foi possível concluir a busca agora. Confira se o telefone pertence a outra pessoa e confirme se quer continuar mesmo sem a verificação.')
+            return
+          }
+        } else {
+          const matches = (data ?? []) as PhoneMatch[]
+          const signature = matches.map((match) => match.id).sort().join('|')
+          setPhoneMatches(matches)
+          setPhoneLookupUnavailable(false)
+          if (signature && duplicateConfirmation !== signature) {
+            setDuplicateConfirmation('')
+            setSaveError('Encontramos cadastros com este telefone. Confira os nomes e confirme abaixo se é outra pessoa para continuar.')
+            return
+          }
+        }
+      } catch {
+        setPhoneLookupUnavailable(true)
+        if (!lookupUnavailableConfirmed) {
+          setSaveError('Não foi possível concluir a busca agora. Confira se o telefone pertence a outra pessoa e confirme se quer continuar mesmo sem a verificação.')
+          return
+        }
+      } finally {
+        setSaving(false)
+      }
     }
 
     setSaving(true)
@@ -95,7 +187,7 @@ export function CustomersPage() {
         .insert({
           business_id: businessId,
           name,
-          phone: String(form.get('phone') ?? '').trim() || null,
+          phone: phone || null,
           whatsapp_phone: whatsappPhone || null,
           delivery_address: String(form.get('delivery_address') ?? '').trim() || null,
           notes: String(form.get('notes') ?? '').trim() || null,
@@ -123,7 +215,7 @@ export function CustomersPage() {
           <h1>Clientes</h1>
           <p className="page-description">Cadastros, contatos e histórico de relacionamento.</p>
         </div>
-        <button className="button button-primary" onClick={() => { setShowForm((value) => !value); setSaveError(null) }} type="button">
+        <button className="button button-primary" disabled={saving} onClick={() => { setShowForm((value) => !value); setSaveError(null); setDuplicateConfirmation(''); setLookupUnavailableConfirmed(false); setPhoneMatches([]); setPhoneLookupUnavailable(false); setPhone(''); setWhatsappPhone('') }} type="button">
           <Icon name="plus" /> {showForm ? 'Fechar' : 'Novo cliente'}
         </button>
       </header>
@@ -136,26 +228,37 @@ export function CustomersPage() {
           <div className="record-form-grid">
             <label className="record-field record-field-wide">
               <span className="field-label">Nome <span aria-hidden="true">*</span></span>
-              <input autoFocus className="text-input" maxLength={160} name="name" required />
+              <input autoFocus className="text-input" disabled={saving} maxLength={160} name="name" required />
             </label>
             <label className="record-field">
               <span className="field-label">Telefone <span className="field-optional">opcional</span></span>
-              <input autoComplete="tel" className="text-input" maxLength={64} name="phone" type="tel" />
+              <input autoComplete="tel" className="text-input" disabled={saving} maxLength={64} name="phone" onChange={(event) => { setPhone(event.target.value); setDuplicateConfirmation(''); setLookupUnavailableConfirmed(false); setPhoneMatches([]); setPhoneLookupUnavailable(false); setPhoneLookupBusy(false) }} type="tel" value={phone} />
             </label>
             <label className="record-field">
               <span className="field-label">WhatsApp <span className="field-optional">opcional</span></span>
-              <input autoComplete="tel" className="text-input" maxLength={64} name="whatsapp_phone" placeholder="+55 21 99999-0000" type="tel" />
+              <input autoComplete="tel" className="text-input" disabled={saving} maxLength={64} name="whatsapp_phone" onChange={(event) => { setWhatsappPhone(event.target.value); setDuplicateConfirmation(''); setLookupUnavailableConfirmed(false); setPhoneMatches([]); setPhoneLookupUnavailable(false); setPhoneLookupBusy(false) }} placeholder="+55 21 99999-0000" type="tel" value={whatsappPhone} />
               <span className="customer-whatsapp-hint">Use +55 e DDD no Brasil; para outros países, informe + e o DDI.</span>
             </label>
             <label className="record-field record-field-wide">
               <span className="field-label">Endereço de entrega <span className="field-optional">opcional</span></span>
-              <input className="text-input" maxLength={1000} name="delivery_address" />
+              <input className="text-input" disabled={saving} maxLength={1000} name="delivery_address" />
             </label>
             <label className="record-field record-field-wide">
               <span className="field-label">Observações <span className="field-optional">opcional</span></span>
-              <textarea className="text-input record-textarea" maxLength={4000} name="notes" rows={3} />
+              <textarea className="text-input record-textarea" disabled={saving} maxLength={4000} name="notes" rows={3} />
             </label>
           </div>
+          {phoneLookupBusy && <p className="inline-state" aria-live="polite">Conferindo se já existe um cadastro com estes números…</p>}
+          {phoneMatches.length > 0 && <div className="form-message form-message-warning" role="status">
+            <strong>Possíveis cadastros com este número</strong>
+            <p>A consulta mostra até cinco correspondências. Confira manualmente antes de continuar se houver outros cadastros com o mesmo telefone.</p>
+            <ul>{phoneMatches.map((match) => <li key={match.id}><Link to={`/clientes/${match.id}`} target="_blank" rel="noreferrer">{match.name}</Link> · {match.matched_phone_masked}</li>)}</ul>
+            <label className="record-checkbox"><input checked={duplicateConfirmation === phoneMatchSignature && Boolean(phoneMatchSignature)} disabled={saving} onChange={(event) => setDuplicateConfirmation(event.target.checked ? phoneMatchSignature : '')} type="checkbox" /><span><strong>Conferi: é outra pessoa e quero continuar</strong><small>Nenhum cadastro será mesclado ou alterado.</small></span></label>
+          </div>}
+          {phoneLookupUnavailable && <div className="form-message form-message-warning" role="status">
+            <p>A consulta de possíveis duplicados está indisponível. Você ainda pode continuar manualmente depois de conferir os números.</p>
+            <label className="record-checkbox"><input checked={lookupUnavailableConfirmed} disabled={saving} onChange={(event) => setLookupUnavailableConfirmed(event.target.checked)} type="checkbox" /><span><strong>Conferi os números e quero continuar sem a consulta</strong></span></label>
+          </div>}
           {saveError && <p className="form-message form-message-error" role="alert">{saveError}</p>}
           <div className="record-form-actions">
             <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar cliente'}</button>
