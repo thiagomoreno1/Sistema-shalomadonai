@@ -1,19 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
+import { DashboardTrends, type DashboardTrendDay, type DashboardTrendPeriod } from '../components/DashboardTrends'
 import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
 import { useBusinessToday } from '../lib/useBusinessToday'
 import { supabaseClient } from '../lib/supabase'
-
-type FinancialSummary = {
-  sales: { active_order_count: number; active_total_cents: string }
-  receipts: { record_count: number; amount_cents: string }
-  receivables: { installment_count: number; open_balance_cents: string }
-  outflows: { record_count: number; total_cents: string }
-  cash_movement: { net_recorded_cents: string }
-  managerial_result: { available: boolean; result_cents: string | null; missing_cost_line_count: number; returned_order_count: number; completed_order_count: number }
-}
 
 type DashboardPriorities = {
   as_of_on: string
@@ -55,6 +47,34 @@ function formatQuantity(value: number) {
   return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(value)
 }
 
+function shiftCalendarDate(value: string, offset: number) {
+  const date = new Date(`${value}T12:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + offset)
+  return date.toISOString().slice(0, 10)
+}
+
+function readTrendInteger(value: unknown) {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value)
+  if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value)
+  throw new Error('Invalid daily aggregate.')
+}
+
+function readTrendDays(value: unknown, startOn: string, period: DashboardTrendPeriod): DashboardTrendDay[] {
+  if (!Array.isArray(value) || value.length !== period) throw new Error('Incomplete daily series.')
+  return value.map((row: unknown, index) => {
+    if (typeof row !== 'object' || row === null) throw new Error('Invalid daily series.')
+    const item = row as Record<string, unknown>
+    const expectedDate = shiftCalendarDate(startOn, index)
+    if (item.business_date !== expectedDate) throw new Error('Unexpected daily series date.')
+    return {
+      business_date: expectedDate,
+      order_count: readTrendInteger(item.order_count),
+      receipts_cents: readTrendInteger(item.receipts_cents),
+      paid_outflows_cents: readTrendInteger(item.paid_outflows_cents),
+    }
+  })
+}
+
 export function DashboardPage() {
   const { id: businessId } = useBusiness()
   const today = useBusinessToday()
@@ -62,33 +82,30 @@ export function DashboardPage() {
   const [priorities, setPriorities] = useState<DashboardPriorities | null>(null)
   const [prioritiesLoading, setPrioritiesLoading] = useState(true)
   const [prioritiesError, setPrioritiesError] = useState(false)
-  const [financeSummary, setFinanceSummary] = useState<FinancialSummary | null>(null)
-  const [financeLoading, setFinanceLoading] = useState(true)
-  const [financeError, setFinanceError] = useState(false)
+  const [trendPeriod, setTrendPeriod] = useState<DashboardTrendPeriod>(7)
+  const trendStartOn = shiftCalendarDate(today, 1 - trendPeriod)
+  const trendScopeKey = `${businessId}:${trendStartOn}:${today}`
+  const trendRequestId = useRef(0)
+  const [trendState, setTrendState] = useState<{ scopeKey: string; loading: boolean; error: boolean; days: DashboardTrendDay[] }>({ scopeKey: '', loading: true, error: false, days: [] })
+  const currentTrends = trendState.scopeKey === trendScopeKey ? trendState : { loading: true, error: false, days: [] }
 
-  const loadFinanceSummary = useCallback(async () => {
-    if (!supabaseClient) {
-      setFinanceError(true)
-      setFinanceLoading(false)
-      return
-    }
-    setFinanceLoading(true)
+  const loadTrends = useCallback(async () => {
+    const requestId = ++trendRequestId.current
+    setTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
     try {
-      const { data, error } = await supabaseClient.rpc('get_financial_report_summary', {
+      if (!supabaseClient) throw new Error('Authentication service unavailable.')
+      const { data, error } = await supabaseClient.rpc('get_dashboard_daily_trends', {
         p_business_id: businessId,
-        p_start_on: today,
+        p_start_on: trendStartOn,
         p_end_on: today,
       })
-      if (error || !data) throw error
-      setFinanceSummary(data as FinancialSummary)
-      setFinanceError(false)
+      if (error) throw error
+      const days = readTrendDays(data, trendStartOn, trendPeriod)
+      if (requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days })
     } catch {
-      setFinanceError(true)
-      setFinanceSummary(null)
-    } finally {
-      setFinanceLoading(false)
+      if (requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
     }
-  }, [businessId, today])
+  }, [businessId, today, trendPeriod, trendScopeKey, trendStartOn])
 
   const loadPriorities = useCallback(async () => {
     if (!supabaseClient) {
@@ -116,7 +133,10 @@ export function DashboardPage() {
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadPriorities() }, [loadPriorities])
   // oxlint-disable-next-line react/set-state-in-effect
-  useEffect(() => { void loadFinanceSummary() }, [loadFinanceSummary])
+  useEffect(() => {
+    void loadTrends()
+    return () => { trendRequestId.current += 1 }
+  }, [loadTrends])
 
   return (
     <div className="page-stack">
@@ -178,26 +198,16 @@ export function DashboardPage() {
         </div>}
       </section>
 
-      <section aria-labelledby="finance-title">
-        <div className="section-heading section-heading-compact">
-          <div>
-            <p className="eyebrow">MOVIMENTAÇÃO</p>
-            <h2 id="finance-title">Resumo financeiro</h2>
-          </div>
-          <Link className="quiet-link" to="/financeiro">Ver financeiro <Icon name="arrow" /></Link>
-        </div>
-        {financeLoading && <p className="inline-state" aria-live="polite">Carregando movimentação registrada hoje…</p>}
-        {!financeLoading && financeError && <div className="empty-state"><span className="empty-icon"><Icon name="coin" /></span><div><h3>Não foi possível carregar o financeiro de hoje</h3><button className="text-button" onClick={() => void loadFinanceSummary()} type="button">Tentar novamente</button></div></div>}
-        {!financeLoading && !financeError && financeSummary && <div className="indicator-grid">
-          <article className="indicator-card"><p>Pedidos ativos criados hoje</p><strong>{formatBRLExact(financeSummary.sales.active_total_cents)}</strong><span>{financeSummary.sales.active_order_count} pedidos · cancelados separados</span></article>
-          <article className="indicator-card"><p>Recebimentos informados hoje</p><strong>{formatBRLExact(financeSummary.receipts.amount_cents)}</strong><span>{financeSummary.receipts.record_count} registros manuais</span></article>
-          <article className="indicator-card"><p>Vencimentos em aberto hoje</p><strong>{formatBRLExact(financeSummary.receivables.open_balance_cents)}</strong><span>{financeSummary.receivables.installment_count} parcelas com vencimento hoje</span></article>
-          <article className="indicator-card"><p>Saídas pagas hoje</p><strong>{formatBRLExact(financeSummary.outflows.total_cents)}</strong><span>{financeSummary.outflows.record_count} registros manuais</span></article>
-          <article className="indicator-card"><p>Movimento líquido registrado</p><strong>{formatBRLExact(financeSummary.cash_movement.net_recorded_cents)}</strong><span>Recebimentos informados menos saídas pagas</span></article>
-          <article className="indicator-card indicator-pending-card"><p>Resultado gerencial de hoje</p><strong>{financeSummary.managerial_result.available && financeSummary.managerial_result.result_cents !== null ? formatBRLExact(financeSummary.managerial_result.result_cents) : 'Indisponível'}</strong><span>{financeSummary.managerial_result.available ? `${financeSummary.managerial_result.completed_order_count} pedidos entregues ou retirados` : `${financeSummary.managerial_result.missing_cost_line_count} itens sem custo · ${financeSummary.managerial_result.returned_order_count} pedidos com devolução`}</span></article>
-        </div>}
-        <p className="section-footnote">O movimento líquido usa recebimentos e pagamentos informados manualmente; não é saldo bancário. O resultado segue a fórmula aprovada e usa a data de entrega ou retirada; custos de despesas e entregas usam a data paga.</p>
-      </section>
+      <DashboardTrends
+        days={currentTrends.days}
+        endOn={today}
+        error={currentTrends.error}
+        loading={currentTrends.loading}
+        onPeriodChange={setTrendPeriod}
+        onRetry={() => void loadTrends()}
+        period={trendPeriod}
+        startOn={trendStartOn}
+      />
 
       <div className="dashboard-columns">
         <section className="surface-panel" aria-labelledby="integrations-title">
