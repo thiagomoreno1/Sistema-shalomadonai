@@ -10,6 +10,8 @@ type Product = { id: string; name: string; inventory_unit: string | null; sale_p
 type ItemDraft = { key: string; productId: string; quantity: string }
 type InstallmentDraft = { key: string; amount: string; dueOn: string; paymentMethod: string }
 type OrderCopySummary = { customerName: string; copiedItems: number; skippedItems: number }
+type ScheduleEntry = { ordinal: number; amount_bps: number; days_after_base: number; payment_method: string | null }
+type ScheduleTemplate = { id: string; name: string; schedule: ScheduleEntry[] }
 
 function newKey() {
   return crypto.randomUUID()
@@ -47,6 +49,34 @@ function isCalendarDate(value: string) {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }
 
+function addDaysToDate(value: string, days: number) {
+  if (!isCalendarDate(value) || !Number.isInteger(days) || days < 0 || days > 36500) return null
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day + days))
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
+}
+
+function scheduleBasisPoints(amounts: number[]) {
+  const total = amounts.reduce((sum, amount) => sum + amount, 0)
+  if (!Number.isSafeInteger(total) || total <= 0 || amounts.some((amount) => !Number.isSafeInteger(amount) || amount <= 0) || amounts.length > 120) return null
+  const totalBig = BigInt(total)
+  const raw = amounts.map((amount) => {
+    const scaled = BigInt(amount) * 10000n
+    return { basisPoints: Number(scaled / totalBig), remainder: scaled % totalBig }
+  })
+  const basisPoints = raw.map((value) => value.basisPoints)
+  let remaining = 10000 - basisPoints.reduce((sum, value) => sum + value, 0)
+  const order = raw.map((value, index) => ({ index, remainder: value.remainder }))
+    .sort((left, right) => left.remainder === right.remainder ? left.index - right.index : left.remainder > right.remainder ? -1 : 1)
+  for (let cursor = 0; remaining > 0; cursor += 1, remaining -= 1) basisPoints[order[cursor % order.length].index] += 1
+  if (basisPoints.some((value) => value <= 0)) return null
+  return basisPoints
+}
+
+function centsToInput(cents: bigint) {
+  return `${cents / 100n},${String(cents % 100n).padStart(2, '0')}`
+}
+
 export function NewOrderPage() {
   const { id: businessId } = useBusiness()
   const navigate = useNavigate()
@@ -67,6 +97,14 @@ export function NewOrderPage() {
   const [notes, setNotes] = useState('')
   const [items, setItems] = useState<ItemDraft[]>([{ key: newKey(), productId: '', quantity: '1' }])
   const [installments, setInstallments] = useState<InstallmentDraft[]>([{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
+  const [scheduleTemplates, setScheduleTemplates] = useState<ScheduleTemplate[]>([])
+  const [scheduleTemplateLoadError, setScheduleTemplateLoadError] = useState<string | null>(null)
+  const [selectedScheduleTemplateId, setSelectedScheduleTemplateId] = useState('')
+  const [scheduleBaseDate, setScheduleBaseDate] = useState('')
+  const [newTemplateName, setNewTemplateName] = useState('')
+  const [scheduleTemplateMessage, setScheduleTemplateMessage] = useState<string | null>(null)
+  const [scheduleTemplateError, setScheduleTemplateError] = useState<string | null>(null)
+  const [templateSaving, setTemplateSaving] = useState(false)
   const [saving, setSaving] = useState(false)
   const [uncertain, setUncertain] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -92,6 +130,16 @@ export function NewOrderPage() {
           .eq('business_id', businessId).eq('is_active', true).not('sale_price_cents', 'is', null)
           .order('name', { ascending: true }),
       ])
+      let loadedTemplates: ScheduleTemplate[] = []
+      let templatesUnavailable = false
+      try {
+        const templatesResult = await supabaseClient.from('payment_schedule_templates')
+          .select('id, name, schedule').eq('business_id', businessId).order('name', { ascending: true })
+        if (templatesResult.error) templatesUnavailable = true
+        else loadedTemplates = (templatesResult.data ?? []) as ScheduleTemplate[]
+      } catch {
+        templatesUnavailable = true
+      }
       if (requestId !== choicesRequestIdRef.current) return
       if (customersResult.error || productsResult.error) {
         setChoiceError('Não foi possível carregar clientes e produtos ativos. Tente novamente.')
@@ -101,6 +149,13 @@ export function NewOrderPage() {
       const activeProducts = (productsResult.data ?? []) as Product[]
       setCustomers(activeCustomers)
       setProducts(activeProducts)
+      if (templatesUnavailable) {
+        setScheduleTemplates([])
+        setScheduleTemplateLoadError('Os modelos de vencimentos ainda não estão disponíveis. Você pode informar as parcelas manualmente.')
+      } else {
+        setScheduleTemplates(loadedTemplates)
+        setScheduleTemplateLoadError(null)
+      }
       const preselectedCustomer = activeCustomers.find((customer) => customer.id === requestedCustomerId)
       if (!sourceOrderId && preselectedCustomer) setDeliveryAddress(preselectedCustomer.delivery_address ?? '')
       setChoiceError(null)
@@ -210,6 +265,98 @@ export function NewOrderPage() {
     return parsed === null || Number.isNaN(parsed) ? sum : sum + parsed
   }, 0)
 
+  function applyScheduleTemplate() {
+    const template = scheduleTemplates.find((candidate) => candidate.id === selectedScheduleTemplateId)
+    if (!template) {
+      setScheduleTemplateError('Selecione um modelo para aplicar.')
+      return
+    }
+    if (!isCalendarDate(scheduleBaseDate)) {
+      setScheduleTemplateError('Escolha uma data-base válida antes de aplicar o modelo.')
+      return
+    }
+    if (estimate.invalid || !Number.isSafeInteger(totalCents) || totalCents <= 0) {
+      setScheduleTemplateError('Confira o total do pedido antes de calcular os vencimentos.')
+      return
+    }
+    if (template.schedule.length > totalCents) {
+      setScheduleTemplateError('O total atual é menor que a quantidade de parcelas. Reduza as parcelas ou altere os percentuais do modelo.')
+      return
+    }
+    const totalCentsBigInt = BigInt(totalCents)
+    const amounts = template.schedule.map((entry) => totalCentsBigInt * BigInt(entry.amount_bps) / 10000n)
+    const residual = totalCentsBigInt - amounts.reduce((sum, amount) => sum + amount, 0n)
+    amounts[amounts.length - 1] += residual
+    if (amounts.some((amount) => amount <= 0n)) {
+      setScheduleTemplateError('Este total não permite valores positivos em todas as parcelas. Reduza a quantidade ou ajuste os percentuais do modelo.')
+      return
+    }
+    const nextInstallments = template.schedule.map((entry, index) => {
+      const dueOn = addDaysToDate(scheduleBaseDate, entry.days_after_base)
+      return dueOn ? { key: newKey(), amount: centsToInput(amounts[index]), dueOn, paymentMethod: entry.payment_method ?? '' } : null
+    })
+    if (nextInstallments.some((entry) => entry === null)) {
+      setScheduleTemplateError('Não foi possível calcular uma das datas deste modelo. Confira a data-base e os prazos.')
+      return
+    }
+    setInstallments(nextInstallments as InstallmentDraft[])
+    setScheduleTemplateError(null)
+    setScheduleTemplateMessage(`Modelo “${template.name}” aplicado sobre o total atual. Confira valores e datas; eles continuam editáveis.`)
+  }
+
+  async function saveScheduleTemplate() {
+    if (!supabaseClient || templateSaving) return
+    const name = newTemplateName.trim()
+    if (name.length < 1 || name.length > 80) {
+      setScheduleTemplateError('Informe um nome de até 80 caracteres para o modelo.')
+      return
+    }
+    if (installments.length > 120) {
+      setScheduleTemplateError('Um modelo pode ter no máximo 120 vencimentos.')
+      return
+    }
+    const amounts = installments.map((installment) => parseBrazilianCurrency(installment.amount))
+    if (amounts.some((amount) => amount === null || Number.isNaN(amount) || amount <= 0)
+      || !Number.isSafeInteger(scheduleTotalCents) || scheduleTotalCents !== totalCents) {
+      setScheduleTemplateError('Confira os valores positivos e faça a soma dos vencimentos fechar exatamente o total atual antes de salvar o modelo.')
+      return
+    }
+    const basisPoints = scheduleBasisPoints(amounts as number[])
+    if (!basisPoints) {
+      setScheduleTemplateError('Os valores não podem ser convertidos em percentuais positivos para um modelo. Ajuste as parcelas e tente novamente.')
+      return
+    }
+    const schedule = installments.map((installment, index) => {
+      const [year, month, day] = scheduleBaseDate.split('-').map(Number)
+      const [dueYear, dueMonth, dueDay] = installment.dueOn.split('-').map(Number)
+      const daysAfterBase = Math.round((Date.UTC(dueYear, dueMonth - 1, dueDay) - Date.UTC(year, month - 1, day)) / 86400000)
+      return { ordinal: index + 1, amount_bps: basisPoints[index], days_after_base: daysAfterBase, payment_method: installment.paymentMethod.trim() || null }
+    })
+    if (!isCalendarDate(scheduleBaseDate) || installments.some((installment) => !isCalendarDate(installment.dueOn))
+      || schedule.some((entry) => entry.days_after_base < 0 || entry.days_after_base > 36500)) {
+      setScheduleTemplateError('Para salvar um modelo, informe a data-base e vencimentos entre 0 e 36.500 dias depois dela.')
+      return
+    }
+    setTemplateSaving(true)
+    setScheduleTemplateError(null)
+    try {
+      const { data, error: insertError } = await supabaseClient.from('payment_schedule_templates')
+        .insert({ business_id: businessId, name, schedule }).select('id, name, schedule').single()
+      if (insertError || !data) {
+        setScheduleTemplateError('Não foi possível salvar o modelo. Você ainda pode continuar com os vencimentos atuais.')
+        return
+      }
+      setScheduleTemplates((current) => [...current, data as ScheduleTemplate].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR')))
+      setSelectedScheduleTemplateId(data.id)
+      setNewTemplateName('')
+      setScheduleTemplateMessage(`Modelo “${data.name}” salvo. Ele poderá ser aplicado a outro pedido depois.`)
+    } catch {
+      setScheduleTemplateError('Não foi possível salvar o modelo. Você ainda pode continuar com os vencimentos atuais.')
+    } finally {
+      setTemplateSaving(false)
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!supabaseClient || saving) return
@@ -219,6 +366,10 @@ export function NewOrderPage() {
     }
     if (!customers.some((customer) => customer.id === customerId)) {
       setFormError('Selecione um cliente ativo.')
+      return
+    }
+    if (installments.length < 1 || installments.length > 120) {
+      setFormError('O pedido precisa ter entre 1 e 120 vencimentos.')
       return
     }
     if (items.length === 0 || items.some((item) => !productById.has(item.productId))) {
@@ -396,9 +547,28 @@ export function NewOrderPage() {
 
           <section className="surface-panel record-form" aria-labelledby="order-installments-heading">
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO COMBINADO</p><h2 id="order-installments-heading">Vencimentos informados neste pedido</h2></div>
-              <button className="button button-secondary" disabled={disabled} onClick={() => setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])} type="button"><Icon name="plus" /> Adicionar vencimento</button>
+              <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])} type="button"><Icon name="plus" /> Adicionar vencimento</button>
             </div>
-            <p className="section-footnote order-payment-hint">Informe manualmente o valor e a data de cada vencimento. Nenhum prazo ou parcelamento é sugerido automaticamente.</p>
+            <p className="section-footnote order-payment-hint">Informe cada vencimento manualmente ou escolha um modelo salvo. Sem aplicar um modelo, nenhuma data ou condição é sugerida.</p>
+            <p className="section-footnote">Cada pedido pode ter no máximo 120 vencimentos.</p>
+            {scheduleTemplateLoadError && <p className="form-message form-message-warning" role="status">{scheduleTemplateLoadError}</p>}
+            {scheduleTemplates.length > 0 && <div className="record-form-grid order-adjustments" aria-label="Aplicar modelo de vencimentos">
+              <label className="record-field"><span className="field-label">Modelo salvo</span>
+                <select className="text-input" disabled={disabled} onChange={(event) => { setSelectedScheduleTemplateId(event.target.value); setScheduleTemplateError(null); setScheduleTemplateMessage(null) }} value={selectedScheduleTemplateId}>
+                  <option value="">Selecione um modelo</option>
+                  {scheduleTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+                </select>
+              </label>
+              <label className="record-field"><span className="field-label">Data-base escolhida por você</span>
+                <input className="text-input" disabled={disabled} onChange={(event) => { setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
+              </label>
+              <div className="record-form-actions record-field-wide">
+                <button className="button button-secondary" disabled={disabled || !selectedScheduleTemplateId} onClick={applyScheduleTemplate} type="button">Substituir vencimentos pelo modelo</button>
+                <span className="section-footnote">O modelo substitui a lista atual. Ele calcula o total atual, deixa o ajuste de centavos na última parcela e mantém datas e valores editáveis.</span>
+              </div>
+            </div>}
+            {scheduleTemplateMessage && <p className="form-message form-message-success" role="status">{scheduleTemplateMessage}</p>}
+            {scheduleTemplateError && <p className="form-message form-message-error" role="alert">{scheduleTemplateError}</p>}
             <div className="order-draft-list">
               {installments.map((installment, index) => (
                 <div className="order-draft-item installment-draft-item" key={installment.key}>
@@ -418,6 +588,19 @@ export function NewOrderPage() {
             <p className={`order-schedule-total ${scheduleTotalCents === totalCents ? 'order-schedule-match' : ''}`} aria-live="polite">
               Soma dos vencimentos: <strong>{formatBRL(scheduleTotalCents)}</strong> · Total do pedido: <strong>{formatBRL(totalCents)}</strong>
             </p>
+            {!scheduleTemplateLoadError && <div className="record-form-grid order-adjustments">
+              {scheduleTemplates.length === 0 && !scheduleTemplateLoadError && <label className="record-field"><span className="field-label">Data-base do modelo</span>
+                <input className="text-input" disabled={disabled} onChange={(event) => { setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
+                <span className="section-footnote">Escolha antes de salvar. Ela não cria vencimentos por conta própria.</span>
+              </label>}
+              <label className="record-field"><span className="field-label">Nome para salvar este cronograma como modelo</span>
+                <input className="text-input" disabled={disabled || templateSaving} maxLength={80} onChange={(event) => setNewTemplateName(event.target.value)} placeholder="Ex.: entrada e saldo em 30 dias" value={newTemplateName} />
+              </label>
+              <div className="record-form-actions record-field-wide">
+                <button className="button button-secondary" disabled={disabled || templateSaving || Boolean(scheduleTemplateLoadError) || !newTemplateName.trim()} onClick={() => void saveScheduleTemplate()} type="button">{templateSaving ? 'Salvando modelo…' : 'Salvar vencimentos como modelo'}</button>
+                {scheduleTemplates.length === 0 && !scheduleTemplateLoadError && <span className="section-footnote">O modelo será salvo para este negócio e usado somente quando você o selecionar.</span>}
+              </div>
+            </div>}
           </section>
 
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
