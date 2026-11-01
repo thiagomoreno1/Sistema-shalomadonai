@@ -28,7 +28,7 @@ const desktopItems: NavItem[] = [
 ]
 
 const routeLabels: Record<string, string> = {
-  '/': 'Visão geral',
+  '/': 'Central do dia',
   '/clientes': 'Clientes',
   '/atendimento': 'Atendimento',
   '/whatsapp': 'WhatsApp',
