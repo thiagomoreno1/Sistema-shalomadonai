@@ -306,6 +306,20 @@
 .field-optional { color: var(--quiet); font-size: 10px; font-weight: 450; }
 .record-field .text-input { margin-bottom: 14px; }
 .customer-whatsapp-hint { margin: -8px 0 14px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.customer-phone-row { display: grid; grid-template-columns: minmax(175px, 0.78fr) minmax(0, 1fr); gap: 8px; }
+.customer-phone-row-custom { grid-template-columns: minmax(155px, 0.78fr) 72px minmax(0, 1fr); }
+.customer-phone-row .text-input { min-width: 0; margin-bottom: 10px; }
+.customer-country-select { padding-right: 28px; }
+.customer-same-whatsapp { grid-column: 1 / -1; margin: -3px 0 8px; }
+.customer-same-whatsapp span { display: flex; flex-direction: column; gap: 2px; }
+.customer-same-whatsapp small { color: var(--muted); font-size: 11px; }
+.customer-add-whatsapp { min-height: 38px; }
+.customer-optional-details { grid-column: 1 / -1; margin: 6px 0 2px; padding-top: 12px; border-top: 1px solid var(--line); }
+.customer-optional-details > .text-button { margin-bottom: 4px; }
+.customer-optional-grid { margin-top: 6px; }
+.customer-optional-grid .form-message, .customer-optional-grid .section-footnote { grid-column: 1 / -1; }
+.customer-optional-grid .form-message { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.customer-optional-grid .form-message .text-button { min-height: 36px; }
 .record-textarea { min-height: 92px; padding: 11px 12px; resize: vertical; }
 .record-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 2px; }
 .record-form-actions .section-footnote { margin: 0; }
@@ -691,7 +705,11 @@
   .settings-access-request-actions .button { flex: 1; }
   .record-form, .record-panel { padding: 17px; }
   .record-form-grid, .record-detail-grid { grid-template-columns: 1fr; }
+  .customer-phone-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .customer-phone-row-custom { grid-template-columns: 78px minmax(0, 1fr); }
+  .customer-phone-row-custom .customer-country-select { grid-column: 1 / -1; }
   .record-field-wide { grid-column: auto; }
+  .customer-same-whatsapp, .customer-optional-details { grid-column: auto; }
   .record-heading-actions { width: 100%; }
   .record-heading-actions .button { flex: 1; }
   .product-price-history-heading { align-items: flex-start; flex-direction: column; gap: 3px; }

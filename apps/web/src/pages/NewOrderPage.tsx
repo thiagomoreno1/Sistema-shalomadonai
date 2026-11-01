@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
+import { CustomerSearchSelect } from '../components/CustomerSearchSelect'
 import { formatBRL, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
-type Customer = { id: string; name: string; delivery_address: string | null }
+type Customer = { id: string; name: string; phone: string | null; whatsapp_phone: string | null; delivery_address: string | null }
 type Product = { id: string; name: string; inventory_unit: string | null; sale_price_cents: number | null }
 type ItemDraft = { key: string; productId: string; quantity: string }
 type InstallmentDraft = { key: string; amount: string; dueOn: string; paymentMethod: string }
@@ -145,6 +146,7 @@ export function NewOrderPage() {
   const [customerPrefillNotice, setCustomerPrefillNotice] = useState<string | null>(null)
   const [customerPrefillLoading, setCustomerPrefillLoading] = useState(false)
   const [customerId, setCustomerId] = useState(requestedCustomerId)
+  const [customerSearchPending, setCustomerSearchPending] = useState(false)
   const [requiresDelivery, setRequiresDelivery] = useState(false)
   const [deliveryAddress, setDeliveryAddress] = useState('')
   const [deliveryFee, setDeliveryFee] = useState('')
@@ -184,7 +186,7 @@ export function NewOrderPage() {
     setOrderCopyWarning(null)
     try {
       const [customersResult, productsResult] = await Promise.all([
-        supabaseClient.from('customers').select('id, name, delivery_address')
+        supabaseClient.from('customers').select('id, name, phone, whatsapp_phone, delivery_address')
           .eq('business_id', businessId).eq('is_active', true).order('name', { ascending: true }),
         supabaseClient.from('products').select('id, name, inventory_unit, sale_price_cents')
           .eq('business_id', businessId).eq('is_active', true).not('sale_price_cents', 'is', null)
@@ -481,6 +483,11 @@ export function NewOrderPage() {
       customerPrefillManualRef.current.delivery = false
       customerPrefillManualRef.current.fee = false
     }
+    if (!nextId) {
+      setDeliveryAddress('')
+      setRequiresDelivery(false)
+      setDeliveryFee('')
+    }
     void loadCustomerOrderSuggestion(nextId)
     setFormError(null)
   }
@@ -655,6 +662,10 @@ export function NewOrderPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!supabaseClient || saving) return
+    if (customerSearchPending) {
+      setFormError('Selecione um cliente na lista ou cancele a busca antes de criar o pedido.')
+      return
+    }
     if (choiceError || loadingChoices) {
       setFormError('Carregue clientes e produtos antes de salvar o pedido.')
       return
@@ -805,12 +816,7 @@ export function NewOrderPage() {
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">01 · CLIENTE</p><h2 id="order-customer-heading">Entrega e observações</h2></div></div>
             {customers.length === 0 ? <p className="inline-state">Cadastre um cliente ativo antes de criar um pedido. <Link to="/clientes">Abrir clientes</Link></p> : (
               <div className="record-form-grid">
-                <label className="record-field record-field-wide"><span className="field-label">Cliente <span aria-hidden="true">*</span></span>
-                  <select className="text-input" disabled={disabled} onChange={(event) => handleCustomerChange(event.target.value)} required value={customerId}>
-                    <option value="">Selecione um cliente</option>
-                    {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
-                  </select>
-                </label>
+                <CustomerSearchSelect customers={customers} disabled={disabled} onPendingChange={setCustomerSearchPending} onSelect={handleCustomerChange} selectedId={customerId} />
                 {requestedCustomerId && !selectedCustomer && <p className="form-message form-message-warning record-field-wide">O cliente do atalho não está ativo. Selecione outro cliente disponível.</p>}
                 <label className="record-checkbox record-field-wide order-delivery-toggle"><input checked={requiresDelivery} disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.delivery = true; setRequiresDelivery(event.target.checked) }} type="checkbox" /><span><strong>Este pedido precisa ser entregue</strong><small>Só pedidos marcados aqui entram na fila de entregas.</small></span></label>
                 <label className="record-field record-field-wide"><span className="field-label">Endereço registrado para este pedido <span className="field-optional">{requiresDelivery ? 'obrigatório para entrega' : 'opcional'}</span></span>
@@ -927,7 +933,7 @@ export function NewOrderPage() {
 
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
           <div className="record-form-actions order-submit-actions">
-            <button className="button button-primary" disabled={saving || customerPrefillLoading || (!uncertain && (customers.length === 0 || products.length === 0))} type="submit">
+            <button className="button button-primary" disabled={saving || customerPrefillLoading || customerSearchPending || (!uncertain && (customers.length === 0 || products.length === 0))} type="submit">
               {saving ? 'Salvando pedido…' : customerPrefillLoading ? 'Buscando pedido anterior…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Criar pedido'}
             </button>
             <span className="section-footnote">Os vencimentos são registros manuais; nenhuma cobrança ou pagamento será processado.</span>

@@ -2,7 +2,89 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link, useNavigate } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
+import { searchCustomers, toInternationalPhone } from '../lib/customer-search.mjs'
 import { supabaseClient } from '../lib/supabase'
+
+const PHONE_COUNTRIES = [
+  { iso: 'BR', flag: '🇧🇷', name: 'Brasil', callingCode: '55' },
+  { iso: 'US', flag: '🇺🇸', name: 'Estados Unidos', callingCode: '1' },
+  { iso: 'CA', flag: '🇨🇦', name: 'Canadá', callingCode: '1' },
+  { iso: 'PT', flag: '🇵🇹', name: 'Portugal', callingCode: '351' },
+  { iso: 'AR', flag: '🇦🇷', name: 'Argentina', callingCode: '54' },
+  { iso: 'UY', flag: '🇺🇾', name: 'Uruguai', callingCode: '598' },
+  { iso: 'PY', flag: '🇵🇾', name: 'Paraguai', callingCode: '595' },
+  { iso: 'BO', flag: '🇧🇴', name: 'Bolívia', callingCode: '591' },
+  { iso: 'CL', flag: '🇨🇱', name: 'Chile', callingCode: '56' },
+  { iso: 'CO', flag: '🇨🇴', name: 'Colômbia', callingCode: '57' },
+  { iso: 'PE', flag: '🇵🇪', name: 'Peru', callingCode: '51' },
+  { iso: 'MX', flag: '🇲🇽', name: 'México', callingCode: '52' },
+  { iso: 'GB', flag: '🇬🇧', name: 'Reino Unido', callingCode: '44' },
+  { iso: 'ES', flag: '🇪🇸', name: 'Espanha', callingCode: '34' },
+  { iso: 'IT', flag: '🇮🇹', name: 'Itália', callingCode: '39' },
+  { iso: 'FR', flag: '🇫🇷', name: 'França', callingCode: '33' },
+  { iso: 'DE', flag: '🇩🇪', name: 'Alemanha', callingCode: '49' },
+  { iso: 'JP', flag: '🇯🇵', name: 'Japão', callingCode: '81' },
+  { iso: 'CN', flag: '🇨🇳', name: 'China', callingCode: '86' },
+  { iso: 'AU', flag: '🇦🇺', name: 'Austrália', callingCode: '61' },
+  { iso: 'IE', flag: '🇮🇪', name: 'Irlanda', callingCode: '353' },
+  { iso: 'NL', flag: '🇳🇱', name: 'Países Baixos', callingCode: '31' },
+  { iso: 'CH', flag: '🇨🇭', name: 'Suíça', callingCode: '41' },
+  { iso: 'ZA', flag: '🇿🇦', name: 'África do Sul', callingCode: '27' },
+  { iso: 'AO', flag: '🇦🇴', name: 'Angola', callingCode: '244' },
+  { iso: 'MZ', flag: '🇲🇿', name: 'Moçambique', callingCode: '258' },
+  { iso: 'IL', flag: '🇮🇱', name: 'Israel', callingCode: '972' },
+  { iso: 'AE', flag: '🇦🇪', name: 'Emirados Árabes Unidos', callingCode: '971' },
+  { iso: 'IN', flag: '🇮🇳', name: 'Índia', callingCode: '91' },
+] as const
+
+type CepAddress = { street: string; neighborhood: string; city: string; state: string }
+
+async function fetchCepProvider(url: string, parentSignal: AbortSignal) {
+  const controller = new AbortController()
+  const abortFromParent = () => controller.abort()
+  parentSignal.addEventListener('abort', abortFromParent, { once: true })
+  if (parentSignal.aborted) controller.abort()
+  const timeout = window.setTimeout(() => controller.abort(), 4500)
+  try {
+    return await fetch(url, { signal: controller.signal })
+  } finally {
+    window.clearTimeout(timeout)
+    parentSignal.removeEventListener('abort', abortFromParent)
+  }
+}
+
+async function lookupCepAddress(value: string, signal: AbortSignal): Promise<CepAddress> {
+  const cep = value.replace(/\D/g, '')
+  const endpoints = [
+    { url: `https://brasilapi.com.br/api/cep/v2/${cep}`, read: (data: Record<string, unknown>) => ({ street: data.street, neighborhood: data.neighborhood, city: data.city, state: data.state }) },
+    { url: `https://viacep.com.br/ws/${cep}/json/`, read: (data: Record<string, unknown>) => ({ street: data.logradouro, neighborhood: data.bairro, city: data.localidade, state: data.uf }) },
+  ]
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetchCepProvider(endpoint.url, signal)
+      if (!response.ok) continue
+      const data = await response.json() as Record<string, unknown>
+      if (data.erro) continue
+      const address = endpoint.read(data)
+      const result = {
+        street: typeof address.street === 'string' ? address.street.trim() : '',
+        neighborhood: typeof address.neighborhood === 'string' ? address.neighborhood.trim() : '',
+        city: typeof address.city === 'string' ? address.city.trim() : '',
+        state: typeof address.state === 'string' ? address.state.trim() : '',
+      }
+      if (result.street || result.neighborhood || result.city || result.state) return result
+    } catch (error) {
+      if (signal.aborted) throw error
+    }
+  }
+  throw new Error('CEP não encontrado ou serviço indisponível.')
+}
+
+function formatCepAddress(address: CepAddress, cep: string) {
+  return [address.street, address.neighborhood, [address.city, address.state].filter(Boolean).join(' - '), cep]
+    .filter(Boolean)
+    .join(', ')
+}
 
 type Customer = {
   id: string
@@ -36,13 +118,101 @@ export function CustomersPage() {
   const [error, setError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [phone, setPhone] = useState('')
+  const [phoneCountryIso, setPhoneCountryIso] = useState('BR')
+  const [customPhoneCallingCode, setCustomPhoneCallingCode] = useState('')
+  const [phoneIsWhatsApp, setPhoneIsWhatsApp] = useState(false)
+  const [showDifferentWhatsapp, setShowDifferentWhatsapp] = useState(false)
   const [whatsappPhone, setWhatsappPhone] = useState('')
+  const [whatsappCountryIso, setWhatsappCountryIso] = useState('BR')
+  const [customWhatsappCallingCode, setCustomWhatsappCallingCode] = useState('')
+  const [showOptionalDetails, setShowOptionalDetails] = useState(false)
+  const [cep, setCep] = useState('')
+  const [cepStatus, setCepStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
+  const [cepResultAddress, setCepResultAddress] = useState('')
+  const [cepRetry, setCepRetry] = useState(0)
+  const [deliveryAddress, setDeliveryAddress] = useState('')
+  const [addressEdited, setAddressEdited] = useState(false)
   const [phoneMatches, setPhoneMatches] = useState<PhoneMatch[]>([])
   const [phoneLookupBusy, setPhoneLookupBusy] = useState(false)
   const [phoneLookupUnavailable, setPhoneLookupUnavailable] = useState(false)
   const [duplicateConfirmation, setDuplicateConfirmation] = useState('')
   const [lookupUnavailableConfirmed, setLookupUnavailableConfirmed] = useState(false)
   const phoneLookupSequence = useRef(0)
+  const addressEditedRef = useRef(false)
+  const phoneCountry = PHONE_COUNTRIES.find((country) => country.iso === phoneCountryIso)
+    ?? { iso: 'OTHER', flag: '🌐', name: 'Outro país', callingCode: customPhoneCallingCode.replace(/\D/g, '').slice(0, 3) }
+  const whatsappCountry = PHONE_COUNTRIES.find((country) => country.iso === whatsappCountryIso)
+    ?? { iso: 'OTHER', flag: '🌐', name: 'Outro país', callingCode: customWhatsappCallingCode.replace(/\D/g, '').slice(0, 3) }
+  const internationalPhone = toInternationalPhone(phoneCountry.callingCode, phone)
+  const internationalWhatsapp = phoneIsWhatsApp ? internationalPhone : toInternationalPhone(whatsappCountry.callingCode, whatsappPhone)
+
+  function clearPhoneLookupState() {
+    setDuplicateConfirmation('')
+    setLookupUnavailableConfirmed(false)
+    setPhoneMatches([])
+    setPhoneLookupUnavailable(false)
+    setPhoneLookupBusy(false)
+  }
+
+  function applyCepAddress() {
+    if (!cepResultAddress) return
+    setDeliveryAddress(cepResultAddress)
+    setAddressEdited(false)
+    addressEditedRef.current = false
+  }
+
+  const lookupPotentialDuplicates = useCallback(async () => {
+    if (!supabaseClient) return { data: [] as PhoneMatch[], error: new Error('Conexão indisponível.') }
+    const localPhone = phoneCountry.iso === 'BR' ? phone.replace(/\D/g, '') : internationalPhone
+    const localWhatsapp = phoneIsWhatsApp
+      ? localPhone
+      : whatsappCountry.iso === 'BR' ? whatsappPhone.replace(/\D/g, '') : internationalWhatsapp
+    const internationalRequest = supabaseClient.rpc('find_customer_phone_matches', { p_phone: internationalPhone, p_whatsapp_phone: internationalWhatsapp })
+    const localRequest = localPhone === internationalPhone && localWhatsapp === internationalWhatsapp
+      ? internationalRequest
+      : supabaseClient.rpc('find_customer_phone_matches', { p_phone: localPhone, p_whatsapp_phone: localWhatsapp })
+    const [internationalLookup, localLookup] = await Promise.all([internationalRequest, localRequest])
+    const error = internationalLookup.error ?? localLookup.error
+    const data = [...new Map([...(internationalLookup.data ?? []), ...(localLookup.data ?? [])].map((match) => [match.id, match])).values()] as PhoneMatch[]
+    return { data, error }
+  }, [internationalPhone, internationalWhatsapp, phone, phoneCountry.iso, phoneIsWhatsApp, whatsappCountry.iso, whatsappPhone])
+
+  // CEP is only sent to public Brazilian postal-code providers after all 8 digits are entered.
+  useEffect(() => {
+    const digits = cep.replace(/\D/g, '')
+    if (!showForm || digits.length !== 8) return
+    const controller = new AbortController()
+    let active = true
+    let abortTimeout: number | undefined
+    const timeout = window.setTimeout(async () => {
+      setCepStatus('loading')
+      setCepResultAddress('')
+      abortTimeout = window.setTimeout(() => controller.abort(), 10000)
+      try {
+        const address = await lookupCepAddress(digits, controller.signal)
+        if (!active) return
+        const formatted = formatCepAddress(address, digits)
+        setCepResultAddress(formatted)
+        if (!addressEditedRef.current) {
+          setDeliveryAddress(formatted)
+          setAddressEdited(false)
+          addressEditedRef.current = false
+        }
+        setCepStatus('success')
+      } catch {
+        if (!active) return
+        setCepStatus('error')
+      } finally {
+        window.clearTimeout(abortTimeout)
+      }
+    }, cepRetry ? 0 : 450)
+    return () => {
+      active = false
+      controller.abort()
+      window.clearTimeout(timeout)
+      if (abortTimeout !== undefined) window.clearTimeout(abortTimeout)
+    }
+  }, [cep, cepRetry, showForm])
 
   const loadCustomers = useCallback(async () => {
     if (!supabaseClient) {
@@ -73,26 +243,17 @@ export function CustomersPage() {
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadCustomers() }, [loadCustomers])
 
-  // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
-    const phoneDigits = phone.replace(/\D/g, '')
-    const whatsappDigits = whatsappPhone.replace(/\D/g, '')
+    const phoneDigits = internationalPhone.replace(/\D/g, '')
+    const whatsappDigits = internationalWhatsapp.replace(/\D/g, '')
     const hasSearchableNumber = [phoneDigits, whatsappDigits].some((digits) => digits.length >= 8 && digits.length <= 15)
-    if (!showForm || !hasSearchableNumber || !supabaseClient) {
-      setPhoneMatches([])
-      setPhoneLookupBusy(false)
-      setPhoneLookupUnavailable(false)
-      return
-    }
+    if (!showForm || !hasSearchableNumber || !supabaseClient) return
     let active = true
     const requestId = ++phoneLookupSequence.current
     const timeout = window.setTimeout(async () => {
       setPhoneLookupBusy(true)
       try {
-        const { data, error: lookupError } = await supabaseClient.rpc('find_customer_phone_matches', {
-          p_phone: phone,
-          p_whatsapp_phone: whatsappPhone,
-        })
+        const { data, error: lookupError } = await lookupPotentialDuplicates()
         if (!active || requestId !== phoneLookupSequence.current) return
         if (lookupError) {
           setPhoneMatches([])
@@ -113,14 +274,10 @@ export function CustomersPage() {
       active = false
       window.clearTimeout(timeout)
     }
-  }, [phone, phoneLookupSequence, showForm, whatsappPhone])
+  }, [internationalPhone, internationalWhatsapp, lookupPotentialDuplicates, phoneLookupSequence, showForm])
 
   const filteredCustomers = useMemo(() => {
-    const needle = search.trim().toLocaleLowerCase('pt-BR')
-    if (!needle) return customers
-    return customers.filter((customer) =>
-      `${customer.name} ${customer.phone ?? ''} ${customer.whatsapp_phone ?? ''}`.toLocaleLowerCase('pt-BR').includes(needle),
-    )
+    return searchCustomers(customers, search, customers.length)
   }, [customers, search])
   const phoneMatchSignature = phoneMatches.map((match) => match.id).sort().join('|')
 
@@ -129,28 +286,40 @@ export function CustomersPage() {
     if (!supabaseClient) return
     const form = new FormData(event.currentTarget)
     const name = String(form.get('name') ?? '').trim()
-    const whatsappPhone = String(form.get('whatsapp_phone') ?? '').trim()
-    const phone = String(form.get('phone') ?? '').trim()
+    const phoneWasEntered = phone.trim().length > 0
+    const whatsappWasEntered = showDifferentWhatsapp && whatsappPhone.trim().length > 0
+    const normalizedWhatsappPhone = internationalWhatsapp
+    const normalizedPhone = internationalPhone
     if (!name) {
       setSaveError('Informe o nome do cliente.')
       return
     }
-    if (whatsappPhone && !getWhatsAppChatUrl(whatsappPhone)) {
-      setSaveError('Informe o número começando com + e o código do país, por exemplo +55 21 99999-0000.')
+    if ((phoneCountry.iso === 'OTHER' && phoneWasEntered && !/^[1-9]\d{0,2}$/.test(phoneCountry.callingCode))
+      || (whatsappCountry.iso === 'OTHER' && whatsappWasEntered && !/^[1-9]\d{0,2}$/.test(whatsappCountry.callingCode))) {
+      setSaveError('Informe o DDI com até três dígitos para o país selecionado.')
+      return
+    }
+    if (normalizedWhatsappPhone && !getWhatsAppChatUrl(normalizedWhatsappPhone)) {
+      setSaveError('Confira o telefone e o código do país selecionados.')
+      return
+    }
+    const enteredNumbers = [normalizedPhone, normalizedWhatsappPhone].filter(Boolean)
+    if (enteredNumbers.some((value) => {
+      const digits = value.replace(/\D/g, '')
+      return digits.length < 8 || digits.length > 15
+    })) {
+      setSaveError('Confira o DDD e o número. O telefone precisa ter entre 8 e 15 dígitos com o código do país.')
       return
     }
 
-    const phoneDigits = phone.replace(/\D/g, '')
-    const whatsappDigits = whatsappPhone.replace(/\D/g, '')
+    const phoneDigits = normalizedPhone.replace(/\D/g, '')
+    const whatsappDigits = normalizedWhatsappPhone.replace(/\D/g, '')
     const hasSearchableNumber = [phoneDigits, whatsappDigits].some((digits) => digits.length >= 8 && digits.length <= 15)
     if (hasSearchableNumber && !lookupUnavailableConfirmed) {
       setSaving(true)
       setSaveError(null)
       try {
-        const { data, error: lookupError } = await supabaseClient.rpc('find_customer_phone_matches', {
-          p_phone: phone,
-          p_whatsapp_phone: whatsappPhone,
-        })
+        const { data, error: lookupError } = await lookupPotentialDuplicates()
         if (lookupError) {
           setPhoneLookupUnavailable(true)
           if (!lookupUnavailableConfirmed) {
@@ -158,7 +327,7 @@ export function CustomersPage() {
             return
           }
         } else {
-          const matches = (data ?? []) as PhoneMatch[]
+          const matches = data
           const signature = matches.map((match) => match.id).sort().join('|')
           setPhoneMatches(matches)
           setPhoneLookupUnavailable(false)
@@ -187,9 +356,9 @@ export function CustomersPage() {
         .insert({
           business_id: businessId,
           name,
-          phone: phone || null,
-          whatsapp_phone: whatsappPhone || null,
-          delivery_address: String(form.get('delivery_address') ?? '').trim() || null,
+          phone: normalizedPhone || null,
+          whatsapp_phone: normalizedWhatsappPhone || null,
+          delivery_address: deliveryAddress.trim() || null,
           notes: String(form.get('notes') ?? '').trim() || null,
         })
         .select('id')
@@ -215,7 +384,7 @@ export function CustomersPage() {
           <h1>Clientes</h1>
           <p className="page-description">Cadastros, contatos e histórico de relacionamento.</p>
         </div>
-        <button className="button button-primary" disabled={saving} onClick={() => { setShowForm((value) => !value); setSaveError(null); setDuplicateConfirmation(''); setLookupUnavailableConfirmed(false); setPhoneMatches([]); setPhoneLookupUnavailable(false); setPhone(''); setWhatsappPhone('') }} type="button">
+        <button className="button button-primary" disabled={saving} onClick={() => { setShowForm((value) => !value); setSaveError(null); clearPhoneLookupState(); setPhone(''); setPhoneCountryIso('BR'); setCustomPhoneCallingCode(''); setPhoneIsWhatsApp(false); setShowDifferentWhatsapp(false); setWhatsappPhone(''); setWhatsappCountryIso('BR'); setCustomWhatsappCallingCode(''); setShowOptionalDetails(false); setCep(''); setCepStatus('idle'); setCepResultAddress(''); setDeliveryAddress(''); setAddressEdited(false); addressEditedRef.current = false }} type="button">
           <Icon name="plus" /> {showForm ? 'Fechar' : 'Novo cliente'}
         </button>
       </header>
@@ -230,23 +399,55 @@ export function CustomersPage() {
               <span className="field-label">Nome <span aria-hidden="true">*</span></span>
               <input autoFocus className="text-input" disabled={saving} maxLength={160} name="name" required />
             </label>
-            <label className="record-field">
-              <span className="field-label">Telefone <span className="field-optional">opcional</span></span>
-              <input autoComplete="tel" className="text-input" disabled={saving} maxLength={64} name="phone" onChange={(event) => { setPhone(event.target.value); setDuplicateConfirmation(''); setLookupUnavailableConfirmed(false); setPhoneMatches([]); setPhoneLookupUnavailable(false); setPhoneLookupBusy(false) }} type="tel" value={phone} />
-            </label>
-            <label className="record-field">
-              <span className="field-label">WhatsApp <span className="field-optional">opcional</span></span>
-              <input autoComplete="tel" className="text-input" disabled={saving} maxLength={64} name="whatsapp_phone" onChange={(event) => { setWhatsappPhone(event.target.value); setDuplicateConfirmation(''); setLookupUnavailableConfirmed(false); setPhoneMatches([]); setPhoneLookupUnavailable(false); setPhoneLookupBusy(false) }} placeholder="+55 21 99999-0000" type="tel" value={whatsappPhone} />
-              <span className="customer-whatsapp-hint">Use +55 e DDD no Brasil; para outros países, informe + e o DDI.</span>
-            </label>
-            <label className="record-field record-field-wide">
-              <span className="field-label">Endereço de entrega <span className="field-optional">opcional</span></span>
-              <input className="text-input" disabled={saving} maxLength={1000} name="delivery_address" />
-            </label>
-            <label className="record-field record-field-wide">
-              <span className="field-label">Observações <span className="field-optional">opcional</span></span>
-              <textarea className="text-input record-textarea" disabled={saving} maxLength={4000} name="notes" rows={3} />
-            </label>
+            <div className="record-field record-field-wide">
+              <span className="field-label" id="customer-phone-label">Telefone <span className="field-optional">opcional</span></span>
+              <div className={`customer-phone-row${phoneCountry.iso === 'OTHER' ? ' customer-phone-row-custom' : ''}`}>
+                <label className="visually-hidden" htmlFor="customer-phone-country">País do telefone</label>
+                <select className="text-input customer-country-select" disabled={saving} id="customer-phone-country" onChange={(event) => { setPhoneCountryIso(event.target.value); clearPhoneLookupState() }} value={phoneCountry.iso}>
+                  {PHONE_COUNTRIES.map((country) => <option key={country.iso} value={country.iso}>{country.flag} {country.name} (+{country.callingCode})</option>)}
+                  <option value="OTHER">🌐 Outro país</option>
+                </select>
+                {phoneCountry.iso === 'OTHER' && <input aria-label="Código do país" className="text-input customer-calling-code" disabled={saving} inputMode="numeric" maxLength={3} onChange={(event) => { setCustomPhoneCallingCode(event.target.value); clearPhoneLookupState() }} placeholder="DDI" value={customPhoneCallingCode} />}
+                <input aria-labelledby="customer-phone-label" autoComplete="tel-national" className="text-input" disabled={saving} inputMode="tel" maxLength={32} onChange={(event) => { setPhone(event.target.value); clearPhoneLookupState() }} placeholder="DDD + número" type="tel" value={phone} />
+              </div>
+              <span className="customer-whatsapp-hint">{phoneCountry.flag} +{phoneCountry.callingCode} · informe o DDD e o número.</span>
+            </div>
+            <label className="record-checkbox record-field-wide customer-same-whatsapp"><input checked={phoneIsWhatsApp} disabled={saving || !phone.trim()} onChange={(event) => { setPhoneIsWhatsApp(event.target.checked); clearPhoneLookupState() }} type="checkbox" /><span><strong>Este telefone também é WhatsApp</strong><small>O mesmo número será salvo nos dois campos.</small></span></label>
+            {!phoneIsWhatsApp && !showDifferentWhatsapp && <div className="record-field record-field-wide"><button className="text-button customer-add-whatsapp" onClick={() => setShowDifferentWhatsapp(true)} type="button">Adicionar número de WhatsApp diferente</button></div>}
+            {!phoneIsWhatsApp && showDifferentWhatsapp && <div className="record-field record-field-wide">
+              <span className="field-label" id="customer-whatsapp-label">WhatsApp diferente <span className="field-optional">opcional</span></span>
+              <div className={`customer-phone-row${whatsappCountry.iso === 'OTHER' ? ' customer-phone-row-custom' : ''}`}>
+                <label className="visually-hidden" htmlFor="customer-whatsapp-country">País do WhatsApp</label>
+                <select className="text-input customer-country-select" disabled={saving} id="customer-whatsapp-country" onChange={(event) => { setWhatsappCountryIso(event.target.value); clearPhoneLookupState() }} value={whatsappCountry.iso}>
+                  {PHONE_COUNTRIES.map((country) => <option key={country.iso} value={country.iso}>{country.flag} {country.name} (+{country.callingCode})</option>)}
+                  <option value="OTHER">🌐 Outro país</option>
+                </select>
+                {whatsappCountry.iso === 'OTHER' && <input aria-label="Código do país do WhatsApp" className="text-input customer-calling-code" disabled={saving} inputMode="numeric" maxLength={3} onChange={(event) => { setCustomWhatsappCallingCode(event.target.value); clearPhoneLookupState() }} placeholder="DDI" value={customWhatsappCallingCode} />}
+                <input aria-labelledby="customer-whatsapp-label" autoComplete="tel-national" className="text-input" disabled={saving} inputMode="tel" maxLength={32} onChange={(event) => { setWhatsappPhone(event.target.value); clearPhoneLookupState() }} placeholder="DDD + número" type="tel" value={whatsappPhone} />
+              </div>
+            </div>}
+            <div className="record-field record-field-wide customer-optional-details">
+              <button aria-expanded={showOptionalDetails} className="text-button" onClick={() => setShowOptionalDetails((value) => !value)} type="button">{showOptionalDetails ? 'Ocultar endereço e observações' : 'Adicionar endereço ou observações'}</button>
+              {showOptionalDetails && <div className="record-form-grid customer-optional-grid">
+                <label className="record-field record-field-wide">
+                  <span className="field-label">CEP <span className="field-optional">opcional</span></span>
+                  <input autoComplete="postal-code" className="text-input" disabled={saving} inputMode="numeric" maxLength={9} onChange={(event) => { if (cepResultAddress && !addressEditedRef.current) { setDeliveryAddress(''); setAddressEdited(false) } setCep(event.target.value); setCepRetry(0); setCepStatus('idle'); setCepResultAddress('') }} placeholder="00000-000" value={cep} />
+                  <span className="customer-whatsapp-hint">Ao informar os 8 dígitos, buscamos rua, bairro e cidade. O CEP é enviado somente a serviços públicos de consulta.</span>
+                </label>
+                {cepStatus === 'loading' && <p className="inline-state" aria-live="polite">Buscando endereço pelo CEP…</p>}
+                {cepStatus === 'error' && <div className="form-message form-message-warning" role="status"><span>Não foi possível localizar este CEP. {addressEdited ? 'Seu endereço digitado foi mantido.' : 'Você pode digitar o endereço normalmente.'}</span><button className="text-button" onClick={() => setCepRetry((value) => value + 1)} type="button">Tentar novamente</button></div>}
+                {cepStatus === 'success' && addressEdited && <div className="form-message form-message-success" role="status"><span>Encontramos o endereço para este CEP.</span><button className="text-button" onClick={applyCepAddress} type="button">Usar endereço encontrado</button></div>}
+                {cepStatus === 'success' && !addressEdited && <p className="section-footnote" role="status">Endereço preenchido. Confira e complete número e complemento.</p>}
+                <label className="record-field record-field-wide">
+                  <span className="field-label">Endereço de entrega <span className="field-optional">opcional</span></span>
+                  <textarea autoComplete="street-address" className="text-input record-textarea" disabled={saving} maxLength={1000} onChange={(event) => { setDeliveryAddress(event.target.value); setAddressEdited(true); addressEditedRef.current = true }} placeholder="Rua, número, bairro, cidade e complemento" rows={2} value={deliveryAddress} />
+                </label>
+                <label className="record-field record-field-wide">
+                  <span className="field-label">Observações <span className="field-optional">opcional</span></span>
+                  <textarea className="text-input record-textarea" disabled={saving} maxLength={4000} name="notes" rows={3} />
+                </label>
+              </div>}
+            </div>
           </div>
           {phoneLookupBusy && <p className="inline-state" aria-live="polite">Conferindo se já existe um cadastro com estes números…</p>}
           {phoneMatches.length > 0 && <div className="form-message form-message-warning" role="status">
