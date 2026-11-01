@@ -45,10 +45,10 @@ Revisar esses casos por leitura da função SQL, aplicação da migração local
 - Aceita somente intervalo inclusivo de 1 a 30 dias, sem data final futura no fuso `America/Sao_Paulo`.
 - Só usuários autenticados autorizados pelo mesmo limite de empresa usado nas RPCs atuais do dashboard podem executar.
 
-- [ ] Criar a função SQL com `SECURITY DEFINER`, `search_path = ''`, referências totalmente qualificadas, validação de entrada e revogação/grant compatíveis com as funções de relatório existentes.
-- [ ] Gerar as datas do período e agregar `orders.created_at`, `order_payments.received_at` e `financial_outflows.paid_on` separadamente; converter timestamps para `America/Sao_Paulo`, excluir saídas anuladas e preencher dias vazios com zero.
-- [ ] Revisar a migração e aplicá-la somente à instância Supabase local; conferir retorno em dias vazios e a cobertura das permissões por leitura do SQL. Não consultar dados reais nem aplicar migration remota.
-- [ ] Fazer commit somente da migration após autorrevisão; não enviar para o remoto antes da revisão integrada.
+- [x] Criar a função SQL com `SECURITY DEFINER`, `search_path = ''`, referências totalmente qualificadas, validação de entrada e revogação/grant compatíveis com as funções de relatório existentes.
+- [x] Gerar as datas do período e agregar `orders.created_at`, `order_payments.received_at` e `financial_outflows.paid_on` separadamente; converter timestamps para `America/Sao_Paulo`, excluir saídas anuladas e preencher dias vazios com zero.
+- [x] Revisar a migração e aplicá-la somente à instância Supabase local; conferir retorno em dias vazios e a cobertura das permissões por leitura do SQL. Não consultar dados reais nem aplicar migration remota.
+- [x] Fazer commit somente da migration após autorrevisão; não enviar para o remoto antes da revisão integrada.
 
 ### Task 2: Tendências na página Início
 
@@ -72,7 +72,7 @@ Revisar esses casos por leitura da função SQL, aplicação da migração local
 
 **Arquivos:** somente os três arquivos de produto e a migração descritos acima, além destes documentos de especificação/plano.
 
-- [ ] Revisar o diff contra os critérios de aceite; pedir revisão read-only ao especialista de produto e ao especialista de segurança de aplicação.
-- [ ] Abrir o painel local em tema claro e escuro e inspecionar a composição visual, a alternância 7/30 dias e os estados sem dados/erro disponíveis sem expor dados empresariais reais.
-- [ ] Confirmar que não há novos testes executados nem alterações alheias à tarefa.
-- [ ] Fazer revisão integrada, enviar os commits da branch de trabalho e integrá-los em `main`, preservando somente arquivos desta tarefa.
+- [x] Revisar o diff contra os critérios de aceite; pedir revisão read-only ao especialista de produto e ao especialista de segurança de aplicação.
+- [x] Abrir o painel local em tema claro e escuro e inspecionar a composição visual, a alternância 7/30 dias e os estados sem dados/erro disponíveis sem expor dados empresariais reais.
+- [x] Confirmar que não há novos testes executados nem alterações alheias à tarefa.
+- [x] Fazer revisão integrada, enviar os commits da branch de trabalho e integrá-los em `main`, preservando somente arquivos desta tarefa.
