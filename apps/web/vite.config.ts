@@ -13,6 +13,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    server: {
+      host: '127.0.0.1',
+      port: 3000,
+      strictPort: true,
+    },
     // Do not expose arbitrary VITE_ values. Only inject validated public Supabase config.
     envPrefix: [],
     define: {

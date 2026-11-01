@@ -50,6 +50,23 @@ if ($supabaseProcess.ExitCode -ne 0) {
     throw "Local Supabase did not start (exit code $($supabaseProcess.ExitCode)). No credentials were displayed."
 }
 
-Write-Host 'Local Supabase is ready. Starting the app at http://127.0.0.1:5173/.'
-& $npm run dev --workspace=web -- --host 127.0.0.1 --strictPort
+$webEnvFile = Join-Path $repoRoot 'apps\web\.env.local'
+$frontendSupabaseUrl = ''
+$urlSetting = Get-Content -LiteralPath $webEnvFile | Where-Object { $_ -match '^\s*VITE_SUPABASE_URL=' } | Select-Object -First 1
+if ($urlSetting -match '^\s*VITE_SUPABASE_URL=(.*)$') {
+    $frontendSupabaseUrl = $Matches[1].Trim().Trim('"')
+}
+
+if (-not $frontendSupabaseUrl) {
+    $frontendTarget = 'not configured'
+} elseif ($frontendSupabaseUrl -match '^https?://(localhost|127\.0\.0\.1)(:\d+)?(?:/|$)') {
+    $frontendTarget = 'local Supabase'
+} else {
+    $frontendTarget = 'hosted/remote Supabase'
+}
+
+Write-Host 'Local Supabase is ready.'
+Write-Host "The frontend database target is controlled by apps/web/.env.local (currently $frontendTarget); starting the local stack does not change it."
+Write-Host 'Starting the app at http://127.0.0.1:3000/.'
+& $npm run dev --workspace=web -- --host 127.0.0.1 --port 3000 --strictPort
 exit $LASTEXITCODE

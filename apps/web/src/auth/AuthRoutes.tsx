@@ -23,6 +23,7 @@ const WhatsAppInboxPage = lazy(async () => ({ default: (await import('../pages/W
 const MorePage = lazy(async () => ({ default: (await import('../pages/ModulePage')).MorePage }))
 const SettingsPage = lazy(async () => ({ default: (await import('../pages/SettingsPage')).SettingsPage }))
 const SignInPage = lazy(async () => ({ default: (await import('../pages/SignInPage')).SignInPage }))
+const SignUpPage = lazy(async () => ({ default: (await import('../pages/SignUpPage')).SignUpPage }))
 const PasswordRecoveryPage = lazy(async () => ({ default: (await import('../pages/SignInPage')).PasswordRecoveryPage }))
 
 export function AuthRoutes() {
@@ -37,6 +38,7 @@ export function AuthRoutes() {
       <Suspense fallback={<LoadingScreen label="Abrindo a operação" />}>
         <Routes>
           <Route path="/redefinir-senha" element={<PasswordRecoveryPage />} />
+          <Route path="/criar-conta" element={<SignUpPage />} />
           <Route path="/entrar" element={session ? <Navigate replace to="/" /> : <SignInPage />} />
           <Route element={session ? <BusinessProvider><AppShell /></BusinessProvider> : <Navigate replace to="/entrar" />}>
             <Route index element={<DashboardPage />} />

@@ -134,7 +134,8 @@ export function SignInPage() {
             {isRecovery ? 'Voltar para entrar' : 'Esqueci minha senha'}
           </button>
 
-          <p className="auth-support">O acesso é criado pela pessoa responsável pelo sistema.</p>
+          {!isRecovery && <Link className="auth-mode-toggle" to="/criar-conta">Criar conta e pedir acesso</Link>}
+          <p className="auth-support">A gestão aprova novos pedidos antes de liberar os dados da empresa.</p>
         </div>
       </section>
     </main>
