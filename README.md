@@ -1,53 +1,62 @@
 # Shalom Adonai — Operations
 
-Private operations workspace for the owner of Shalom Adonai. The application is a separate product from the commercial proposal site.
+Private operations workspace for Shalom Adonai. Team accounts can be created by email and password; a new account receives business access only after the owner approves its request.
 
 ## Local setup
 
-Requirements: Node.js 24 LTS (or a newer supported LTS release), npm, and Docker for the local Supabase stack.
+Requirements: Node.js 24 LTS (or a newer supported LTS release), npm, and Docker or Podman for the local Supabase stack.
 
 ```bash
 npm install
 cp apps/web/.env.example apps/web/.env.local
+```
+
+After copying the example, replace its URL and publishable-key placeholders in `apps/web/.env.local` with real values for the database you intend to use before starting Vite. Only a publishable/legacy `anon` key belongs in the browser; never place a service-role key, secret key, database password, or provider credential in a `VITE_` variable.
+
+```bash
 npm run dev
 ```
 
-Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in `apps/web/.env.local`. These values identify the Supabase project and are intentionally public browser configuration. Never add a service-role key, secret key, database password, or provider credential to a `VITE_` variable or browser bundle.
+The canonical local app URL is `http://127.0.0.1:3000`. `http://localhost:3000` is a different browser origin; password-recovery allowlists must include the exact origin and `/redefinir-senha` path that you use. The local CLI configuration allows both origins.
 
-The app does not provide public registration. Create the owner account through the Supabase project’s trusted admin setup, disable public sign-ups in Auth settings, and configure the allowed redirect URLs for local and production environments. Include the exact `/redefinir-senha` path for each hostname in the Supabase Auth redirect allowlist; the local CLI config already includes both localhost forms. Password recovery also depends on working email delivery for the Supabase project.
+**On this development machine, the current `apps/web/.env.local` points to the hosted Shalom Adonai Supabase project.** This ignored, unversioned file may differ on another machine. Opening the interface at `http://127.0.0.1:3000` runs the web app locally but does not make its database local: reads and writes still go to whichever URL is in `.env.local`. The `supabase/config.toml` file configures only the local Supabase CLI stack; its `project_id` does not connect the CLI or app to the hosted project. Keep local and hosted URLs/keys distinct when testing data changes.
 
-## Database
+The application supports email/password sign-up. Each new account creates an access request; it cannot read business records until the owner approves it. The local CLI configuration allows sign-up and disables email confirmation to match the current Auth flow. These local settings do not change Auth settings on the hosted project. Password recovery builds its callback from the current browser origin and `/redefinir-senha`; on the hosted project, allow the exact origin you use (`http://127.0.0.1:3000` or `http://localhost:3000`) and the production origin, and configure working email delivery.
 
-The SQL migrations in `supabase/migrations/` are the versioned source for the database schema. Install the current Supabase CLI, then run:
+## Local database
+
+These commands start and reset only the local database. `db reset` reapplies the migrations and does not copy hosted users, the business, or operating records:
 
 ```bash
 npx supabase start
 npx supabase db reset
+npx supabase status
 ```
 
-These commands use only the local development stack. Do not run `db push`, `db reset --linked`, or other remote database commands until the correct non-production or production project has been identified and explicitly configured.
+To use this local database from the web app, set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in `apps/web/.env.local` to the local API URL and local publishable/`anon` key shown by `supabase status`, then restart Vite. To return to the hosted project, restore its URL and publishable key. Never use a hosted service-role or secret key in the app.
 
-For a fresh project, provision the owner's Auth account first. Then, in the trusted Supabase SQL Editor, create the initial business and owner membership with the Auth user UUID:
+A fresh local reset has no Auth users, Shalom Adonai business, or operational records. The public sign-up screen first looks up the business to which the account is requesting access. For an isolated local sign-up test, first create a throwaway local Auth user in the local Supabase Studio, then create its local business as that user's owner using the trusted local SQL Editor:
 
 ```sql
 insert into public.businesses (name, timezone, currency, created_by)
-values ('Shalom Adonai', 'America/Sao_Paulo', 'BRL', '<owner-auth-user-uuid>')
+values ('Shalom Adonai', 'America/Sao_Paulo', 'BRL', '<local-owner-auth-user-uuid>')
 returning id;
 ```
 
-Run this through the trusted Supabase SQL Editor after replacing the placeholder with the owner's real Auth UUID. The migration creates the matching owner membership automatically in the same transaction. No client records, stock, or financial data are seeded by this repository.
+The migration creates the matching owner membership automatically. Use a UUID from the local Auth instance only; this bootstrap is for the local database and is not needed for the already provisioned hosted business. Do not run `db push`, `db reset --linked`, or other remote database commands for this local setup.
 
 ## Commands
 
 ```bash
-npm run dev
 npm run lint
 npm run build
 npm run preview
 ```
 
-## Current setup status
+## Current setup status — 2026-11-01
 
-The repository includes the application/auth foundation, owner-managed customer and product records with optional private product photos, manual call history, follow-up queue, orders and receivables, stock tracking, physical purchase receipts, combo component snapshots, delivery assignments, explicit customer pickup, paid outflows and managerial reports. The owner dashboard surfaces follow-ups, due and overdue installment balances, delivery work due for attention, and stock below configured minimums or with a negative balance. The finance area has a manual bank-movement and reconciliation foundation: accounts, signed movements, exact one-to-one matching, duplicate flags, and correction history. Bank movements must be transcribed from a source; this does not connect to Open Finance or import statement files. Only orders marked for delivery enter the delivery queue; customer pickup is confirmed from the order and deducts tracked stock at handoff.
+The hosted Supabase project is `ACTIVE_HEALTHY`. Hosted Auth currently allows email sign-up and auto-confirms email; new accounts still receive no business data access until the owner approves their request. The owner's confirmed Auth account, Shalom Adonai business, and owner membership are present. All 22 migrations in `supabase/migrations/` have been applied to the hosted project. `supabase/config.toml` describes the local CLI stack; it does not configure the hosted project's Auth or database.
 
-The Free Supabase project `shalom-adonai` (`mnsfdcqcsluhqtzqiiun`, `sa-east-1`) is active, and all 18 repository migrations have been applied. `supabase/config.toml` points to that project. Browser configuration belongs in `apps/web/.env.local`; use the publishable key only, and keep all environment files out of Git. The first owner Auth account and business record still need to be created using the trusted setup above. Until then, the application can connect to Supabase but has no authorized operator or business to load. Email delivery, a stable production hostname and redirects, hosting, bank/fiscal/WhatsApp providers, and historical source records also remain to be configured. The interface is not production-ready until the acceptance checks in `docs/technical-plan.md` are verified end to end.
+The repository already includes customer and product records, optional private product photos, manual call history and follow-ups, orders and receivables, stock tracking and physical purchase receipts, combo component snapshots, delivery assignments and explicit customer pickup, paid outflows, managerial reports, and manual bank-movement reconciliation. No demonstration customer, stock, order, or financial records are seeded; the owner will provide and enter operational data progressively using the existing forms. Bank movements are transcribed manually: Open Finance and statement-file import are not connected.
+
+Stable production hosting and domain, hosted Auth redirects and recovery email delivery, end-to-end verification of the hosted schema and permissions, and the WhatsApp, banking, and fiscal provider integrations remain to be completed. WhatsApp number onboarding is intentionally deferred; fiscal details require the accountant's guidance. The temporary preview is for review, not production.
