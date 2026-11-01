@@ -277,6 +277,27 @@ export function OrderDetailPage() {
     paymentRequestIdRef.current = newRequestId()
   }
 
+  function suggestOldestFirstAllocation() {
+    if (parsedPaymentAmount === null || Number.isNaN(parsedPaymentAmount) || parsedPaymentAmount <= 0) {
+      setPaymentError('Informe primeiro um valor recebido positivo para sugerir a distribuição.')
+      return
+    }
+    let remaining = parsedPaymentAmount
+    const nextDraft = Object.fromEntries(installments.map((installment) => [installment.id, ''])) as Record<string, string>
+    const oldestFirst = [...installments].sort((left, right) =>
+      left.due_on.localeCompare(right.due_on) || left.installment_number - right.installment_number,
+    )
+    for (const installment of oldestFirst) {
+      const balance = Math.max(0, installment.amount_cents - (paidByInstallment.get(installment.id) ?? 0))
+      if (balance <= 0 || remaining <= 0) continue
+      const allocated = Math.min(balance, remaining)
+      nextDraft[installment.id] = `${Math.floor(allocated / 100)},${String(allocated % 100).padStart(2, '0')}`
+      remaining -= allocated
+    }
+    setAllocationDraft(nextDraft)
+    setPaymentError(null)
+  }
+
   async function previewPickupStock() {
     if (!supabaseClient || !order) return
     setPickupPreviewLoading(true)
@@ -543,7 +564,7 @@ export function OrderDetailPage() {
       {showPaymentForm && order.status === 'open' && (
         <form className="surface-panel record-form" onSubmit={handlePaymentSubmit}>
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">RECEBIMENTO MANUAL</p><h2>Registrar valor recebido</h2></div><button className="text-button" disabled={paymentSaving || paymentUncertain} onClick={closePaymentForm} type="button">Fechar</button></div>
-          <p className="section-footnote order-payment-hint">Este registro anota um recebimento informado por você. Não processa o pagamento. Distribua o valor recebido pelos vencimentos escolhidos; não há destinação automática.</p>
+          <p className="section-footnote order-payment-hint">Este registro anota um recebimento informado por você. Não processa o pagamento. A sugestão abaixo é editável e não salva nada até você confirmar o recebimento.</p>
           <div className="record-form-grid">
             <label className="record-field"><span className="field-label">Valor recebido <span aria-hidden="true">*</span></span><input className="text-input" disabled={paymentSaving || paymentUncertain} inputMode="decimal" onChange={(event) => setPaymentAmount(event.target.value)} placeholder="0,00" ref={paymentAmountInputRef} value={paymentAmount} /></label>
             <label className="record-field"><span className="field-label">Recebido em <span className="field-optional">Horário de Brasília; em branco = agora</span></span><input className="text-input" disabled={paymentSaving || paymentUncertain} onChange={(event) => setReceivedAt(event.target.value)} type="datetime-local" value={receivedAt} /></label>
@@ -551,7 +572,8 @@ export function OrderDetailPage() {
             <label className="record-field"><span className="field-label">Observações <span className="field-optional">opcional</span></span><input className="text-input" disabled={paymentSaving || paymentUncertain} maxLength={1000} onChange={(event) => setPaymentNotes(event.target.value)} value={paymentNotes} /></label>
           </div>
           <div className="order-allocation-panel">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">DESTINAÇÃO MANUAL</p><h3>Como o valor se distribui</h3></div><span className="neutral-status">{formatBRL(selectedAllocationTotal)}</span></div>
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">DESTINAÇÃO DO RECEBIMENTO</p><h3>Como o valor se distribui</h3></div><span className="neutral-status">{formatBRL(selectedAllocationTotal)}</span></div>
+          <button className="button button-secondary" disabled={paymentSaving || paymentUncertain} onClick={suggestOldestFirstAllocation} type="button">Sugerir por vencimento, mais antigas primeiro</button>
             {installments.map((installment) => {
               const balance = installment.amount_cents - (paidByInstallment.get(installment.id) ?? 0)
               if (balance <= 0) return null
