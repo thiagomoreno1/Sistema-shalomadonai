@@ -9,6 +9,7 @@ type Customer = { id: string; name: string; delivery_address: string | null }
 type Product = { id: string; name: string; inventory_unit: string | null; sale_price_cents: number | null }
 type ItemDraft = { key: string; productId: string; quantity: string }
 type InstallmentDraft = { key: string; amount: string; dueOn: string; paymentMethod: string }
+type OrderCopySummary = { customerName: string; copiedItems: number; skippedItems: number }
 
 function newKey() {
   return crypto.randomUUID()
@@ -51,10 +52,13 @@ export function NewOrderPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const requestedCustomerId = searchParams.get('cliente') ?? ''
+  const sourceOrderId = searchParams.get('origem') ?? ''
   const [customers, setCustomers] = useState<Customer[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [loadingChoices, setLoadingChoices] = useState(true)
   const [choiceError, setChoiceError] = useState<string | null>(null)
+  const [orderCopySummary, setOrderCopySummary] = useState<OrderCopySummary | null>(null)
+  const [orderCopyWarning, setOrderCopyWarning] = useState<string | null>(null)
   const [customerId, setCustomerId] = useState(requestedCustomerId)
   const [requiresDelivery, setRequiresDelivery] = useState(false)
   const [deliveryAddress, setDeliveryAddress] = useState('')
@@ -67,15 +71,19 @@ export function NewOrderPage() {
   const [uncertain, setUncertain] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const requestIdRef = useRef(newKey())
+  const choicesRequestIdRef = useRef(0)
   const disabled = saving || uncertain
 
   const loadChoices = useCallback(async () => {
+    const requestId = ++choicesRequestIdRef.current
     if (!supabaseClient) {
       setChoiceError('A conexão da empresa não está disponível.')
       setLoadingChoices(false)
       return
     }
     setLoadingChoices(true)
+    setOrderCopySummary(null)
+    setOrderCopyWarning(null)
     try {
       const [customersResult, productsResult] = await Promise.all([
         supabaseClient.from('customers').select('id, name, delivery_address')
@@ -84,25 +92,78 @@ export function NewOrderPage() {
           .eq('business_id', businessId).eq('is_active', true).not('sale_price_cents', 'is', null)
           .order('name', { ascending: true }),
       ])
+      if (requestId !== choicesRequestIdRef.current) return
       if (customersResult.error || productsResult.error) {
         setChoiceError('Não foi possível carregar clientes e produtos ativos. Tente novamente.')
         return
       }
       const activeCustomers = (customersResult.data ?? []) as Customer[]
+      const activeProducts = (productsResult.data ?? []) as Product[]
       setCustomers(activeCustomers)
-      setProducts((productsResult.data ?? []) as Product[])
+      setProducts(activeProducts)
       const preselectedCustomer = activeCustomers.find((customer) => customer.id === requestedCustomerId)
-      if (preselectedCustomer) setDeliveryAddress(preselectedCustomer.delivery_address ?? '')
+      if (!sourceOrderId && preselectedCustomer) setDeliveryAddress(preselectedCustomer.delivery_address ?? '')
       setChoiceError(null)
+
+      if (sourceOrderId) {
+        try {
+          const { data: sourceOrder, error: sourceOrderError } = await supabaseClient.from('orders')
+            .select('id, customer_id, status')
+            .eq('business_id', businessId).eq('id', sourceOrderId).maybeSingle()
+          if (requestId !== choicesRequestIdRef.current) return
+          if (sourceOrderError || !sourceOrder) {
+            setOrderCopyWarning('Não foi possível usar esse pedido como base. Você pode continuar com um pedido novo.')
+            return
+          }
+          if (sourceOrder.status !== 'open') {
+            setOrderCopyWarning('Pedidos cancelados não podem ser repetidos. Você pode continuar com um pedido novo.')
+            return
+          }
+
+          const sourceCustomer = activeCustomers.find((customer) => customer.id === sourceOrder.customer_id)
+          if (!sourceCustomer) {
+            setOrderCopyWarning('O cliente do pedido original não está ativo. Selecione um cliente para continuar manualmente.')
+            return
+          }
+
+          const { data: sourceLines, error: sourceLinesError } = await supabaseClient.from('order_lines')
+            .select('product_id, quantity')
+            .eq('business_id', businessId).eq('order_id', sourceOrderId).order('line_number', { ascending: true })
+          if (requestId !== choicesRequestIdRef.current) return
+          if (sourceLinesError || !sourceLines || sourceLines.length === 0) {
+            setOrderCopyWarning('Não foi possível carregar os itens do pedido original. Você pode continuar com um pedido novo.')
+            return
+          }
+
+          const activeProductIds = new Set(activeProducts.map((product) => product.id))
+          const copiedItems = sourceLines
+            .filter((line) => activeProductIds.has(line.product_id))
+            .map((line) => ({ key: newKey(), productId: line.product_id, quantity: String(line.quantity) }))
+          if (copiedItems.length === 0) {
+            setOrderCopyWarning('Os produtos do pedido original não estão mais ativos com preço no catálogo. Você pode continuar com um pedido novo.')
+            return
+          }
+
+          setCustomerId(sourceCustomer.id)
+          setDeliveryAddress(sourceCustomer.delivery_address ?? '')
+          setItems(copiedItems)
+          setOrderCopySummary({ customerName: sourceCustomer.name, copiedItems: copiedItems.length, skippedItems: sourceLines.length - copiedItems.length })
+        } catch {
+          if (requestId === choicesRequestIdRef.current) setOrderCopyWarning('Não foi possível carregar o pedido original. Você pode continuar com um pedido novo.')
+        }
+      }
     } catch {
-      setChoiceError('Não foi possível carregar clientes e produtos ativos. Tente novamente.')
+      if (requestId === choicesRequestIdRef.current) setChoiceError('Não foi possível carregar clientes e produtos ativos. Tente novamente.')
     } finally {
-      setLoadingChoices(false)
+      if (requestId === choicesRequestIdRef.current) setLoadingChoices(false)
     }
-  }, [businessId, requestedCustomerId])
+  }, [businessId, requestedCustomerId, sourceOrderId])
 
   // oxlint-disable-next-line react/set-state-in-effect
-  useEffect(() => { void loadChoices() }, [loadChoices])
+  useEffect(() => {
+    void loadChoices()
+    return () => { choicesRequestIdRef.current += 1 }
+  }, [loadChoices])
 
   const selectedCustomer = customers.find((customer) => customer.id === customerId)
   const productById = new Map(products.map((product) => [product.id, product]))
@@ -259,6 +320,12 @@ export function NewOrderPage() {
       </header>
 
       {choiceError && <div className="inline-state inline-state-error" role="alert"><p>{choiceError}</p><button className="text-button" onClick={() => void loadChoices()} type="button">Tentar novamente</button></div>}
+      {orderCopySummary && <div className="form-message form-message-success" role="status">
+        <p>Pedido parecido preparado para <strong>{orderCopySummary.customerName}</strong>: {orderCopySummary.copiedItems} {orderCopySummary.copiedItems === 1 ? 'item copiado' : 'itens copiados'}; preços recalculados pelo catálogo atual.</p>
+        <p>O endereço atual do cadastro foi carregado para conferência. Confirme se há entrega e confira taxa, desconto, observações e vencimentos antes de salvar. Nada foi registrado ainda.</p>
+        {orderCopySummary.skippedItems > 0 && <p>{orderCopySummary.skippedItems} {orderCopySummary.skippedItems === 1 ? 'item não foi copiado' : 'itens não foram copiados'} porque não está ativo com preço no catálogo.</p>}
+      </div>}
+      {orderCopyWarning && <p className="form-message form-message-warning" role="status">{orderCopyWarning}</p>}
       {loadingChoices ? <p className="inline-state" aria-live="polite">Carregando clientes e produtos ativos…</p> : (
         <form className="order-create-form" onSubmit={handleSubmit}>
           <section className="surface-panel record-form" aria-labelledby="order-customer-heading">

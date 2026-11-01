@@ -516,6 +516,7 @@ export function OrderDetailPage() {
       <header className="page-heading">
         <div><p className="eyebrow">PEDIDO · {order.status === 'cancelled' ? 'CANCELADO' : outstandingCents > 0 ? 'EM ABERTO' : 'RECEBIDO'}</p><h1 ref={orderHeadingRef} tabIndex={-1}>{order.customer_name_snapshot}</h1><p className="page-description">Criado em {formatOrderTimestamp(order.created_at)}</p></div>
         <div className="record-heading-actions">
+          {order.status === 'open' && <Link className="button button-secondary" to={`/pedidos/novo?origem=${encodeURIComponent(order.id)}`}>Criar pedido parecido</Link>}
           {order.status === 'open' && outstandingCents > 0 && <button className="button button-primary" onClick={startPayment} type="button"><Icon name="coin" /> Registrar recebimento</button>}
           {order.status === 'open' && payments.length === 0 && !pickupEvent && <button className="button button-secondary order-cancel-trigger" onClick={() => { setShowCancelForm((current) => !current); setActionError(null) }} type="button">{showCancelForm ? 'Fechar cancelamento' : 'Cancelar pedido'}</button>}
         </div>
