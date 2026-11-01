@@ -240,7 +240,7 @@ export function DashboardPage() {
           </div>
           {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
           {!prioritiesLoading && prioritiesError && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="clock" /></span><h3>Não foi possível carregar as prioridades</h3><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>}
-          {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-action-queue" aria-live="polite">
+          {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-action-queue">
             {actionFilter === 'all' && noActions ? <div className="dashboard-panel-state is-clear"><span className="empty-icon"><Icon name="check" /></span><h3>Tudo em dia</h3><p>Nenhum retorno, vencimento ou entrega precisa de atenção hoje.</p></div> : <>
               {(actionFilter === 'followups' || (actionFilter === 'all' && priorities.follow_ups.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-followups-title">
                 <div className="dashboard-action-group-heading"><h3 id="dashboard-followups-title">Retornos</h3><Link className="quiet-link" to="/atendimento">Ver retornos <Icon name="arrow" /></Link></div>
