@@ -109,6 +109,13 @@ export function DashboardPage() {
   const prioritiesError = currentPriorities.error
   const [actionFilter, setActionFilter] = useState<ActionFilter>('all')
   const noActions = priorities !== null && priorities.follow_ups.items.length === 0 && priorities.receivables.items.length === 0 && priorities.deliveries.items.length === 0
+  const visibleActionCount = priorities === null ? null : {
+    all: priorities.follow_ups.items.length + priorities.receivables.items.length + priorities.deliveries.items.length,
+    followups: priorities.follow_ups.items.length,
+    receivables: priorities.receivables.items.length,
+    deliveries: priorities.deliveries.items.length,
+  }[actionFilter]
+  const activeActionFilterLabel = actionFilters.find((filter) => filter.value === actionFilter)?.label ?? 'Todos'
   const recentOrdersScopeKey = `${businessId}:${role}`
   const recentOrdersRequestId = useRef(0)
   const [recentOrdersState, setRecentOrdersState] = useState<{ scopeKey: string; loading: boolean; error: boolean; orders: RecentOrder[] }>({ scopeKey: '', loading: true, error: false, orders: [] })
@@ -238,6 +245,7 @@ export function DashboardPage() {
           <div className="dashboard-action-filters" role="group" aria-label="Filtrar fila por tipo de ação">
             {actionFilters.map((filter) => <button aria-pressed={actionFilter === filter.value} key={filter.value} onClick={() => setActionFilter(filter.value)} type="button">{filter.label}</button>)}
           </div>
+          <span className="visually-hidden" aria-live="polite" aria-atomic="true">{visibleActionCount !== null && !prioritiesLoading && !prioritiesError ? `${activeActionFilterLabel}: ${visibleActionCount} ${visibleActionCount === 1 ? 'item exibido' : 'itens exibidos'}.` : ''}</span>
           {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
           {!prioritiesLoading && prioritiesError && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="clock" /></span><h3>Não foi possível carregar as prioridades</h3><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>}
           {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-action-queue">
