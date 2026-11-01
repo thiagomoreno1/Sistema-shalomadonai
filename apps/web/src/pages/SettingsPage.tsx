@@ -1,14 +1,84 @@
+import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
-import type { CSSProperties } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { ACCENT_COLORS, useTheme } from '../theme/ThemeProvider'
+import { supabaseClient } from '../lib/supabase'
+
+type AccessRequest = {
+  id: string
+  user_id: string
+  email: string
+  created_at: string
+}
 
 export function SettingsPage() {
   const { session } = useAuth()
   const business = useBusiness()
   const { accent, setAccent, theme } = useTheme()
+  const [accessRequests, setAccessRequests] = useState<AccessRequest[]>([])
+  const [requestsLoading, setRequestsLoading] = useState(true)
+  const [requestActionId, setRequestActionId] = useState<string | null>(null)
+  const [requestError, setRequestError] = useState<string | null>(null)
+  const [requestMessage, setRequestMessage] = useState<string | null>(null)
+
+  const loadAccessRequests = useCallback(async () => {
+    if (!supabaseClient || business.role !== 'owner') return
+    setRequestsLoading(true)
+    setRequestError(null)
+    const { data, error } = await supabaseClient
+      .from('business_access_requests')
+      .select('id, user_id, email, created_at')
+      .eq('business_id', business.id)
+      .order('created_at', { ascending: true })
+    if (error) {
+      setRequestError('Não foi possível carregar os pedidos de acesso.')
+    } else {
+      setAccessRequests((data ?? []) as AccessRequest[])
+    }
+    setRequestsLoading(false)
+  }, [business.id, business.role])
+
+  useEffect(() => { void loadAccessRequests() }, [loadAccessRequests])
+
+  async function approveAccessRequest(request: AccessRequest) {
+    if (!supabaseClient) return
+    if (!window.confirm(`Aprovar ${request.email} para acessar os dados da empresa?`)) return
+    setRequestActionId(request.id)
+    setRequestError(null)
+    setRequestMessage(null)
+    const { error } = await supabaseClient.rpc('approve_business_access_request', {
+      p_business_id: business.id,
+      p_user_id: request.user_id,
+    })
+    setRequestActionId(null)
+    if (error) {
+      setRequestError('Não foi possível aprovar este pedido. Atualize a lista e tente novamente.')
+      return
+    }
+    setRequestMessage(`Acesso liberado para ${request.email}.`)
+    setAccessRequests((current) => current.filter((item) => item.id !== request.id))
+  }
+
+  async function rejectAccessRequest(request: AccessRequest) {
+    if (!supabaseClient) return
+    setRequestActionId(request.id)
+    setRequestError(null)
+    setRequestMessage(null)
+    const { error } = await supabaseClient
+      .from('business_access_requests')
+      .delete()
+      .eq('business_id', business.id)
+      .eq('id', request.id)
+    setRequestActionId(null)
+    if (error) {
+      setRequestError('Não foi possível remover este pedido. Atualize a lista e tente novamente.')
+      return
+    }
+    setRequestMessage('Pedido recusado. A pessoa poderá solicitar novamente pela tela de acesso.')
+    setAccessRequests((current) => current.filter((item) => item.id !== request.id))
+  }
 
   return (
     <div className="page-stack">
@@ -32,9 +102,54 @@ export function SettingsPage() {
         <dl className="settings-detail-list">
           <div><dt>Empresa</dt><dd>{business.name}</dd></div>
           <div><dt>E-mail</dt><dd>{session?.user.email ?? 'Conta autenticada'}</dd></div>
+          <div><dt>Perfil</dt><dd>{business.role === 'owner' ? 'Proprietário' : 'Equipe'}</dd></div>
           <div><dt>Moeda</dt><dd>Real brasileiro (BRL)</dd></div>
           <div><dt>Fuso horário</dt><dd>America/Sao_Paulo</dd></div>
         </dl>
+      </section>
+
+      <section className="surface-panel settings-panel" aria-labelledby="access-requests-title">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">ACESSO À EMPRESA</p>
+            <h2 id="access-requests-title">Pedidos de acesso</h2>
+          </div>
+          {business.role === 'owner' && <span className="neutral-status">{requestsLoading ? 'Carregando…' : `${accessRequests.length} pendentes`}</span>}
+        </div>
+        {business.role === 'owner' ? (
+          <>
+            <p className="settings-appearance-description">Novas contas só acessam os dados da empresa depois que você aprovar o pedido.</p>
+            {requestError && <p className="form-message form-message-error" role="alert">{requestError}</p>}
+            {requestMessage && <p className="form-message form-message-success" role="status">{requestMessage}</p>}
+            {requestsLoading ? (
+              <p className="settings-team-empty" role="status">Carregando pedidos…</p>
+            ) : accessRequests.length ? (
+              <ul className="settings-access-requests">
+                {accessRequests.map((request) => (
+                  <li key={request.id}>
+                    <div className="settings-access-request-main">
+                      <strong>{request.email}</strong>
+                      <small>Solicitado em {new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium' }).format(new Date(request.created_at))}</small>
+                    </div>
+                    <div className="settings-access-request-actions">
+                      <button className="button button-secondary" disabled={requestActionId !== null} onClick={() => void rejectAccessRequest(request)} type="button">
+                        Recusar
+                      </button>
+                      <button className="button button-primary" disabled={requestActionId !== null} onClick={() => void approveAccessRequest(request)} type="button">
+                        {requestActionId === request.id ? 'Salvando…' : 'Aprovar'}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="settings-team-empty">Nenhum pedido aguardando aprovação.</p>
+            )}
+            <p className="section-footnote">Como a confirmação por e-mail está desligada, confirme a identidade da pessoa por outro canal antes de aprovar.</p>
+          </>
+        ) : (
+          <p className="settings-team-empty">A aprovação de novos acessos é feita pela pessoa proprietária da empresa.</p>
+        )}
       </section>
 
       <section className="surface-panel settings-panel" aria-labelledby="appearance-title">

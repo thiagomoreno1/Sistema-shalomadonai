@@ -163,6 +163,15 @@
 .settings-detail-list > div { display: grid; grid-template-columns: minmax(130px, 0.4fr) minmax(0, 1fr); gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--line); }
 .settings-detail-list dt { color: var(--muted); font-size: 12px; }
 .settings-detail-list dd { margin: 0; color: var(--ink); font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
+.settings-team-empty { margin: 18px 0 0; padding: 14px; border: 1px dashed var(--line-strong); border-radius: 9px; color: var(--muted); background: var(--canvas); font-size: 12px; }
+.settings-access-requests { display: grid; gap: 9px; margin: 17px 0 0; padding: 0; list-style: none; }
+.settings-access-requests > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
+.settings-access-request-main { min-width: 0; }
+.settings-access-request-main strong, .settings-access-request-main small { display: block; overflow-wrap: anywhere; }
+.settings-access-request-main strong { color: var(--ink); font-size: 12px; }
+.settings-access-request-main small { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.settings-access-request-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-access-request-actions .button { min-height: 44px; padding: 0 12px; font-size: 11px; }
 .settings-connection-list { margin-top: 12px; }
 .settings-connection-list li { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 61px; border-top: 1px solid var(--line); }
 .settings-connection-list strong, .settings-connection-list small { display: block; }
@@ -262,6 +271,7 @@
 .auth-panel { position: relative; display: flex; align-items: center; justify-content: center; padding: 44px clamp(25px, 6vw, 88px); background: var(--paper); }
 .auth-form-wrap { width: min(100%, 400px); }
 .auth-mobile-brand { display: none; }
+.signup-brand { display: flex; margin-bottom: 25px; }
 .auth-form-wrap h2 { margin: 6px 0 5px; color: var(--ink); font-size: 27px; font-weight: 640; letter-spacing: -0.04em; }
 .auth-description { margin: 0; color: var(--muted); font-size: 13px; }
 .form-stack { display: flex; flex-direction: column; align-items: stretch; margin-top: 25px; }
@@ -676,6 +686,8 @@
   .module-empty-panel { min-height: 270px; padding: 25px 18px; }
   .module-link-list { grid-template-columns: 1fr; gap: 9px; }
   .settings-panel { padding: 17px; }
+  .settings-access-requests > li { grid-template-columns: 1fr; }
+  .settings-access-request-actions .button { flex: 1; }
   .record-form, .record-panel { padding: 17px; }
   .record-form-grid, .record-detail-grid { grid-template-columns: 1fr; }
   .record-field-wide { grid-column: auto; }

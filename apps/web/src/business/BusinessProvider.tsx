@@ -31,9 +31,8 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
       try {
         const { data: memberships, error: membershipError } = await supabaseClient
           .from('business_memberships')
-          .select('business_id')
+          .select('business_id, role')
           .eq('user_id', userId)
-          .eq('role', 'owner')
           .limit(2)
 
         if (membershipError) throw membershipError
@@ -60,6 +59,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
               name: business.name,
               timezone: business.timezone,
               currency: business.currency,
+              role: memberships[0].role,
             },
             loading: false,
             issue: null,
@@ -80,6 +80,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
       <BusinessUnavailable
         issue={state.issue ?? 'unavailable'}
         onRetry={() => setAttempt((current) => current + 1)}
+        userId={session?.user.id ?? ''}
       />
     )
   }
@@ -87,8 +88,39 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   return <BusinessContext.Provider value={state.business}>{children}</BusinessContext.Provider>
 }
 
-function BusinessUnavailable({ issue, onRetry }: { issue: 'missing' | 'ambiguous' | 'unavailable'; onRetry: () => void }) {
+function BusinessUnavailable({ issue, onRetry, userId }: { issue: 'missing' | 'ambiguous' | 'unavailable'; onRetry: () => void; userId: string }) {
   const navigate = useNavigate()
+  const [requestingAccess, setRequestingAccess] = useState(false)
+  const [requestError, setRequestError] = useState<string | null>(null)
+  const [hasPendingRequest, setHasPendingRequest] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let active = true
+    async function loadRequestStatus() {
+      if (!supabaseClient || issue !== 'missing' || !userId) return
+      const { data, error } = await supabaseClient
+        .from('business_access_requests')
+        .select('id')
+        .eq('user_id', userId)
+        .limit(1)
+      if (active) setHasPendingRequest(!error && Boolean(data?.length))
+    }
+    void loadRequestStatus()
+    return () => { active = false }
+  }, [issue, userId])
+
+  async function requestBusinessAccess() {
+    if (!supabaseClient) return
+    setRequestingAccess(true)
+    setRequestError(null)
+    const { error } = await supabaseClient.rpc('request_business_access')
+    setRequestingAccess(false)
+    if (error) {
+      setRequestError('Não foi possível enviar o pedido. Tente novamente mais tarde.')
+      return
+    }
+    setHasPendingRequest(true)
+  }
 
   async function handleSignOut() {
     try {
@@ -105,18 +137,32 @@ function BusinessUnavailable({ issue, onRetry }: { issue: 'missing' | 'ambiguous
       <section className="setup-card" aria-labelledby="business-setup-title">
         <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
         <p className="eyebrow">Shalom Adonai · Operação</p>
-        <h1 id="business-setup-title">A empresa ainda não está conectada</h1>
+        <h1 id="business-setup-title">{issue === 'missing' ? hasPendingRequest ? 'Pedido aguardando aprovação' : 'Acesso à empresa pendente' : 'A empresa ainda não está conectada'}</h1>
         <p className="setup-copy">
           {issue === 'missing'
-            ? 'Esta conta ainda não está vinculada ao cadastro da empresa. Conclua a configuração inicial do negócio antes de usar os registros.'
+            ? 'Esta conta ainda não tem acesso à empresa. Se você acabou de criar uma conta, a gestão precisa aprovar seu pedido antes de liberar os dados.'
             : issue === 'ambiguous'
               ? 'Esta conta está vinculada a mais de uma empresa, mas a seleção entre empresas ainda não está disponível. Ajuste o acesso para deixar somente a empresa correta vinculada.'
               : 'Não foi possível carregar os dados da empresa. Verifique a conexão e tente novamente.'}
         </p>
         <div className="setup-note">
           <Icon name="shield" />
-          <span>Os dados operacionais só aparecem depois que a conta autorizada encontra a empresa vinculada.</span>
+          <span>{issue === 'missing' ? 'Os dados operacionais só aparecem depois que a gestão aprova o acesso desta conta.' : 'Os dados operacionais só aparecem depois que a conta autorizada encontra a empresa vinculada.'}</span>
         </div>
+        {issue === 'missing' && hasPendingRequest === null && (
+          <p className="settings-team-empty" role="status">Verificando seu pedido de acesso…</p>
+        )}
+        {issue === 'missing' && hasPendingRequest && (
+          <p className="form-message form-message-success" role="status">Seu pedido já está com a gestão. Aguarde a aprovação para acessar os dados.</p>
+        )}
+        {issue === 'missing' && hasPendingRequest === false && (
+          <>
+            <button className="button button-primary" disabled={requestingAccess} onClick={() => void requestBusinessAccess()} type="button">
+              {requestingAccess ? 'Enviando pedido…' : 'Enviar ou reenviar pedido de acesso'}
+            </button>
+            {requestError && <p className="form-message form-message-error" role="alert">{requestError}</p>}
+          </>
+        )}
         <button className="button button-primary" onClick={onRetry} type="button">Tentar novamente</button>
         <button className="text-button" onClick={() => void handleSignOut()} type="button">Sair da conta</button>
       </section>

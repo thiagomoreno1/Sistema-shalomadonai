@@ -5,6 +5,7 @@ export type BusinessContextValue = {
   name: string
   timezone: string
   currency: string
+  role: 'owner' | 'staff'
 }
 
 export const BusinessContext = createContext<BusinessContextValue | null>(null)
