@@ -1076,8 +1076,18 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
   .dashboard-recent-order-status { grid-column: 2; justify-self: start; max-width: none; }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .dashboard-summary-link { transition: transform 150ms ease, border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease; }
+  .dashboard-summary-link:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
+    box-shadow: 0 5px 16px rgba(23, 39, 64, 0.075);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .dashboard-summary-link, .dashboard-action-filters button { transition: none; }
+  .dashboard-summary-link:hover { transform: none; }
 }
 @media print {
   @page { margin: 12mm; }
