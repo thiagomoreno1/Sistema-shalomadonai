@@ -520,6 +520,7 @@
   .inventory-history-actions { justify-content: flex-start; }
 }
 .combo-composition { min-width: 0; margin: 4px 0 13px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
+.order-draft-item > .combo-composition { grid-column: 1 / -1; }
 .combo-composition h3 { margin: 3px 0 0; color: var(--ink); font-size: 14px; font-weight: 620; }
 .combo-composition > .section-footnote { margin: 0 0 12px; }
 .combo-composition .section-heading { align-items: center; margin-bottom: 9px; }

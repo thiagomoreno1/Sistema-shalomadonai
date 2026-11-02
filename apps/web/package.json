@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test": "node --test tests/customer-search.test.mjs",
+    "test": "node --test tests/customer-search.test.mjs tests/customer-import.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
