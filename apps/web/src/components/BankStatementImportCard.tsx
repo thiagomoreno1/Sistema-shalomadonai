@@ -94,6 +94,25 @@ function rpcResult(value: unknown): ImportResult {
   return { batchId, importedCount, duplicateCount }
 }
 
+function rpcErrorCode(value: unknown) {
+  if (!value || typeof value !== 'object' || !('code' in value) || typeof value.code !== 'string') return null
+  return value.code
+}
+
+function hasAmbiguousRpcOutcome(code: string) {
+  return code.startsWith('08') || code === 'PGRSTX00'
+}
+
+function definiteRpcErrorMessage(code: string) {
+  if (code === 'PGRST202' || code === '42883') {
+    return 'A importação ainda não foi ativada neste sistema. Nenhum movimento foi gravado. A prévia foi mantida; peça ao suporte para habilitar o recurso antes de tentar novamente.'
+  }
+  if (code === '42501') {
+    return 'O Supabase recusou o acesso a esta conta. Confira se está conectado como responsável pela empresa.'
+  }
+  return 'O Supabase recusou esta importação. Confira a conta e os dados do extrato; nenhuma alteração foi confirmada. A prévia foi mantida para correção ou nova tentativa.'
+}
+
 export function BankStatementImportCard({ businessId, accounts, disabled = false, onImported }: Props) {
   const [selectedAccountId, setSelectedAccountId] = useState('')
   const [fileName, setFileName] = useState('')
@@ -200,21 +219,38 @@ export function BankStatementImportCard({ businessId, accounts, disabled = false
     setImporting(true)
     setError(null)
     try {
-      const { data, error: rpcError } = await client.rpc('import_bank_statement', {
-        p_business_id: businessId,
-        p_bank_account_id: selectedAccount.id,
-        p_rows: statement.rows.map((row) => ({
-          transaction_date: row.transactionDate,
-          amount_cents: row.amountCents,
-          description: row.description,
-          counterparty_name: row.counterpartyName,
-          external_transaction_id: row.externalTransactionId,
-        })),
-        p_duplicate_rows_in_file: statement.duplicateRowsInFile,
-        p_request_id: requestId,
-      })
-      if (rpcError) throw rpcError
-      const imported = rpcResult(data)
+      let imported: ImportResult
+      try {
+        const { data, error: rpcError } = await client.rpc('import_bank_statement', {
+          p_business_id: businessId,
+          p_bank_account_id: selectedAccount.id,
+          p_rows: statement.rows.map((row) => ({
+            transaction_date: row.transactionDate,
+            amount_cents: row.amountCents,
+            description: row.description,
+            counterparty_name: row.counterpartyName,
+            external_transaction_id: row.externalTransactionId,
+          })),
+          p_duplicate_rows_in_file: statement.duplicateRowsInFile,
+          p_request_id: requestId,
+        })
+        if (rpcError) {
+          const code = rpcErrorCode(rpcError)
+          if (code && !hasAmbiguousRpcOutcome(code)) {
+            setUncertain(false)
+            setDiscardConfirm(false)
+            setError(definiteRpcErrorMessage(code))
+            return
+          }
+          throw rpcError
+        }
+        imported = rpcResult(data)
+      } catch {
+        setUncertain(true)
+        setError('Não foi possível confirmar o resultado. Tente novamente com o mesmo arquivo e conta; o mesmo identificador será usado para evitar duplicação.')
+        return
+      }
+
       setResult(imported)
       setUncertain(false)
       setDiscardConfirm(false)
@@ -223,10 +259,11 @@ export function BankStatementImportCard({ businessId, accounts, disabled = false
       setConfirmed(false)
       setRequestId(crypto.randomUUID())
       if (fileInputRef.current) fileInputRef.current.value = ''
-      await onImported()
-    } catch {
-      setUncertain(true)
-      setError('Não foi possível confirmar o resultado. Tente novamente com o mesmo arquivo e conta; o mesmo identificador será usado para evitar duplicação.')
+      try {
+        await onImported()
+      } catch {
+        setError('O lote foi importado, mas a lista não pôde ser atualizada agora. Atualize a conciliação para ver os movimentos.')
+      }
     } finally {
       setImporting(false)
     }
@@ -241,7 +278,7 @@ export function BankStatementImportCard({ businessId, accounts, disabled = false
       <p className="section-footnote">Selecione um arquivo OFX ou QFX e confira os lançamentos. O arquivo é lido no navegador; só os movimentos normalizados e o resumo do lote são registrados no Shalom.</p>
 
       <div className="record-form-grid bank-import-fields">
-        <label className="record-field"><span className="field-label">Conta de destino</span><select className="text-input" disabled={disabled || importing || uncertain || accounts.length === 0} onChange={(event) => setSelectedAccountId(event.target.value)} value={selectedAccountId}><option value="">Selecione uma conta</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.institution_name} · {account.account_label}{account.account_last_four ? ` · final ${account.account_last_four}` : ''}</option>)}</select></label>
+        <label className="record-field"><span className="field-label">Conta de destino</span><select className="text-input" disabled={disabled || importing || uncertain || accounts.length === 0} onChange={(event) => { setSelectedAccountId(event.target.value); setRequestId(crypto.randomUUID()); setConfirmed(false); setResult(null); setError(null) }} value={selectedAccountId}><option value="">Selecione uma conta</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.institution_name} · {account.account_label}{account.account_last_four ? ` · final ${account.account_last_four}` : ''}</option>)}</select></label>
         <label className="record-field"><span className="field-label">Arquivo OFX/QFX</span><input ref={fileInputRef} accept=".ofx,.qfx,application/x-ofx,application/xml,text/xml" className="text-input bank-import-file" disabled={disabled || importing || reading || uncertain || accounts.length === 0} onChange={(event) => void handleFileChange(event)} type="file" /></label>
       </div>
 
