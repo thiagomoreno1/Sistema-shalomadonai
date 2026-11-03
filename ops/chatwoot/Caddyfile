@@ -1,0 +1,14 @@
+{
+	email {$CADDY_EMAIL}
+}
+
+{$CHATWOOT_DOMAIN} {
+	encode zstd gzip
+	@onboarding path /installation/onboarding*
+	@outside_admin_ip not remote_ip {$BOOTSTRAP_ADMIN_IP}
+	handle @onboarding {
+		respond @outside_admin_ip "Not found" 404
+		reverse_proxy rails:3000
+	}
+	reverse_proxy rails:3000
+}

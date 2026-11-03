@@ -33,11 +33,12 @@ O sistema deve continuar mostrando a integração como pendente até que uma con
 
 - Contratar ou selecionar uma VPS Contabo em nome do proprietário. A preferência pela Contabo não significa que a compra ou provisionamento já estejam autorizados ou concluídos.
 - Escolher um domínio ou subdomínio para o Chatwoot e apontar um registro DNS `A` para o IP da VPS.
-- Instalar Chatwoot em uma versão mantida igual ou superior a **4.19.0**. A autenticação Bearer usada pelo adaptador foi adicionada nessa versão.
+- Instalar Chatwoot em uma versão mantida igual ou superior a **4.19.0**. A autenticação Bearer usada pelo adaptador foi adicionada nessa versão. O bundle neste repositório fixa a release **4.19.1**.
 - Configurar HTTPS, URL pública, envio de e-mail para recuperação de acesso, armazenamento persistente, atualizações e backups testáveis.
 - Não publicar Postgres ou Redis diretamente na internet. Restringir o SSH e manter acesso administrativo protegido.
+- Usar como ponto de partida uma VPS com pelo menos 4 GB de RAM, 4 núcleos recomendados e no mínimo 1 GB de swap para atualizações, conforme os requisitos atuais do Chatwoot. O volume necessário depende do histórico e dos anexos.
 
-O guia oficial do Chatwoot documenta instalação em uma VM Linux ou via Docker Compose, além de domínio, proxy HTTPS e variáveis necessárias. A opção de instalação deve ser escolhida quando a VPS e o domínio estiverem definidos.
+O bundle reproduzível está em [`ops/chatwoot`](../../ops/chatwoot/README.md) e usa Docker Compose, Caddy para HTTPS, PostgreSQL com pgvector e Redis. É uma preparação versionada; nenhuma VPS ou domínio foi provisionado.
 
 ### 2. Criar a caixa de atendimento
 
@@ -68,9 +69,11 @@ Até completar essas verificações, a integração é uma estrutura de código 
 ## Referências oficiais
 
 - [Chatwoot: instalação de produção com Docker](https://developers.chatwoot.com/self-hosted/deployment/docker)
+- [Chatwoot: requisitos de sistema atuais](https://developers.chatwoot.com/self-hosted/deployment/requirements)
 - [Chatwoot: instalação de produção em VM Linux](https://developers.chatwoot.com/self-hosted/deployment/linux-vm)
 - [Chatwoot: variáveis de ambiente](https://developers.chatwoot.com/self-hosted/configuration/environment-variables)
 - [Chatwoot: APIs e uso da Application API em integrações internas](https://developers.chatwoot.com/api-reference/introduction)
 - [Chatwoot: conectar WhatsApp Cloud API manualmente](https://app.chatwoot.com/hc/user-guide/articles/1756799850-how-to-setup-a-whats_app-channel-manual-flow)
 - [Chatwoot: opções de conexão para WhatsApp](https://chatwoot.help/hc/user-guide/articles/1677832735-how-to-setup-a-whats_app-channel)
 - [Chatwoot v4.19.0: suporte à autenticação Bearer para tokens de API](https://github.com/chatwoot/chatwoot/releases/tag/v4.19.0)
+- [Chatwoot v4.19.1: release fixada no bundle de implantação](https://github.com/chatwoot/chatwoot/releases/tag/v4.19.1)
