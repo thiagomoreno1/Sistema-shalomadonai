@@ -219,6 +219,36 @@
 .belvo-sandbox-next-step { padding-top: 11px; border-top: 1px solid var(--line); }
 .bank-inline-form { margin: 17px 0 8px; padding: 17px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
 .bank-inline-form > h2 { outline: none; }
+.bank-statement-import { display: grid; gap: 13px; }
+.bank-statement-import > .section-footnote { margin: -5px 0 0; }
+.bank-import-fields { margin-top: 0; }
+.bank-import-file { min-height: 44px; padding: 8px; }
+.bank-import-file-name, .bank-import-privacy-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.bank-import-file-name strong { color: var(--ink); }
+.bank-import-preview { display: grid; gap: 11px; padding: 13px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
+.bank-import-preview-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.bank-import-preview-heading strong { color: var(--ink); font-size: 13px; }
+.bank-import-preview-heading span { color: var(--muted); font-size: 10px; text-align: right; }
+.bank-import-preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.bank-import-preview-grid > div { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; }
+.bank-import-preview-grid dt { color: var(--quiet); font-size: 9px; font-weight: 650; text-transform: uppercase; letter-spacing: .035em; }
+.bank-import-preview-grid dd { margin: 4px 0 0; color: var(--ink); font-size: 12px; font-weight: 620; overflow-wrap: anywhere; }
+.bank-import-preview-list { margin: 0; padding: 0; border-top: 1px solid var(--line); list-style: none; }
+.bank-import-preview-list > li { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--line); }
+.bank-import-preview-list > li > span { min-width: 0; }
+.bank-import-preview-list strong { display: block; color: var(--ink); font-size: 11px; overflow-wrap: anywhere; }
+.bank-import-preview-list small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+.bank-import-preview-list > li > strong { flex: 0 0 auto; text-align: right; }
+.bank-import-show-all { justify-self: start; min-height: 44px; }
+.bank-import-confirm { display: flex; align-items: flex-start; gap: 9px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.bank-import-confirm input { flex: 0 0 auto; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.bank-import-preview .record-form-actions { margin: 0; }
+.bank-import-preview .record-form-actions .button { min-height: 44px; }
+.bank-import-recovery, .bank-import-duplicate-error { display: grid; justify-items: start; gap: 8px; }
+.bank-import-recovery > .form-message, .bank-import-duplicate-error > .form-message { margin: 0; }
+.bank-import-discard { display: grid; gap: 8px; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--warning-soft); }
+.bank-import-discard p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.bank-import-privacy-note { padding-top: 11px; border-top: 1px solid var(--line); }
 .bank-account-list, .bank-movement-list, .bank-candidate-list { margin: 14px 0 0; padding: 0; list-style: none; }
 .bank-account-list { border-top: 1px solid var(--line); }
 .bank-account-list > li { display: flex; align-items: center; gap: 12px; min-height: 67px; padding: 10px 3px; border-bottom: 1px solid var(--line); }
@@ -717,6 +747,10 @@
   .belvo-sandbox-header .neutral-status { align-self: flex-start; }
   .belvo-sandbox-form > .button { width: 100%; }
   .belvo-sandbox-result { grid-template-columns: minmax(0, 1fr); }
+  .bank-import-preview-grid { grid-template-columns: minmax(0, 1fr); }
+  .bank-import-preview-heading { align-items: flex-start; flex-direction: column; }
+  .bank-import-preview-heading span { text-align: left; }
+  .bank-statement-import > .section-heading { align-items: flex-start; flex-direction: column; }
   .bank-candidate-list > li { grid-template-columns: minmax(0, 1fr) auto; gap: 7px 10px; }
   .bank-candidate-list > li > strong { grid-column: 2; grid-row: 1; }
   .bank-candidate-list > li .button { grid-column: 1 / -1; justify-self: stretch; }

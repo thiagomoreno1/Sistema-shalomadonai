@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { FinanceNavigation } from '../components/FinanceNavigation'
+import { BankStatementImportCard } from '../components/BankStatementImportCard'
 import { BelvoSandboxCard } from '../components/BelvoSandboxCard'
 import { Icon } from '../components/Icon'
 import { businessToday, formatBRLExact, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
@@ -762,6 +763,8 @@ export function BankReconciliationPage() {
           </li>)}
         </ul>}
       </section>
+
+      <BankStatementImportCard businessId={businessId} accounts={activeAccounts} disabled={loading || Boolean(loadError)} onImported={() => refreshBankData(0)} />
 
       <section className="surface-panel settings-panel" aria-labelledby="bank-movements-heading">
         <div className="section-heading">
