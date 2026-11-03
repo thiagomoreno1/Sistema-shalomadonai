@@ -27,6 +27,7 @@ type Conversation = {
   inbox_id: string
   status: string
   can_reply: boolean
+  unread_count: number
   contact: { name: string | null; phone: string | null }
   last_activity_at: string | null
   last_message: Message | null
@@ -364,7 +365,17 @@ export function WhatsAppInboxPage() {
       setDetailError(null)
       try {
         const result = await invokeInbox<{ conversation?: Conversation }>({ action: 'conversation', business_id: businessId, conversationId: selectedId })
-        if (active && detailRequest.current === request) setSelectedConversation(result.conversation ?? null)
+        let conversation = result.conversation ?? null
+        if (active && detailRequest.current === request && conversation && conversation.unread_count > 0) {
+          try {
+            const readResult = await invokeInbox<{ conversation?: Conversation }>({ action: 'mark_read', business_id: businessId, conversationId: selectedId })
+            conversation = readResult.conversation ?? { ...conversation, unread_count: 0 }
+            setConversations((current) => current.map((item) => item.id === selectedId ? { ...item, unread_count: 0 } : item))
+          } catch {
+            setActionError('A conversa abriu, mas não foi possível atualizar o estado de leitura.')
+          }
+        }
+        if (active && detailRequest.current === request) setSelectedConversation(conversation)
       } catch {
         if (active && detailRequest.current === request) setDetailError('Não foi possível abrir esta conversa. Atualize a lista e tente novamente.')
       } finally {
@@ -527,10 +538,10 @@ export function WhatsAppInboxPage() {
         ) : (
           <ul className="whatsapp-conversation-list">
             {conversations.map((conversation) => <li key={conversation.id}>
-              <button aria-current={selectedId === conversation.id ? 'true' : undefined} className={`whatsapp-conversation-item${selectedId === conversation.id ? ' is-selected' : ''}`} onClick={() => { setSelectedConversation(null); setSelectedId(conversation.id) }} type="button">
+              <button aria-current={selectedId === conversation.id ? 'true' : undefined} className={`whatsapp-conversation-item${selectedId === conversation.id ? ' is-selected' : ''}${conversation.unread_count > 0 ? ' has-unread' : ''}`} onClick={() => { setSelectedConversation(null); setSelectedId(conversation.id) }} type="button">
                 <span className="whatsapp-contact-avatar">{(conversation.contact.name || conversation.contact.phone || '?').slice(0, 1).toLocaleUpperCase('pt-BR')}</span>
                 <span className="whatsapp-conversation-copy"><strong>{conversation.contact.name || conversation.contact.phone || 'Contato sem nome'}</strong><small>{conversation.last_message?.content || (conversation.last_message?.attachments.length ? `${conversation.last_message.attachments.length} anexo(s)` : 'Sem mensagem de texto')}</small></span>
-                <span className="whatsapp-conversation-meta"><time>{timestampLabel(conversation.last_activity_at)}</time>{links[conversation.id]?.customer_id && <span className="whatsapp-linked-mark">Cliente vinculado</span>}</span>
+                <span className="whatsapp-conversation-meta"><span className="whatsapp-conversation-meta-top"><time>{timestampLabel(conversation.last_activity_at)}</time>{conversation.unread_count > 0 && <span aria-label={`${conversation.unread_count} mensagens não lidas`} className="whatsapp-unread-count">{conversation.unread_count > 99 ? '99+' : conversation.unread_count}</span>}</span>{links[conversation.id]?.customer_id && <span className="whatsapp-linked-mark">Cliente vinculado</span>}</span>
               </button>
             </li>)}
           </ul>

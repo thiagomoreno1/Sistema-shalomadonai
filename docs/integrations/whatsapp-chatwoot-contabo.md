@@ -18,7 +18,7 @@ A caixa nativa já existe no código. Ela não é uma cópia visual do WhatsApp 
 
 ## Estado confirmado no repositório
 
-- A rota `/whatsapp` oferece busca, filtros de status, histórico e resposta de texto, resolução/reabertura e vínculo manual com cliente e pedido.
+- A rota `/whatsapp` oferece busca, filtros de status, histórico e resposta de texto, resolução/reabertura, vínculo manual com cliente e pedido, contador de mensagens não lidas e atualização da leitura ao abrir uma conversa.
 - A função `supabase/functions/chatwoot-inbox` implementa a chamada ao Chatwoot e lê URL, conta, caixa e token de secrets do servidor.
 - A migration `20261103170953_whatsapp_chatwoot_links.sql` cria os vínculos locais entre conversas, clientes e pedidos.
 - A migration não foi aplicada ao Supabase hospedado e a função ainda não foi publicada.

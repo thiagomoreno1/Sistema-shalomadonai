@@ -32,6 +32,7 @@ type NormalizedConversation = {
   inbox_id: string
   status: string
   can_reply: boolean
+  unread_count: number
   contact: { name: string | null; phone: string | null }
   last_activity_at: string | null
   last_message: NormalizedMessage | null
@@ -191,6 +192,7 @@ function normalizedConversation(value: unknown): NormalizedConversation | null {
     inbox_id: inboxId,
     status: stringValue(value.status) ?? 'open',
     can_reply: value.can_reply === true,
+    unread_count: nonNegativeInteger(value.unread_count) ?? 0,
     contact: {
       name: (sender ? stringValue(sender.name) : null) ?? (directContact ? stringValue(directContact.name) : null),
       phone:
@@ -493,7 +495,7 @@ Deno.serve(async (request: Request) => {
   const action = body.action
   const businessId = body.business_id
   if (!isUuid(businessId)) return json({ error: 'invalid_business_id' }, 400)
-  if (!['status', 'list', 'conversation', 'send', 'set_status', 'attachment'].includes(String(action))) {
+  if (!['status', 'list', 'conversation', 'mark_read', 'send', 'set_status', 'attachment'].includes(String(action))) {
     return json({ error: 'invalid_action' }, 400)
   }
 
@@ -557,6 +559,18 @@ Deno.serve(async (request: Request) => {
 
     const conversationId = numericId(body.conversationId)
     if (!conversationId) return json({ error: 'invalid_conversation_id' }, 400)
+
+    if (action === 'mark_read') {
+      const { normalized } = await getConversationPayload(config, conversationId)
+      const result = await chatwootRequest(config, `/conversations/${conversationId}/update_last_seen`, {
+        method: 'POST',
+      })
+      const updatedConversation = normalizedConversation(responseConversation(result))
+      if (!updatedConversation || updatedConversation.id !== conversationId || updatedConversation.inbox_id !== config.inboxId) {
+        return json({ conversation: { ...normalized, unread_count: 0 } })
+      }
+      return json({ conversation: updatedConversation })
+    }
 
     if (action === 'attachment') {
       const messageId = numericId(body.messageId)

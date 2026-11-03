@@ -1021,8 +1021,11 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .whatsapp-conversation-copy { display: block; min-width: 0; }
 .whatsapp-conversation-copy strong, .whatsapp-conversation-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .whatsapp-conversation-copy strong { color: var(--ink); font-size: 12px; font-weight: 650; }
+.whatsapp-conversation-item.has-unread .whatsapp-conversation-copy strong { font-weight: 750; }
 .whatsapp-conversation-copy small { margin-top: 4px; color: var(--muted); font-size: 11px; }
 .whatsapp-conversation-meta { display: flex; align-items: flex-end; flex-direction: column; gap: 5px; color: var(--quiet); font-size: 9px; white-space: nowrap; }
+.whatsapp-conversation-meta-top { display: flex; align-items: center; gap: 6px; }
+.whatsapp-unread-count { display: inline-grid; min-width: 18px; height: 18px; padding: 0 5px; place-items: center; border-radius: 999px; color: #fff; background: var(--accent); font-size: 9px; font-weight: 700; line-height: 1; }
 .whatsapp-linked-mark { color: var(--accent); font-size: 9px; font-weight: 600; }
 .whatsapp-list-empty, .whatsapp-chat-empty { display: flex; min-height: 200px; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 24px; color: var(--muted); text-align: center; }
 .whatsapp-list-empty > svg, .whatsapp-chat-empty > svg { width: 26px; height: 26px; color: var(--accent); }
