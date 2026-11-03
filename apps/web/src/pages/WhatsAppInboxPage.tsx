@@ -5,6 +5,10 @@ import { Icon } from '../components/Icon'
 import { supabaseClient } from '../lib/supabase'
 
 type InboxStatus = 'open' | 'resolved' | 'all'
+
+function conversationScopeKey(status: InboxStatus, search: string): string {
+  return JSON.stringify([status, search])
+}
 type Attachment = {
   id: string
   file_type: string | null
@@ -225,9 +229,11 @@ export function WhatsAppInboxPage() {
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [conversations, setConversations] = useState<Conversation[]>(EMPTY_CONVERSATIONS)
+  const [loadedListScope, setLoadedListScope] = useState<string | null>(null)
   const [listPage, setListPage] = useState(1)
   const [hasMore, setHasMore] = useState(false)
   const [listLoading, setListLoading] = useState(false)
+  const [listRefreshing, setListRefreshing] = useState(false)
   const [listError, setListError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
@@ -245,31 +251,46 @@ export function WhatsAppInboxPage() {
   const [linkError, setLinkError] = useState<string | null>(null)
   const [linkMessage, setLinkMessage] = useState<string | null>(null)
   const detailRequest = useRef(0)
-  const refreshInFlight = useRef(false)
+  const refreshScopeInFlight = useRef<{ scope: string; requestId: number } | null>(null)
+  const listRequest = useRef(0)
+  const activeListScope = useRef(conversationScopeKey(status, search))
+  const currentListScope = conversationScopeKey(status, search)
 
   const loadConversations = useCallback(async (page = 1, append = false) => {
     if (!configured) return
+    const requestScope = conversationScopeKey(status, search)
+    if (requestScope !== activeListScope.current) return
+    const requestId = ++listRequest.current
     setListLoading(true)
     setListError(null)
     try {
       const result = await invokeInbox<ConversationListResponse>({
         action: 'list', business_id: businessId, status, page, query: search || undefined,
       })
+      if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
       const next = result.conversations ?? []
       setConversations((current) => append ? [...current, ...next] : next)
+      setLoadedListScope(requestScope)
       setListPage(page)
       setHasMore(result.meta?.has_more ?? next.length >= 25)
     } catch {
-      setListError('Não foi possível carregar as conversas. Tente novamente.')
+      if (requestId === listRequest.current && requestScope === activeListScope.current) {
+        setListError('Não foi possível carregar as conversas. Tente novamente.')
+      }
     } finally {
-      setListLoading(false)
+      if (requestId === listRequest.current) setListLoading(false)
     }
   }, [businessId, configured, search, status])
 
   const refreshLoadedConversations = useCallback(async () => {
-    if (!configured || refreshInFlight.current) return
-    refreshInFlight.current = true
+    if (!configured) return
+    const requestScope = conversationScopeKey(status, search)
+    if (requestScope !== activeListScope.current) return
+    if (refreshScopeInFlight.current?.scope === requestScope) return
+    const requestId = ++listRequest.current
+    refreshScopeInFlight.current = { scope: requestScope, requestId }
     setListLoading(true)
+    setListRefreshing(true)
     setListError(null)
     try {
       const combined: Conversation[] = []
@@ -280,28 +301,37 @@ export function WhatsAppInboxPage() {
         const result = await invokeInbox<ConversationListResponse>({
           action: 'list', business_id: businessId, status, page: currentPage, query: search || undefined,
         })
+        if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
         const pageRows = result.conversations ?? []
         combined.push(...pageRows)
         morePages = result.meta?.has_more ?? pageRows.length >= 25
         if (currentPage >= finalPage || !morePages) break
         currentPage += 1
       }
+      if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
       setConversations(combined)
+      setLoadedListScope(requestScope)
       setListPage(currentPage)
       setHasMore(morePages)
       if (selectedId && combined.some((conversation) => conversation.id === selectedId)) {
         const result = await invokeInbox<{ conversation?: Conversation }>({
           action: 'conversation', business_id: businessId, conversationId: selectedId,
         })
+        if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
         setSelectedConversation(result.conversation ?? null)
       } else {
         setSelectedConversation(null)
       }
     } catch {
-      setListError('Não foi possível atualizar as conversas. Tente novamente.')
+      if (requestId === listRequest.current && requestScope === activeListScope.current) {
+        setListError('Não foi possível atualizar as conversas. Tente novamente.')
+      }
     } finally {
-      refreshInFlight.current = false
-      setListLoading(false)
+      if (refreshScopeInFlight.current?.requestId === requestId) refreshScopeInFlight.current = null
+      if (requestId === listRequest.current) {
+        setListLoading(false)
+        setListRefreshing(false)
+      }
     }
   }, [businessId, configured, listPage, search, selectedId, status])
 
@@ -437,9 +467,41 @@ export function WhatsAppInboxPage() {
     }))
   }, [customers, currentConversation?.contact.phone])
 
+  function changeStatusFilter(nextStatus: InboxStatus) {
+    const nextScope = conversationScopeKey(nextStatus, search)
+    if (nextScope === activeListScope.current) return
+    activeListScope.current = nextScope
+    refreshScopeInFlight.current = null
+    listRequest.current += 1
+    setConversations([])
+    setLoadedListScope(null)
+    setListRefreshing(false)
+    setListPage(1)
+    setHasMore(false)
+    setListError(null)
+    setSelectedId(null)
+    setStatus(nextStatus)
+  }
+
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setSearch(searchInput.trim())
+    const nextSearch = searchInput.trim()
+    const nextScope = conversationScopeKey(status, nextSearch)
+    if (nextScope === activeListScope.current) {
+      await refreshLoadedConversations()
+      return
+    }
+    activeListScope.current = nextScope
+    refreshScopeInFlight.current = null
+    listRequest.current += 1
+    setConversations([])
+    setLoadedListScope(null)
+    setListRefreshing(false)
+    setListPage(1)
+    setHasMore(false)
+    setListError(null)
+    setSelectedId(null)
+    setSearch(nextSearch)
   }
 
   async function handleSend(event: FormEvent<HTMLFormElement>) {
@@ -510,6 +572,14 @@ export function WhatsAppInboxPage() {
     setLinkMessage('Vínculo salvo para esta conversa.')
   }
 
+  const showConversationListLoading = !listError && (
+    loadedListScope !== currentListScope || listLoading && conversations.length === 0
+  )
+  const showConversationListEmpty = loadedListScope === currentListScope
+    && !listLoading && !listError && conversations.length === 0
+  const showConversationListRefreshing = listRefreshing
+    && loadedListScope === currentListScope && conversations.length > 0
+
   const connectedScreen = connectionChecking ? (
     <section className="surface-panel whatsapp-connection-state" role="status"><span className="empty-icon"><Icon name="clock" /></span><h2>Verificando a conexão segura…</h2><p>O sistema consulta a configuração do Chatwoot no servidor.</p></section>
   ) : !configured ? (
@@ -539,12 +609,13 @@ export function WhatsAppInboxPage() {
           <button className="text-button" type="submit">Buscar</button>
         </form>
         <div className="whatsapp-status-tabs" aria-label="Filtrar conversas por status">
-          {(['open', 'resolved', 'all'] as const).map((item) => <button aria-pressed={status === item} key={item} onClick={() => setStatus(item)} type="button">{item === 'open' ? 'Abertas' : item === 'resolved' ? 'Resolvidas' : 'Todas'}</button>)}
+          {(['open', 'resolved', 'all'] as const).map((item) => <button aria-pressed={status === item} key={item} onClick={() => changeStatusFilter(item)} type="button">{item === 'open' ? 'Abertas' : item === 'resolved' ? 'Resolvidas' : 'Todas'}</button>)}
         </div>
         {listError && <div className="inline-state inline-state-error" role="alert"><p>{listError}</p><button className="text-button" onClick={() => void refreshLoadedConversations()} type="button">Tentar novamente</button></div>}
-        {listLoading && conversations.length === 0 ? <p className="inline-state" role="status">Carregando conversas…</p> : conversations.length === 0 ? (
-          <div className="whatsapp-list-empty"><Icon name="message" /><strong>Nenhuma conversa nesta lista</strong><span>As conversas recebidas pelo canal conectado aparecerão aqui.</span></div>
-        ) : (
+        {showConversationListLoading && <p className="inline-state" role="status">Carregando conversas…</p>}
+        {showConversationListRefreshing && <p className="inline-state" role="status">Atualizando conversas…</p>}
+        {showConversationListEmpty && <div className="whatsapp-list-empty"><Icon name="message" /><strong>Nenhuma conversa nesta lista</strong><span>As conversas recebidas pelo canal conectado aparecerão aqui.</span></div>}
+        {loadedListScope === currentListScope && conversations.length > 0 && (
           <ul className="whatsapp-conversation-list">
             {conversations.map((conversation) => <li key={conversation.id}>
               <button aria-current={selectedId === conversation.id ? 'true' : undefined} className={`whatsapp-conversation-item${selectedId === conversation.id ? ' is-selected' : ''}${conversation.unread_count > 0 ? ' has-unread' : ''}`} onClick={() => { setSelectedConversation(null); setSelectedId(conversation.id) }} type="button">

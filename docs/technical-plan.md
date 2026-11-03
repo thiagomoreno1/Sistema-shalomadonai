@@ -34,6 +34,12 @@ Supabase's current documentation says leaked-password protection is available on
 
 The hosted `get_dashboard_daily_trends` request returns 404 because its migration is pending. Source tracing confirms that priorities, recent orders, and trends load through separate effects with separate error states. The missing RPC therefore leaves the two trend panels in their retry state without suppressing the rest of the dashboard; no frontend fallback change is needed to isolate this failure. This source trace does not verify the authenticated queries or RLS at runtime.
 
+### Migration rollout and WhatsApp list error state — 2026-11-03
+
+The native WhatsApp inbox no longer shows “Nenhuma conversa nesta lista” when the Chatwoot conversation request fails with no cached results; the existing error message and retry action remain visible. Search or status changes hide rows from the previous result scope while loading and ignore late responses from that scope. During a same-scope refresh, cached results remain visible with an updating status; if the refresh fails, they stay visible with the error and retry action. Changing scope invalidates its prior refresh lock so retries are not held by stale requests. The embedded Chatwoot dashboard remains the primary `/whatsapp` route; this fix applies to `/whatsapp/caixa-shalom`.
+
+The nine repository migrations still need to be applied to the hosted project. The current Supabase MCP `apply_migration` interface accepts no version parameter; an [open upstream report](https://github.com/supabase/mcp/issues/241) describes the resulting server-generated timestamp mismatch and recommends the CLI path. Use the Supabase CLI `db push --remote` workflow to preserve migration identity, then verify `supabase migration list --remote` as documented by [Supabase](https://supabase.com/docs/guides/deployment/database-migrations). The CLI is not installed in this workspace yet; no hosted migrations were changed.
+
 ## Goal and scope
 
 Build a private operations system for the owner and owner-approved team members that connects customers, contacts, calls, orders, payments, stock, deliveries, finance, and supported integrations. Delivery workers remain assignment records without accounts. The interface is Brazilian Portuguese, uses BRL, and interprets business dates in `America/Sao_Paulo`.
