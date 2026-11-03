@@ -49,19 +49,21 @@
 
 ## Phase 1 — Automação determinística
 
+**Status da implementação — 2026-11-03:** as tarefas determinísticas 1–4 já têm implementação e commits no repositório. As caixas de implementação abaixo estão marcadas como concluídas. As conferências manuais de cenários seguem pendentes; a integração e as migrations ainda precisam de validação no ambiente hospedado.
+
 ### Task 1: Repetir pedido como rascunho
 
 **Files:**
 - Modify `apps/web/src/pages/OrderDetailPage.tsx`
 - Modify `apps/web/src/pages/NewOrderPage.tsx`
 
-- [ ] Adicionar ação “Criar pedido parecido” para pedidos elegíveis, encaminhando apenas o identificador de origem.
-- [ ] Carregar a origem sob a sessão atual e o escopo do negócio; rejeitar origens canceladas ou inacessíveis.
-- [ ] Copiar somente o cliente e os IDs/quantidades de produtos que ainda estão ativos; recalcular cada preço usando o catálogo atual.
-- [ ] Deixar entrega, endereço, desconto, taxa, observações e cronograma de vencimentos para nova confirmação. Nunca copiar pagamentos ou fatos de status.
-- [ ] Mostrar uma prévia distinguindo dados copiados, preço recalculado e campos ainda necessários antes de prosseguir.
+- [x] Adicionar ação “Criar pedido parecido” para pedidos elegíveis, encaminhando apenas o identificador de origem.
+- [x] Carregar a origem sob a sessão atual e o escopo do negócio; rejeitar origens canceladas ou inacessíveis.
+- [x] Copiar somente o cliente e os IDs/quantidades de produtos que ainda estão ativos; recalcular cada preço usando o catálogo atual.
+- [x] Deixar entrega, endereço, desconto, taxa, observações e cronograma de vencimentos para nova confirmação. Nunca copiar pagamentos ou fatos de status.
+- [x] Mostrar uma prévia distinguindo dados copiados, preço recalculado e campos ainda necessários antes de prosseguir.
 - [ ] Revisar diff e conferir manualmente: pedido repetido, produto inativo, preço alterado, origem cancelada e voltar atrás sem gravar.
-- [ ] Commitar apenas os arquivos da tarefa com mensagem `feat: repeat order as draft`.
+- [x] Commitar apenas os arquivos da tarefa com mensagem `feat: repeat order as draft` (`0337687`).
 
 ### Task 2: Modelos de vencimentos editáveis
 
@@ -70,14 +72,14 @@
 - Create migration `supabase/migrations/<timestamp>_limit_order_installments.sql`
 - Modify `apps/web/src/pages/NewOrderPage.tsx`
 
-- [ ] Criar tabela de modelos por negócio com nome e parcelas ordenadas por ordinal, percentual em pontos-base (somando 10.000), dias após a data-base escolhida pelo dono e método textual opcional.
-- [ ] Limitar cada cronograma e cada pedido a no máximo 120 parcelas; na migration, substituir a definição ativa de `create_order` em `20261029214746_inventory_and_deliveries.sql` e validar o tamanho do array antes de `jsonb_to_recordset`, além da validação da interface.
-- [ ] Aplicar grants mínimos, RLS e política owner-only; validar quantidade, ordinais únicos, percentuais não negativos e soma exata dos percentuais.
-- [ ] Permitir salvar um cronograma conferido como modelo e aplicar um modelo ao pedido atual.
-- [ ] Calcular valores sobre o total atual em centavos; distribuir arredondamento residual na última parcela para fechar exatamente o total.
-- [ ] Calcular vencimentos a partir da data-base escolhida pelo dono, sem supor condição universal; deixar parcelas, datas e método editáveis antes de salvar.
+- [x] Criar tabela de modelos por negócio com nome e parcelas ordenadas por ordinal, percentual em pontos-base (somando 10.000), dias após a data-base escolhida pelo dono e método textual opcional.
+- [x] Limitar cada cronograma e cada pedido a no máximo 120 parcelas; na migration, substituir a definição ativa de `create_order` em `20261029214746_inventory_and_deliveries.sql` e validar o tamanho do array antes de `jsonb_to_recordset`, além da validação da interface.
+- [x] Aplicar grants mínimos, RLS e política owner-only; validar quantidade, ordinais únicos, percentuais não negativos e soma exata dos percentuais.
+- [x] Permitir salvar um cronograma conferido como modelo e aplicar um modelo ao pedido atual.
+- [x] Calcular valores sobre o total atual em centavos; distribuir arredondamento residual na última parcela para fechar exatamente o total.
+- [x] Calcular vencimentos a partir da data-base escolhida pelo dono, sem supor condição universal; deixar parcelas, datas e método editáveis antes de salvar.
 - [ ] Revisar diff e conferir manualmente totais ímpares, datas no passado, edição após aplicação e isolamento entre negócios.
-- [ ] Commitar migração e tela juntos com mensagem `feat: add editable payment schedule templates`.
+- [x] Commitar migração e tela juntos com mensagem `feat: add editable payment schedule templates` (`be068f2`).
 
 ### Task 3: Aviso de possível cliente duplicado
 
@@ -85,11 +87,12 @@
 - Modify `apps/web/src/pages/CustomersPage.tsx`
 - Create migration `supabase/migrations/<timestamp>_customer_phone_match_rpc.sql`
 
-- [ ] Ao informar telefone ou WhatsApp, chamar uma RPC de leitura com dígitos normalizados que procure campos de telefone e WhatsApp no negócio da sessão, retornando no máximo cinco candidatos; não depender da lista paginada/carregada na tela nem enviar estes dados a provedor externo.
-- [ ] A RPC deriva o negócio do usuário autenticado, usa RLS/grants mínimos e compara dígitos dos campos existentes; não aceita `business_id` do navegador como autoridade.
-- [ ] Mostrar candidatos por nome e número mascarado e permitir voltar para o cadastro existente; permitir continuar após confirmação explícita quando for outra pessoa usando o mesmo telefone.
-- [ ] Nunca criar bloqueio de unicidade, mesclar clientes ou alterar histórico automaticamente.
-- [ ] Revisar diff e conferir manualmente números com formatação distinta, campos cruzados telefone/WhatsApp, números compartilhados, limite de candidatos, isolamento entre negócios e ausência de correspondências; commit migration e tela juntos com `feat: warn about possible duplicate customers`.
+- [x] Ao informar telefone ou WhatsApp, chamar uma RPC de leitura com dígitos normalizados que procure campos de telefone e WhatsApp no negócio da sessão, retornando no máximo cinco candidatos; não depender da lista paginada/carregada na tela nem enviar estes dados a provedor externo.
+- [x] A RPC deriva o negócio do usuário autenticado, usa RLS/grants mínimos e compara dígitos dos campos existentes; não aceita `business_id` do navegador como autoridade.
+- [x] Mostrar candidatos por nome e número mascarado e permitir voltar para o cadastro existente; permitir continuar após confirmação explícita quando for outra pessoa usando o mesmo telefone.
+- [x] Nunca criar bloqueio de unicidade, mesclar clientes ou alterar histórico automaticamente.
+- [ ] Revisar diff e conferir manualmente números com formatação distinta, campos cruzados telefone/WhatsApp, números compartilhados, limite de candidatos, isolamento entre negócios e ausência de correspondências.
+- [x] A implementação e a migration estão commitadas (`0a51f4b`); o limite combinado foi corrigido em `0432ff7`. A validação manual permanece pendente.
 
 ### Task 4: Sugestão de alocação de recebimento
 
@@ -97,9 +100,10 @@
 - Modify `apps/web/src/pages/OrderDetailPage.tsx`
 - Reuse the existing payment registration RPC; do not add a second write path.
 
-- [ ] Add a “Sugerir mais antigas primeiro” control that creates an editable allocation draft from the outstanding installments ordered by due date and installment number.
-- [ ] Preserve manual adjustment and the existing exact-total validation; do not submit automatically.
-- [ ] Review diff and manually inspect partial, exact, and excessive receipt amounts before committing `feat: suggest oldest installment allocation`.
+- [x] Add a “Sugerir mais antigas primeiro” control that creates an editable allocation draft from the outstanding installments ordered by due date and installment number.
+- [x] Preserve manual adjustment and the existing exact-total validation; do not submit automatically.
+- [ ] Manually inspect partial, exact, and excessive receipt amounts.
+- [x] Implemented and committed as `b86b0e1`; manual scenario inspection remains pending.
 
 ## Phase 2 — Assistente de texto, gated
 
