@@ -39,3 +39,9 @@ enable_confirmations = false
 
 [functions.chatwoot-inbox]
 verify_jwt = true
+
+[functions.belvo-open-finance]
+verify_jwt = true
+
+[functions.belvo-sandbox-webhook]
+verify_jwt = false

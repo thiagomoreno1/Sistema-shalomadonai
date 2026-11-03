@@ -192,13 +192,31 @@
 .settings-records-shortcuts a { display: inline-flex; min-height: 42px; align-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; }
 .settings-records-shortcuts a:hover { background: var(--accent-soft); }
 .settings-records-shortcuts a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-.bank-connection-note { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: start; gap: 14px; padding: 18px 20px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--accent-wash); }
-.bank-connection-note-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 10px; color: var(--accent); background: var(--success-soft); }
-.bank-connection-note-icon svg { width: 19px; height: 19px; }
-.bank-connection-note h2 { margin: 3px 0 5px; color: var(--ink); font-size: 16px; font-weight: 640; letter-spacing: -0.02em; }
-.bank-connection-note p:not(.eyebrow) { max-width: 850px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
-.bank-connection-note small { display: block; margin-top: 8px; color: var(--success); font-size: 11px; line-height: 1.45; }
-.bank-connection-note > .neutral-status { margin-top: 2px; }
+.belvo-sandbox-card { display: grid; gap: 14px; padding: 19px 20px; }
+.belvo-sandbox-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.belvo-sandbox-header h2 { margin: 3px 0 5px; color: var(--ink); font-size: 17px; font-weight: 640; letter-spacing: -0.025em; }
+.belvo-sandbox-header .neutral-status { flex: 0 0 auto; }
+.belvo-sandbox-intro, .belvo-sandbox-setup > p, .belvo-sandbox-form > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.belvo-sandbox-scope { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--accent-wash); color: var(--muted); font-size: 12px; line-height: 1.5; }
+.belvo-sandbox-scope strong { color: var(--ink); }
+.belvo-sandbox-scope a { color: var(--accent); font-weight: 620; }
+.belvo-sandbox-setup, .belvo-sandbox-form { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.belvo-sandbox-setup h3, .belvo-sandbox-form h3 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 640; }
+.belvo-sandbox-setup ul { display: grid; gap: 5px; margin: 0; padding-left: 20px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.belvo-sandbox-form .record-form-grid { margin-top: 2px; }
+.belvo-sandbox-form .record-field .text-input { margin-bottom: 0; }
+.belvo-sandbox-identity-note { margin: 0; color: var(--quiet); font-size: 11px; line-height: 1.5; }
+.belvo-sandbox-confirm { display: flex; align-items: flex-start; gap: 9px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.belvo-sandbox-confirm input { flex: 0 0 auto; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.belvo-sandbox-form > .button { justify-self: start; min-height: 44px; }
+.belvo-sandbox-status, .belvo-sandbox-next-step { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.belvo-sandbox-retry { display: grid; justify-items: start; gap: 6px; }
+.belvo-sandbox-retry small { color: var(--quiet); font-size: 10px; line-height: 1.45; }
+.belvo-sandbox-result { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.belvo-sandbox-result > div { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.belvo-sandbox-result dt { color: var(--quiet); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+.belvo-sandbox-result dd { margin: 4px 0 0; color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
+.belvo-sandbox-next-step { padding-top: 11px; border-top: 1px solid var(--line); }
 .bank-inline-form { margin: 17px 0 8px; padding: 17px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
 .bank-inline-form > h2 { outline: none; }
 .bank-account-list, .bank-movement-list, .bank-candidate-list { margin: 14px 0 0; padding: 0; list-style: none; }
@@ -694,8 +712,11 @@
   .quick-link { min-height: 65px; }
   .settings-integration-grid { grid-template-columns: 1fr; }
   .settings-integration-copy { min-height: 0; }
-  .bank-connection-note { grid-template-columns: 36px minmax(0, 1fr); padding: 15px; }
-  .bank-connection-note > .neutral-status { grid-column: 2; justify-self: start; }
+  .belvo-sandbox-card { padding: 15px; }
+  .belvo-sandbox-header { flex-direction: column; }
+  .belvo-sandbox-header .neutral-status { align-self: flex-start; }
+  .belvo-sandbox-form > .button { width: 100%; }
+  .belvo-sandbox-result { grid-template-columns: minmax(0, 1fr); }
   .bank-candidate-list > li { grid-template-columns: minmax(0, 1fr) auto; gap: 7px 10px; }
   .bank-candidate-list > li > strong { grid-column: 2; grid-row: 1; }
   .bank-candidate-list > li .button { grid-column: 1 / -1; justify-self: stretch; }

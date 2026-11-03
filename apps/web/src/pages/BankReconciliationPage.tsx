@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { FinanceNavigation } from '../components/FinanceNavigation'
+import { BelvoSandboxCard } from '../components/BelvoSandboxCard'
 import { Icon } from '../components/Icon'
 import { businessToday, formatBRLExact, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { useBusiness } from '../business/BusinessContext'
@@ -733,16 +734,7 @@ export function BankReconciliationPage() {
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
       {loadError && <div className="form-message form-message-error" role="alert">{loadError} <button className="text-button" onClick={() => void refreshBankData(page)} type="button">Atualizar</button></div>}
 
-      <section className="bank-connection-note" aria-labelledby="bank-connection-heading">
-        <div className="bank-connection-note-icon" aria-hidden="true"><Icon name="shield" /></div>
-        <div>
-          <p className="eyebrow">OPEN FINANCE</p>
-          <h2 id="bank-connection-heading">Conexão ainda não iniciada</h2>
-          <p>O teste de sandbox depende de acesso de desenvolvedor ao provedor, credenciais de sandbox e consentimento de teste. Esta tela ainda não acessa contas bancárias nem contém movimentos fictícios. Enquanto isso, você pode registrar manualmente linhas do extrato e conciliá-las com o financeiro.</p>
-          <small>Os segredos da integração deverão ficar no servidor. Não informe senha bancária nesta tela.</small>
-        </div>
-        <span className="neutral-status">Não conectada</span>
-      </section>
+      <BelvoSandboxCard />
 
       <section className="surface-panel settings-panel" aria-labelledby="bank-accounts-heading">
         <div className="section-heading">
