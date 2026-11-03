@@ -6,7 +6,7 @@ The hosted Shalom Adonai Supabase project is `ACTIVE_HEALTHY`; the owner's confi
 
 ### Interactive-control audit — 2026-11-03
 
-A read-only source audit found no empty button handlers, `href="#"` placeholders, or obviously inert action controls in `apps/web/src`; controls are connected to handlers or form submissions. Some are intentionally unavailable while a request is pending or when a required prerequisite is missing. This was a static code review only: it does not establish that authenticated database-backed actions succeed at runtime. The hosted migrations and Edge Functions remain pending, so clickability must not be reported as end-to-end integration success.
+A source audit found no empty button handlers, `href="#"` placeholders, or obviously inert action controls in `apps/web/src`; controls are connected to handlers or form submissions. A local preview of the current app was also inspected at a 390×844 CSS-pixel mobile viewport with touch and reduced-motion emulation: the theme toggle changed themes and returned, password-recovery opened and returned, and account-request navigation opened and returned. The document width remained 390 pixels, with no horizontal overflow. No sign-in, account creation, or password-reset form was submitted, and no authenticated data was opened. Some controls are intentionally unavailable while a request is pending or when a required prerequisite is missing. These static and unauthenticated UI checks do not establish that authenticated database-backed actions succeed at runtime. The hosted migrations and Edge Functions remain pending, so clickability must not be reported as end-to-end integration success.
 
 ### Pending migration review — 2026-11-03
 
