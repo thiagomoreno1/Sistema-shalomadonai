@@ -249,6 +249,7 @@ export function CustomerDetailPage() {
   const displayedPurchaseOrders = purchaseOrdersAreCurrent ? purchaseOrders : []
   const displayedOrderHistoryError = purchaseOrdersAreCurrent ? orderHistoryError : null
   const loadingMoreOrdersRef = useRef(false)
+  const interactionRequestRef = useRef<{ payload: string; requestId: string; occurredAt: string } | null>(null)
 
   useLayoutEffect(() => {
     activeCustomerScopeRef.current = customerScope
@@ -539,37 +540,52 @@ export function CustomerDetailPage() {
     const type = String(form.get('interaction_type')) as Interaction['interaction_type']
     const callOutcome = type === 'call' ? String(form.get('call_outcome') ?? '') : null
     const occurredAtInput = String(form.get('occurred_at') ?? '').trim()
-    const occurredAt = occurredAtInput ? businessLocalDateTimeToIso(occurredAtInput) : currentTimestamp()
-    if (!occurredAt) {
-      setInteractionError('Confira a data e o horário do contato.')
-      return
-    }
     if (callOutcome !== 'missed' && Boolean(nextAction) !== Boolean(dueOn)) {
       setInteractionError('Preencha o próximo passo e a data juntos, ou deixe os dois em branco.')
       return
     }
 
+    const requestInput = {
+      p_business_id: businessId,
+      p_customer_id: customer.id,
+      p_interaction_type: type,
+      p_direction: String(form.get('direction')),
+      p_call_outcome: callOutcome || null,
+      p_outcome: null,
+      p_notes: String(form.get('notes') ?? '').trim() || null,
+      p_follow_up_title: nextAction || null,
+      p_follow_up_due_on: dueOn || null,
+      p_follow_up_priority: String(form.get('priority') ?? '').trim() || null,
+      p_related_order_id: String(form.get('related_order_id') ?? '').trim() || null,
+    }
+    const requestPayload = JSON.stringify({ ...requestInput, occurred_at_input: occurredAtInput })
+    let interactionRequest = interactionRequestRef.current
+    if (!interactionRequest || interactionRequest.payload !== requestPayload) {
+      const occurredAt = occurredAtInput ? businessLocalDateTimeToIso(occurredAtInput) : currentTimestamp()
+      if (!occurredAt) {
+        setInteractionError('Confira a data e o horário do contato.')
+        return
+      }
+      interactionRequest = { payload: requestPayload, requestId: crypto.randomUUID(), occurredAt }
+      interactionRequestRef.current = interactionRequest
+    }
+    const requestArgs = { ...requestInput, p_occurred_at: interactionRequest.occurredAt }
+
     setSaving(true)
     setInteractionError(null)
     try {
-      const { error: insertError } = await supabaseClient.rpc('record_customer_interaction_with_order', {
-        p_business_id: businessId,
-        p_customer_id: customer.id,
-        p_interaction_type: type,
-        p_direction: String(form.get('direction')),
-        p_call_outcome: callOutcome || null,
-        p_outcome: null,
-        p_notes: String(form.get('notes') ?? '').trim() || null,
-        p_occurred_at: occurredAt,
-        p_follow_up_title: nextAction || null,
-        p_follow_up_due_on: dueOn || null,
-        p_follow_up_priority: String(form.get('priority') ?? '').trim() || null,
-        p_related_order_id: String(form.get('related_order_id') ?? '').trim() || null,
-      })
+      let insertError = (await supabaseClient.rpc('record_customer_interaction_with_order_idempotent', {
+        ...requestArgs,
+        p_request_id: interactionRequest.requestId,
+      })).error
+      if (insertError?.code === 'PGRST202') {
+        insertError = (await supabaseClient.rpc('record_customer_interaction_with_order', requestArgs)).error
+      }
       if (insertError) {
         setInteractionError('Não foi possível registrar o contato e o retorno. Seus dados continuam no formulário; tente novamente.')
         return
       }
+      interactionRequestRef.current = null
       setInteractionNotice(interactionFormMode === 'missed_call'
         ? 'Ligação não atendida registrada. O retorno de hoje, com prioridade alta, entrou na fila.'
         : 'Contato registrado.')
