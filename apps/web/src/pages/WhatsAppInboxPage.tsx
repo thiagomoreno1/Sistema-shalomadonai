@@ -18,6 +18,7 @@ type Message = {
   content: string | null
   created_at: string | null
   message_type: 'incoming' | 'outgoing' | 'activity'
+  status: 'sent' | 'delivered' | 'read' | 'failed' | null
   private: boolean
   sender: { name: string | null }
   attachments: Attachment[]
@@ -57,6 +58,14 @@ function statusLabel(value: string | null | undefined) {
   if (value === 'snoozed') return 'Adiada'
   if (value === 'open') return 'Aberta'
   return value ? `Status: ${value}` : 'Status indisponível'
+}
+
+function messageDeliveryLabel(value: Message['status']) {
+  if (value === 'sent') return 'Enviada'
+  if (value === 'delivered') return 'Entregue'
+  if (value === 'read') return 'Lida'
+  if (value === 'failed') return 'Falhou'
+  return null
 }
 
 function orderLabel(order: Order) {
@@ -568,7 +577,7 @@ export function WhatsAppInboxPage() {
               {message.content && <p>{message.content}</p>}
               {!message.content && message.attachments.length === 0 && <p className="whatsapp-message-attachment">{message.message_type === 'activity' ? 'Atualização da conversa' : 'Mensagem sem texto'}</p>}
               {message.attachments.map((attachment) => <MessageAttachment attachment={attachment} businessId={businessId} conversationId={currentConversation.id} key={attachment.id} messageId={message.id} />)}
-              <footer><span>{message.message_type === 'outgoing' ? 'Equipe' : message.sender.name || currentConversation?.contact.name || 'Cliente'}</span><time>{timestampLabel(message.created_at)}</time></footer>
+              <footer><span>{message.message_type === 'outgoing' ? 'Equipe' : message.sender.name || currentConversation?.contact.name || 'Cliente'}</span><time>{timestampLabel(message.created_at)}</time>{message.message_type === 'outgoing' && !message.private && message.status && <span className={`whatsapp-message-delivery is-${message.status}`}>{messageDeliveryLabel(message.status)}</span>}</footer>
             </article>)}
             {!detailLoading && currentConversation?.messages.length === 0 && <p className="whatsapp-chat-empty-history">Ainda não há mensagens nesta conversa.</p>}
           </div>

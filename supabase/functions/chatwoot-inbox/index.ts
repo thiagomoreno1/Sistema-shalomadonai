@@ -7,6 +7,7 @@ const corsHeaders = {
 }
 
 type MessageType = 'incoming' | 'outgoing' | 'activity'
+type MessageDeliveryStatus = 'sent' | 'delivered' | 'read' | 'failed'
 
 type NormalizedAttachment = {
   id: string
@@ -22,6 +23,7 @@ type NormalizedMessage = {
   content: string | null
   created_at: string | null
   message_type: MessageType
+  status: MessageDeliveryStatus | null
   private: boolean
   sender: { name: string | null }
   attachments: NormalizedAttachment[]
@@ -149,6 +151,11 @@ function normalizedMessage(value: unknown): NormalizedMessage | null {
   if (messageType === 0 || messageType === 'incoming') type = 'incoming'
   if (messageType === 1 || messageType === 'outgoing') type = 'outgoing'
   if (messageType === 2 || messageType === 'activity') type = 'activity'
+  const rawStatus = stringValue(value.status)?.toLowerCase()
+  const status: MessageDeliveryStatus | null =
+    rawStatus === 'sent' || rawStatus === 'delivered' || rawStatus === 'read' || rawStatus === 'failed'
+      ? rawStatus
+      : null
 
   const sender = isRecord(value.sender) ? value.sender : null
   const messageId = numericId(value.id)
@@ -162,6 +169,7 @@ function normalizedMessage(value: unknown): NormalizedMessage | null {
     content: stringValue(value.processed_message_content) ?? stringValue(value.content),
     created_at: isoTimestamp(value.created_at),
     message_type: type,
+    status,
     private: value.private === true,
     sender: { name: sender ? stringValue(sender.name) : null },
     attachments,
