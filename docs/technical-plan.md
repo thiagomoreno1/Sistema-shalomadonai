@@ -12,6 +12,10 @@ A source audit found no empty button handlers, `href="#"` placeholders, or obvio
 
 A read-only software-engineering review of the seven unapplied migrations found no static concerns with dependency order, grants/RLS, idempotency, constraints, or `SECURITY DEFINER` protections. The hosted project still has 22 recorded migrations and no deployed Edge Functions. Local migration replay remains unavailable because the Docker Linux engine is not running and the Supabase CLI is not installed; execution of the pending migration SQL, RLS behavior, and authenticated runtime flows therefore remain unverified. No hosted schema or function changes were made during this review.
 
+### Dashboard trends root cause — 2026-11-03
+
+The hosted `get_dashboard_daily_trends` request returns 404 because its migration is pending. Source tracing confirms that priorities, recent orders, and trends load through separate effects with separate error states. The missing RPC therefore leaves the two trend panels in their retry state without suppressing the rest of the dashboard; no frontend fallback change is needed to isolate this failure. This source trace does not verify the authenticated queries or RLS at runtime.
+
 ## Goal and scope
 
 Build a private operations system for the owner and owner-approved team members that connects customers, contacts, calls, orders, payments, stock, deliveries, finance, and supported integrations. Delivery workers remain assignment records without accounts. The interface is Brazilian Portuguese, uses BRL, and interprets business dates in `America/Sao_Paulo`.
