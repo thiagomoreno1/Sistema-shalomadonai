@@ -1035,6 +1035,19 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .whatsapp-message.is-private { border-style: dashed; background: var(--accent-wash); }
 .whatsapp-message > p { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
 .whatsapp-message > p.whatsapp-message-attachment { color: var(--muted); font-style: italic; }
+.whatsapp-attachment { max-width: min(100%, 340px); margin-top: 8px; }
+.whatsapp-attachment-load { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 9px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--paper); cursor: pointer; text-align: left; }
+.whatsapp-attachment-load svg { width: 18px; height: 18px; flex: 0 0 auto; color: var(--accent); }
+.whatsapp-attachment-load span { overflow-wrap: anywhere; }
+.whatsapp-attachment-load:disabled { cursor: progress; opacity: 0.72; }
+.whatsapp-attachment-preview, .whatsapp-attachment-video { display: block; max-width: min(100%, 420px); max-height: 340px; border-radius: 9px; background: var(--canvas); object-fit: contain; }
+.whatsapp-attachment-audio { display: block; width: min(100%, 340px); min-height: 44px; }
+.whatsapp-attachment-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.whatsapp-attachment-download, .whatsapp-attachment-close { display: inline-flex; min-height: 44px; align-items: center; color: var(--accent); font: inherit; font-weight: 650; }
+.whatsapp-attachment-close { padding: 0; border: 0; background: transparent; cursor: pointer; }
+.whatsapp-attachment-status, .whatsapp-attachment-error { display: block; margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.whatsapp-attachment-error { color: var(--danger, #a12c2c); }
+.whatsapp-attachment-preview-region:focus { outline: 2px solid color-mix(in srgb, var(--accent) 54%, transparent); outline-offset: 3px; border-radius: 4px; }
 .whatsapp-message-label { display: block; margin-bottom: 5px; color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .whatsapp-message footer { display: flex; justify-content: flex-end; gap: 9px; margin-top: 6px; color: var(--quiet); font-size: 9px; }
 .whatsapp-chat-empty-history { align-self: center; margin: auto; color: var(--muted); font-size: 12px; text-align: center; }

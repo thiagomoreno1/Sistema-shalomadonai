@@ -5,6 +5,14 @@ import { Icon } from '../components/Icon'
 import { supabaseClient } from '../lib/supabase'
 
 type InboxStatus = 'open' | 'resolved' | 'all'
+type Attachment = {
+  id: string
+  file_type: string | null
+  extension: string | null
+  file_size: number | null
+  width: number | null
+  height: number | null
+}
 type Message = {
   id: string
   content: string | null
@@ -12,6 +20,7 @@ type Message = {
   message_type: 'incoming' | 'outgoing' | 'activity'
   private: boolean
   sender: { name: string | null }
+  attachments: Attachment[]
 }
 type Conversation = {
   id: string
@@ -60,6 +69,141 @@ async function invokeInbox<T>(body: Record<string, unknown>) {
   const { data, error } = await supabaseClient.functions.invoke('chatwoot-inbox', { body })
   if (error) throw error
   return data as T
+}
+
+const SAFE_INLINE_ATTACHMENT_TYPES = new Set([
+  'image/jpeg', 'image/png',
+  'audio/aac', 'audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/3gpp',
+  'video/mp4', 'video/webm', 'video/3gpp',
+])
+
+function attachmentName(attachment: Attachment) {
+  const extension = attachment.extension && /^[a-z0-9]{1,16}$/i.test(attachment.extension)
+    ? `.${attachment.extension}`
+    : ''
+  return `whatsapp-anexo-${attachment.id}${extension}`
+}
+
+function attachmentSizeLabel(bytes: number | null) {
+  if (!bytes || bytes < 1) return ''
+  const size = bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return ` · ${size}`
+}
+
+function attachmentKindLabel(attachment: Attachment) {
+  if (attachment.file_type === 'image') return 'Imagem'
+  if (attachment.file_type === 'audio') return 'Áudio'
+  if (attachment.file_type === 'video') return 'Vídeo'
+  return 'Arquivo'
+}
+
+function isAttachmentSizeError(error: unknown) {
+  if (!error || typeof error !== 'object' || !('context' in error)) return false
+  const context = error.context
+  return context instanceof Response && context.status === 413
+}
+
+function MessageAttachment({ attachment, businessId, conversationId, messageId }: {
+  attachment: Attachment
+  businessId: string
+  conversationId: string
+  messageId: string
+}) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(false)
+  const [sizeRejected, setSizeRejected] = useState(false)
+  const [file, setFile] = useState<{ url: string; mimeType: string } | null>(null)
+  const mounted = useRef(false)
+  const objectUrl = useRef<string | null>(null)
+  const previewRegion = useRef<HTMLDivElement>(null)
+  const loadButton = useRef<HTMLButtonElement>(null)
+  const name = attachmentName(attachment)
+  const tooLarge = sizeRejected || (attachment.file_size !== null && attachment.file_size > 25 * 1024 * 1024)
+
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      if (objectUrl.current) URL.revokeObjectURL(objectUrl.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (file) previewRegion.current?.focus()
+    if (error) loadButton.current?.focus()
+  }, [error, file])
+
+  async function loadAttachment() {
+    if (!supabaseClient || loading || file || tooLarge) return
+    setLoading(true)
+    setError(false)
+    try {
+      const { data, error: requestError, response } = await supabaseClient.functions.invoke<Blob>('chatwoot-inbox', {
+        body: {
+          action: 'attachment', business_id: businessId, conversationId, messageId, attachmentId: attachment.id,
+        },
+      })
+      if (requestError) throw requestError
+      if (!(data instanceof Blob) || data.size < 1 || data.size > 25 * 1024 * 1024) throw new Error('invalid_attachment')
+      const declaredType = response?.headers.get('X-Original-Content-Type')?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+      const mimeType = SAFE_INLINE_ATTACHMENT_TYPES.has(declaredType) ? declaredType : 'application/octet-stream'
+      const safeBlob = new Blob([data], { type: mimeType })
+      const url = URL.createObjectURL(safeBlob)
+      if (!mounted.current) {
+        URL.revokeObjectURL(url)
+        return
+      }
+      objectUrl.current = url
+      setFile({ url, mimeType })
+    } catch (requestError) {
+      if (mounted.current) {
+        if (isAttachmentSizeError(requestError)) setSizeRejected(true)
+        else setError(true)
+      }
+    } finally {
+      if (mounted.current) setLoading(false)
+    }
+  }
+
+  function handlePreviewError() {
+    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current)
+    objectUrl.current = null
+    setFile(null)
+    setError(true)
+  }
+
+  function closePreview() {
+    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current)
+    objectUrl.current = null
+    setFile(null)
+    setError(false)
+    window.requestAnimationFrame(() => loadButton.current?.focus())
+  }
+
+  const label = `${attachmentKindLabel(attachment)}${attachmentSizeLabel(attachment.file_size)}`
+  if (!file) return (
+    <div className="whatsapp-attachment">
+      {tooLarge && <p className="whatsapp-attachment-error" role="alert">Este anexo excede o limite de 25 MiB.</p>}
+      {!tooLarge && <button className="whatsapp-attachment-load" disabled={loading} onClick={() => void loadAttachment()} ref={loadButton} type="button">
+        <Icon name="file" />
+        <span>{error ? 'Não foi possível abrir · tentar novamente' : `Abrir ${label}`}</span>
+      </button>}
+      {loading && <span className="whatsapp-attachment-status" role="status">Carregando anexo…</span>}
+      {error && <span className="whatsapp-attachment-error" role="alert">O arquivo não abriu. Você pode tentar carregar novamente.</span>}
+    </div>
+  )
+
+  return (
+    <div aria-label={`${label} carregado`} className="whatsapp-attachment-preview-region" ref={previewRegion} role="group" tabIndex={-1}>
+      {file.mimeType.startsWith('image/') && <img className="whatsapp-attachment-preview" alt={label} loading="lazy" onError={handlePreviewError} src={file.url} />}
+      {file.mimeType.startsWith('audio/') && <audio aria-label={label} className="whatsapp-attachment-audio" controls onError={handlePreviewError} preload="metadata" src={file.url}>{`Seu navegador não reproduz ${label.toLocaleLowerCase('pt-BR')}.`}</audio>}
+      {file.mimeType.startsWith('video/') && <video aria-label={label} className="whatsapp-attachment-video" controls onError={handlePreviewError} playsInline preload="metadata" src={file.url}>{`Seu navegador não reproduz ${label.toLocaleLowerCase('pt-BR')}.`}</video>}
+      <div className="whatsapp-attachment-actions">
+        <a className="whatsapp-attachment-download" download={name} href={file.url}>Baixar {label.toLocaleLowerCase('pt-BR')}</a>
+        <button className="whatsapp-attachment-close" onClick={closePreview} type="button">Fechar anexo</button>
+      </div>
+    </div>
+  )
 }
 
 export function WhatsAppInboxPage() {
@@ -375,7 +519,7 @@ export function WhatsAppInboxPage() {
             {conversations.map((conversation) => <li key={conversation.id}>
               <button aria-current={selectedId === conversation.id ? 'true' : undefined} className={`whatsapp-conversation-item${selectedId === conversation.id ? ' is-selected' : ''}`} onClick={() => { setSelectedConversation(null); setSelectedId(conversation.id) }} type="button">
                 <span className="whatsapp-contact-avatar">{(conversation.contact.name || conversation.contact.phone || '?').slice(0, 1).toLocaleUpperCase('pt-BR')}</span>
-                <span className="whatsapp-conversation-copy"><strong>{conversation.contact.name || conversation.contact.phone || 'Contato sem nome'}</strong><small>{conversation.last_message?.content || 'Sem mensagem de texto'}</small></span>
+                <span className="whatsapp-conversation-copy"><strong>{conversation.contact.name || conversation.contact.phone || 'Contato sem nome'}</strong><small>{conversation.last_message?.content || (conversation.last_message?.attachments.length ? `${conversation.last_message.attachments.length} anexo(s)` : 'Sem mensagem de texto')}</small></span>
                 <span className="whatsapp-conversation-meta"><time>{timestampLabel(conversation.last_activity_at)}</time>{links[conversation.id]?.customer_id && <span className="whatsapp-linked-mark">Cliente vinculado</span>}</span>
               </button>
             </li>)}
@@ -400,7 +544,9 @@ export function WhatsAppInboxPage() {
             {detailLoading && <p className="inline-state" role="status">Carregando histórico…</p>}
             {!detailLoading && currentConversation?.messages.map((message) => <article className={`whatsapp-message${message.message_type === 'outgoing' ? ' is-outgoing' : ''}${message.private ? ' is-private' : ''}`} key={message.id}>
               {message.private && <span className="whatsapp-message-label">Nota interna</span>}
-              {message.content ? <p>{message.content}</p> : <p className="whatsapp-message-attachment">{message.message_type === 'activity' ? 'Atualização da conversa' : 'Mensagem sem texto'}</p>}
+              {message.content && <p>{message.content}</p>}
+              {!message.content && message.attachments.length === 0 && <p className="whatsapp-message-attachment">{message.message_type === 'activity' ? 'Atualização da conversa' : 'Mensagem sem texto'}</p>}
+              {message.attachments.map((attachment) => <MessageAttachment attachment={attachment} businessId={businessId} conversationId={currentConversation.id} key={attachment.id} messageId={message.id} />)}
               <footer><span>{message.message_type === 'outgoing' ? 'Equipe' : message.sender.name || currentConversation?.contact.name || 'Cliente'}</span><time>{timestampLabel(message.created_at)}</time></footer>
             </article>)}
             {!detailLoading && currentConversation?.messages.length === 0 && <p className="whatsapp-chat-empty-history">Ainda não há mensagens nesta conversa.</p>}

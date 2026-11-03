@@ -8,6 +8,15 @@ const corsHeaders = {
 
 type MessageType = 'incoming' | 'outgoing' | 'activity'
 
+type NormalizedAttachment = {
+  id: string
+  file_type: string | null
+  extension: string | null
+  file_size: number | null
+  width: number | null
+  height: number | null
+}
+
 type NormalizedMessage = {
   id: string
   content: string | null
@@ -15,6 +24,7 @@ type NormalizedMessage = {
   message_type: MessageType
   private: boolean
   sender: { name: string | null }
+  attachments: NormalizedAttachment[]
 }
 
 type NormalizedConversation = {
@@ -33,9 +43,29 @@ type ChatwootConfiguration = {
   accountId: string
   inboxId: string
   apiToken: string
+  attachmentAllowedHosts: Set<string>
 }
 
 const CHATWOOT_CONVERSATIONS_PER_PAGE = 25
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+const MAX_ATTACHMENT_REDIRECTS = 5
+const INLINE_MEDIA_TYPES = new Set([
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/avif',
+  'audio/aac',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/ogg',
+  'audio/wav',
+  'audio/webm',
+  'audio/3gpp',
+  'video/mp4',
+  'video/webm',
+  'video/3gpp',
+])
 
 class RequestError extends Error {
   constructor(
@@ -64,6 +94,33 @@ function stringValue(value: unknown): string | null {
 function numericId(value: unknown): string | null {
   const id = typeof value === 'number' ? String(value) : stringValue(value)
   return id && /^[0-9]{1,32}$/.test(id) ? id : null
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isSafeInteger(number) && number >= 0 ? number : null
+}
+
+function attachmentRows(value: Record<string, unknown>): unknown[] {
+  if (Array.isArray(value.attachments) && value.attachments.length > 0) return value.attachments
+  return isRecord(value.attachment) ? [value.attachment] : []
+}
+
+function normalizedAttachment(value: unknown): NormalizedAttachment | null {
+  if (!isRecord(value)) return null
+  const id = numericId(value.id)
+  if (!id) return null
+
+  const fileType = stringValue(value.file_type)?.toLowerCase() ?? null
+  const extension = stringValue(value.extension)?.toLowerCase() ?? null
+  return {
+    id,
+    file_type: fileType && /^[a-z0-9_-]{1,32}$/.test(fileType) ? fileType : null,
+    extension: extension && /^[a-z0-9]{1,16}$/.test(extension) ? extension : null,
+    file_size: nonNegativeInteger(value.file_size),
+    width: nonNegativeInteger(value.width),
+    height: nonNegativeInteger(value.height),
+  }
 }
 
 function isoTimestamp(value: unknown): string | null {
@@ -95,6 +152,9 @@ function normalizedMessage(value: unknown): NormalizedMessage | null {
   const sender = isRecord(value.sender) ? value.sender : null
   const messageId = numericId(value.id)
   if (!messageId) return null
+  const attachments = attachmentRows(value)
+    .map(normalizedAttachment)
+    .filter((attachment): attachment is NormalizedAttachment => attachment !== null)
 
   return {
     id: messageId,
@@ -103,6 +163,7 @@ function normalizedMessage(value: unknown): NormalizedMessage | null {
     message_type: type,
     private: value.private === true,
     sender: { name: sender ? stringValue(sender.name) : null },
+    attachments,
   }
 }
 
@@ -165,7 +226,15 @@ function loadConfiguration(): ChatwootConfiguration | null {
       return null
     }
 
-    return { baseUrl, accountId, inboxId, apiToken }
+    const attachmentAllowedHosts = new Set([baseUrl.hostname.toLowerCase()])
+    for (const item of Deno.env.get('CHATWOOT_ATTACHMENT_ALLOWED_HOSTS')?.split(',') ?? []) {
+      const hostname = item.trim().toLowerCase()
+      if (/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(hostname)) {
+        attachmentAllowedHosts.add(hostname)
+      }
+    }
+
+    return { baseUrl, accountId, inboxId, apiToken, attachmentAllowedHosts }
   } catch {
     return null
   }
@@ -237,12 +306,157 @@ async function getConversation(
   config: ChatwootConfiguration,
   conversationId: string,
 ): Promise<NormalizedConversation> {
+  return (await getConversationPayload(config, conversationId)).normalized
+}
+
+async function getConversationPayload(
+  config: ChatwootConfiguration,
+  conversationId: string,
+): Promise<{ raw: Record<string, unknown>; normalized: NormalizedConversation }> {
   const result = await chatwootRequest(config, `/conversations/${conversationId}`)
-  const conversation = normalizedConversation(responseConversation(result))
-  if (!conversation || conversation.inbox_id !== config.inboxId) {
+  const raw = responseConversation(result)
+  const normalized = normalizedConversation(raw)
+  if (!isRecord(raw) || !normalized || normalized.id !== conversationId || normalized.inbox_id !== config.inboxId) {
     throw new RequestError(404, 'conversation_not_found')
   }
-  return conversation
+  return { raw, normalized }
+}
+
+function attachmentUrl(config: ChatwootConfiguration, value: unknown): URL {
+  const rawUrl = isRecord(value) ? stringValue(value.data_url) : null
+  if (!rawUrl || rawUrl.length > 4096) throw new RequestError(404, 'attachment_not_found')
+
+  try {
+    const url = new URL(rawUrl)
+    const blobPathPrefix = '/rails/active_storage/blobs/redirect/'
+    if (
+      url.protocol !== 'https:' ||
+      url.origin !== config.baseUrl.origin ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !url.pathname.startsWith(blobPathPrefix) ||
+      url.pathname.length <= blobPathPrefix.length
+    ) {
+      throw new RequestError(404, 'attachment_not_found')
+    }
+    return url
+  } catch (error) {
+    if (error instanceof RequestError) throw error
+    throw new RequestError(404, 'attachment_not_found')
+  }
+}
+
+function safeRedirectUrl(value: string, currentUrl: URL, config: ChatwootConfiguration): URL | null {
+  try {
+    const target = new URL(value, currentUrl)
+    const hostname = target.hostname.toLowerCase()
+    const isConfiguredOrigin = target.origin === config.baseUrl.origin
+    const isAllowedHost = config.attachmentAllowedHosts.has(hostname)
+    const isLocalName = hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      hostname.endsWith('.local') ||
+      hostname.endsWith('.internal')
+    const isIpLiteral = hostname.startsWith('[') || /^\d+(?:\.\d+){3}$/.test(hostname)
+
+    if (
+      target.protocol !== 'https:' ||
+      target.username ||
+      target.password ||
+      target.hash ||
+      isLocalName ||
+      (!isConfiguredOrigin && (!isAllowedHost || target.port !== '' || isIpLiteral))
+    ) {
+      return null
+    }
+    return target
+  } catch {
+    return null
+  }
+}
+
+async function fetchAttachment(url: URL, config: ChatwootConfiguration): Promise<Response> {
+  const signal = AbortSignal.timeout(30_000)
+
+  for (let redirectCount = 0; redirectCount <= MAX_ATTACHMENT_REDIRECTS; redirectCount += 1) {
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      signal,
+      headers: { Accept: '*/*' },
+    })
+
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response
+
+    const location = response.headers.get('Location')
+    try {
+      await response.body?.cancel()
+    } catch {
+      // The redirect body is discarded; it is not needed for the proxy response.
+    }
+
+    if (!location || redirectCount === MAX_ATTACHMENT_REDIRECTS) {
+      throw new RequestError(502, 'attachment_unavailable')
+    }
+
+    const redirectedUrl = safeRedirectUrl(location, url, config)
+    if (!redirectedUrl) throw new RequestError(502, 'attachment_unavailable')
+    url = redirectedUrl
+  }
+
+  throw new RequestError(502, 'attachment_unavailable')
+}
+
+async function attachmentResponse(providerResponse: Response, attachmentId: string, extension: string | null): Promise<Response> {
+  if (!providerResponse.ok || !providerResponse.body) {
+    void providerResponse.body?.cancel().catch(() => undefined)
+    throw new RequestError(502, 'attachment_unavailable')
+  }
+
+  const declaredLength = providerResponse.headers.get('Content-Length')
+  if (declaredLength && /^[0-9]+$/.test(declaredLength) && Number(declaredLength) > MAX_ATTACHMENT_BYTES) {
+    void providerResponse.body.cancel().catch(() => undefined)
+    throw new RequestError(413, 'attachment_too_large')
+  }
+
+  const rawContentType = providerResponse.headers.get('Content-Type')?.split(';', 1)[0]?.trim().toLowerCase()
+  const originalContentType = rawContentType && INLINE_MEDIA_TYPES.has(rawContentType)
+    ? rawContentType
+    : null
+  const disposition = originalContentType ? 'inline' : 'attachment'
+  const filename = `chatwoot-attachment-${attachmentId}${extension ? `.${extension}` : ''}`
+  const reader = providerResponse.body.getReader()
+  const chunks: Uint8Array[] = []
+  let transferredBytes = 0
+  try {
+    while (true) {
+      const result = await reader.read()
+      if (result.done) break
+      transferredBytes += result.value.byteLength
+      if (transferredBytes > MAX_ATTACHMENT_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        throw new RequestError(413, 'attachment_too_large')
+      }
+      chunks.push(result.value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  return new Response(new Blob(chunks, { type: originalContentType ?? 'application/octet-stream' }), {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      'Access-Control-Expose-Headers': 'Content-Disposition, X-Original-Content-Type',
+      'Cache-Control': 'private, no-store',
+      'Content-Disposition': `${disposition}; filename="${filename}"`,
+      'Content-Type': 'application/octet-stream',
+      'X-Content-Type-Options': 'nosniff',
+      'Accept-Ranges': 'none',
+      ...(originalContentType ? { 'X-Original-Content-Type': originalContentType } : {}),
+    },
+  })
 }
 
 function requiredText(value: unknown, maximumLength: number): string | null {
@@ -279,7 +493,7 @@ Deno.serve(async (request: Request) => {
   const action = body.action
   const businessId = body.business_id
   if (!isUuid(businessId)) return json({ error: 'invalid_business_id' }, 400)
-  if (!['status', 'list', 'conversation', 'send', 'set_status'].includes(String(action))) {
+  if (!['status', 'list', 'conversation', 'send', 'set_status', 'attachment'].includes(String(action))) {
     return json({ error: 'invalid_action' }, 400)
   }
 
@@ -343,6 +557,35 @@ Deno.serve(async (request: Request) => {
 
     const conversationId = numericId(body.conversationId)
     if (!conversationId) return json({ error: 'invalid_conversation_id' }, 400)
+
+    if (action === 'attachment') {
+      const messageId = numericId(body.messageId)
+      const attachmentId = numericId(body.attachmentId)
+      if (!messageId || !attachmentId) return json({ error: 'invalid_attachment_reference' }, 400)
+
+      const { raw } = await getConversationPayload(config, conversationId)
+      const rawMessages = Array.isArray(raw.messages) ? raw.messages : []
+      const message = rawMessages.find((row) => isRecord(row) && numericId(row.id) === messageId)
+      if (!isRecord(message)) throw new RequestError(404, 'attachment_not_found')
+
+      const attachment = attachmentRows(message).find((row) =>
+        isRecord(row) && numericId(row.id) === attachmentId,
+      )
+      if (!isRecord(attachment)) throw new RequestError(404, 'attachment_not_found')
+
+      const parentMessageId = numericId(attachment.message_id)
+      if (parentMessageId && parentMessageId !== messageId) {
+        throw new RequestError(404, 'attachment_not_found')
+      }
+      const declaredFileSize = nonNegativeInteger(attachment.file_size)
+      if (declaredFileSize !== null && declaredFileSize > MAX_ATTACHMENT_BYTES) {
+        throw new RequestError(413, 'attachment_too_large')
+      }
+
+      const providerResponse = await fetchAttachment(attachmentUrl(config, attachment), config)
+      const metadata = normalizedAttachment(attachment)
+      return await attachmentResponse(providerResponse, attachmentId, metadata?.extension ?? null)
+    }
 
     if (action === 'conversation') {
       return json({ conversation: await getConversation(config, conversationId) })
