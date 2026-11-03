@@ -432,7 +432,7 @@ export function CustomersPage() {
               </div>
             </div>}
             <div className="record-field record-field-wide customer-optional-details">
-              <button aria-expanded={showOptionalDetails} className="text-button" onClick={() => setShowOptionalDetails((value) => !value)} type="button">{showOptionalDetails ? 'Ocultar endereço e observações' : 'Adicionar endereço ou observações'}</button>
+              <button aria-expanded={showOptionalDetails} className="text-button" onClick={() => setShowOptionalDetails((value) => !value)} type="button">{showOptionalDetails ? 'Ocultar endereço e observações' : 'Adicionar endereço principal ou observações'}</button>
               {showOptionalDetails && <div className="record-form-grid customer-optional-grid">
                 <label className="record-field record-field-wide">
                   <span className="field-label">CEP <span className="field-optional">opcional</span></span>
@@ -446,6 +446,7 @@ export function CustomersPage() {
                 <label className="record-field record-field-wide">
                   <span className="field-label">Endereço de entrega <span className="field-optional">opcional</span></span>
                   <textarea autoComplete="street-address" className="text-input record-textarea" disabled={saving} maxLength={1000} onChange={(event) => { setDeliveryAddress(event.target.value); setAddressEdited(true); addressEditedRef.current = true }} placeholder="Rua, número, bairro, cidade e complemento" rows={2} value={deliveryAddress} />
+                  <span className="customer-whatsapp-hint">Este será o endereço principal. Outros podem ser adicionados depois, no perfil do cliente.</span>
                 </label>
                 <label className="record-field record-field-wide">
                   <span className="field-label">Observações <span className="field-optional">opcional</span></span>

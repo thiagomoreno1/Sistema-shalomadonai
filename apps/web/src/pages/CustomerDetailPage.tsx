@@ -15,6 +15,8 @@ type Customer = {
   is_active: boolean
 }
 
+type CustomerAddress = { id: string; label: string; address: string; is_default: boolean }
+
 type Interaction = {
   id: string
   related_order_id: string | null
@@ -231,6 +233,18 @@ export function CustomerDetailPage() {
   const [interactionCallOutcome, setInteractionCallOutcome] = useState<NonNullable<Interaction['call_outcome']>>('answered')
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [customerAddresses, setCustomerAddresses] = useState<CustomerAddress[]>([])
+  const [loadedAddressesScope, setLoadedAddressesScope] = useState<string | null>(null)
+  const [addressesLoading, setAddressesLoading] = useState(true)
+  const [addressesError, setAddressesError] = useState<string | null>(null)
+  const [addressFormOpen, setAddressFormOpen] = useState(false)
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null)
+  const [addressLabelDraft, setAddressLabelDraft] = useState('')
+  const [addressDraft, setAddressDraft] = useState('')
+  const [addressSaving, setAddressSaving] = useState(false)
+  const [addressActionError, setAddressActionError] = useState<string | null>(null)
+  const [addressActionStatus, setAddressActionStatus] = useState<string | null>(null)
+  const [addressNotice, setAddressNotice] = useState<string | null>(null)
   const [interactionError, setInteractionError] = useState<string | null>(null)
   const [interactionNotice, setInteractionNotice] = useState<string | null>(null)
   const ordersById = new Map(orders.map((order) => [order.id, order]))
@@ -238,6 +252,8 @@ export function CustomerDetailPage() {
   const interactionFormHeadingRef = useRef<HTMLHeadingElement>(null)
   const wasInteractionOpenRef = useRef(false)
   const customerDataIsCurrent = loadedCustomerScope === customerScope
+  const customerAddressesAreCurrent = loadedAddressesScope === customerScope
+  const displayedCustomerAddresses = customerAddressesAreCurrent ? customerAddresses : []
   const displayedCustomerError = customerErrorScope === customerScope ? error : null
   const customerOrdersAreCurrent = ordersScope === customerScope
   const displayedOrders = customerOrdersAreCurrent ? orders : []
@@ -250,6 +266,7 @@ export function CustomerDetailPage() {
   const displayedOrderHistoryError = purchaseOrdersAreCurrent ? orderHistoryError : null
   const loadingMoreOrdersRef = useRef(false)
   const interactionRequestRef = useRef<{ payload: string; requestId: string; occurredAt: string } | null>(null)
+  const addressRequestRef = useRef(0)
 
   useLayoutEffect(() => {
     activeCustomerScopeRef.current = customerScope
@@ -393,6 +410,53 @@ export function CustomerDetailPage() {
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadCustomer() }, [loadCustomer])
 
+  const loadCustomerAddresses = useCallback(async () => {
+    const requestId = ++addressRequestRef.current
+    const requestScope = JSON.stringify([businessId, customerId])
+    const client = supabaseClient
+    setCustomerAddresses([])
+    setLoadedAddressesScope(null)
+    setAddressesLoading(true)
+    setAddressesError(null)
+    if (!client) {
+      setCustomerAddresses([])
+      setLoadedAddressesScope(requestScope)
+      setAddressesError('A conexão da empresa não está disponível.')
+      setAddressesLoading(false)
+      return
+    }
+    try {
+      const { data, error: queryError } = await client.from('customer_addresses')
+        .select('id, label, address, is_default')
+        .eq('business_id', businessId).eq('customer_id', customerId)
+        .order('is_default', { ascending: false }).order('label', { ascending: true }).order('id', { ascending: true })
+      if (requestId !== addressRequestRef.current || activeCustomerScopeRef.current !== requestScope) return
+      if (queryError) {
+        setCustomerAddresses([])
+        setLoadedAddressesScope(requestScope)
+        setAddressesError('Não foi possível carregar os endereços deste cliente. Tente novamente.')
+      } else {
+        setCustomerAddresses((data ?? []) as CustomerAddress[])
+        setLoadedAddressesScope(requestScope)
+        setAddressesError(null)
+      }
+    } catch {
+      if (requestId === addressRequestRef.current && activeCustomerScopeRef.current === requestScope) {
+        setCustomerAddresses([])
+        setLoadedAddressesScope(requestScope)
+        setAddressesError('Não foi possível carregar os endereços deste cliente. Tente novamente.')
+      }
+    } finally {
+      if (requestId === addressRequestRef.current && activeCustomerScopeRef.current === requestScope) setAddressesLoading(false)
+    }
+  }, [businessId, customerId])
+
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect
+    void loadCustomerAddresses()
+    return () => { addressRequestRef.current += 1 }
+  }, [loadCustomerAddresses])
+
   async function loadMoreOrders() {
     const requestScope = customerScope
     const client = supabaseClient
@@ -452,14 +516,15 @@ export function CustomerDetailPage() {
     setSaving(true)
     setFormError(null)
     try {
+      const updateValues = {
+        name,
+        phone: String(form.get('phone') ?? '').trim() || null,
+        whatsapp_phone: whatsappPhone || null,
+        notes: String(form.get('notes') ?? '').trim() || null,
+        ...(form.has('delivery_address') ? { delivery_address: String(form.get('delivery_address') ?? '').trim() || null } : {}),
+      }
       const { error: updateError } = await supabaseClient.from('customers')
-        .update({
-          name,
-          phone: String(form.get('phone') ?? '').trim() || null,
-          whatsapp_phone: whatsappPhone || null,
-          delivery_address: String(form.get('delivery_address') ?? '').trim() || null,
-          notes: String(form.get('notes') ?? '').trim() || null,
-        })
+        .update(updateValues)
         .eq('business_id', businessId).eq('id', customer.id)
       if (updateError) {
         setFormError('Não foi possível salvar. Seus dados continuam no formulário; tente novamente.')
@@ -471,6 +536,136 @@ export function CustomerDetailPage() {
       setFormError('Não foi possível salvar. Seus dados continuam no formulário; tente novamente.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  function openNewAddress() {
+    setEditingAddressId(null)
+    setAddressLabelDraft('')
+    setAddressDraft('')
+    setAddressActionError(null)
+    setAddressActionStatus(null)
+    setAddressNotice(null)
+    setAddressFormOpen(true)
+  }
+
+  function openEditAddress(address: CustomerAddress) {
+    setEditingAddressId(address.id)
+    setAddressLabelDraft(address.label)
+    setAddressDraft(address.address)
+    setAddressActionError(null)
+    setAddressActionStatus(null)
+    setAddressNotice(null)
+    setAddressFormOpen(true)
+  }
+
+  async function handleSaveAddress(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!supabaseClient || !customer) return
+    const label = addressLabelDraft.trim()
+    const address = addressDraft.trim()
+    if (!label || label.length > 80 || !address || address.length > 1000) {
+      setAddressActionError('Informe um nome de até 80 caracteres e um endereço de até 1.000 caracteres.')
+      return
+    }
+    setAddressSaving(true)
+    setAddressActionError(null)
+    setAddressNotice(null)
+    try {
+      let duplicateAlreadyExists = false
+      if (editingAddressId) {
+        const result = await supabaseClient.from('customer_addresses').update({ label, address })
+          .eq('business_id', businessId).eq('customer_id', customer.id).eq('id', editingAddressId).select('id').maybeSingle()
+        if (result.error || !result.data) {
+          setAddressActionError('Não foi possível salvar. Os dados continuam no formulário; tente novamente.')
+          return
+        }
+      } else {
+        const result = await supabaseClient.from('customer_addresses').insert({ business_id: businessId, customer_id: customer.id, label, address })
+          .select('id').maybeSingle()
+        if (result.error || !result.data) {
+          // If the insert committed but its response was lost, the unique key
+          // lets a retry find the same row instead of inserting a duplicate.
+          const { data: existing, error: lookupError } = await supabaseClient.from('customer_addresses')
+            .select('id').eq('business_id', businessId).eq('customer_id', customer.id)
+            .eq('label', label).eq('address', address).maybeSingle()
+          if (lookupError || !existing) {
+            setAddressActionError('Não foi possível salvar. Os dados continuam no formulário; tente novamente.')
+            return
+          }
+          duplicateAlreadyExists = true
+        }
+      }
+      setAddressFormOpen(false)
+      setEditingAddressId(null)
+      setAddressNotice(editingAddressId ? 'Endereço atualizado.' : duplicateAlreadyExists ? 'Este endereço já estava salvo; mantive apenas um registro.' : 'Endereço adicionado.')
+      await loadCustomerAddresses()
+    } catch {
+      setAddressActionError('Não foi possível salvar. Os dados continuam no formulário; tente novamente.')
+    } finally {
+      setAddressSaving(false)
+    }
+  }
+
+  async function handleSetPrimaryAddress(address: CustomerAddress) {
+    if (!supabaseClient || !customer || address.is_default || addressSaving) return
+    setAddressSaving(true)
+    setAddressActionError(null)
+    setAddressNotice(null)
+    setAddressActionStatus(`Definindo “${address.label}” como principal…`)
+    try {
+      const { data, error: updateError } = await supabaseClient.from('customer_addresses')
+        .update({ is_default: true })
+        .eq('business_id', businessId).eq('customer_id', customer.id).eq('id', address.id)
+        .select('id').maybeSingle()
+      if (updateError || !data) {
+        setAddressActionStatus(null)
+        setAddressActionError('Não foi possível definir o endereço principal. Tente novamente.')
+        return
+      }
+      setAddressActionStatus(null)
+      setAddressNotice(`${address.label} agora é o endereço principal.`)
+      await loadCustomerAddresses()
+    } catch {
+      setAddressActionStatus(null)
+      setAddressActionError('Não foi possível definir o endereço principal. Tente novamente.')
+    } finally {
+      setAddressSaving(false)
+    }
+  }
+
+  async function handleDeleteAddress(address: CustomerAddress) {
+    if (!supabaseClient || !customer || addressSaving) return
+    if (!window.confirm(`Remover o endereço “${address.label}”? Se ele for o principal, o endereço mais antigo restante será promovido automaticamente. Endereços registrados em pedidos anteriores serão preservados.`)) return
+    setAddressSaving(true)
+    setAddressActionError(null)
+    setAddressNotice(null)
+    setAddressActionStatus(`Removendo “${address.label}”…`)
+    try {
+      const { data, error: deleteError } = await supabaseClient.from('customer_addresses')
+        .delete().eq('business_id', businessId).eq('customer_id', customer.id).eq('id', address.id)
+        .select('id').maybeSingle()
+      let removalConfirmed = Boolean(data && !deleteError)
+      if (!removalConfirmed) {
+        const { data: remainingAddress, error: confirmationError } = await supabaseClient.from('customer_addresses')
+          .select('id').eq('business_id', businessId).eq('customer_id', customer.id).eq('id', address.id).maybeSingle()
+        removalConfirmed = !confirmationError && !remainingAddress
+      }
+      if (!removalConfirmed) {
+        setAddressActionStatus(null)
+        setAddressActionError('Não foi possível remover o endereço. Tente novamente.')
+        return
+      }
+      setAddressFormOpen(false)
+      setEditingAddressId(null)
+      setAddressActionStatus(null)
+      setAddressNotice('Endereço removido. Os endereços dos pedidos anteriores foram preservados.')
+      await loadCustomerAddresses()
+    } catch {
+      setAddressActionStatus(null)
+      setAddressActionError('Não foi possível remover o endereço. Tente novamente.')
+    } finally {
+      setAddressSaving(false)
     }
   }
 
@@ -642,13 +837,49 @@ export function CustomerDetailPage() {
             <label className="record-field record-field-wide"><span className="field-label">Nome *</span><input className="text-input" defaultValue={customer.name} maxLength={160} name="name" required /></label>
             <label className="record-field"><span className="field-label">Telefone <span className="field-optional">opcional</span></span><input className="text-input" defaultValue={customer.phone ?? ''} maxLength={64} name="phone" type="tel" /></label>
             <label className="record-field"><span className="field-label">WhatsApp <span className="field-optional">opcional</span></span><input autoComplete="tel" className="text-input" defaultValue={customer.whatsapp_phone ?? ''} maxLength={64} name="whatsapp_phone" placeholder="+55 21 99999-0000" type="tel" /><span className="customer-whatsapp-hint">Use +55 e DDD no Brasil; para outros países, informe + e o DDI.</span></label>
-            <label className="record-field record-field-wide"><span className="field-label">Endereço de entrega <span className="field-optional">opcional</span></span><input className="text-input" defaultValue={customer.delivery_address ?? ''} maxLength={1000} name="delivery_address" /></label>
+            {addressesError && <label className="record-field record-field-wide"><span className="field-label">Endereço principal <span className="field-optional">modo compatível</span></span><input autoComplete="street-address" className="text-input" defaultValue={customer.delivery_address ?? ''} maxLength={1000} name="delivery_address" /><span className="customer-whatsapp-hint">A lista de endereços está indisponível. Você ainda pode editar o endereço principal por aqui.</span></label>}
             <label className="record-field record-field-wide"><span className="field-label">Observações <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" defaultValue={customer.notes ?? ''} maxLength={4000} name="notes" rows={3} /></label>
           </div>
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
           <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar alterações'}</button>
         </form>
       )}
+
+      <section className="surface-panel record-panel" aria-labelledby="customer-addresses-heading">
+        <div className="section-heading section-heading-compact">
+          <div><p className="eyebrow">ENTREGA</p><h2 id="customer-addresses-heading">Endereços</h2></div>
+          {customer.is_active && <button className="button button-secondary" disabled={addressesLoading || Boolean(addressesError) || addressSaving} onClick={openNewAddress} type="button"><Icon name="plus" /> Adicionar endereço</button>}
+        </div>
+        <p className="section-footnote">O endereço principal é sugerido nos novos pedidos. Cada pedido guarda o endereço confirmado no momento.</p>
+        {addressNotice && <p className="form-message form-message-success" role="status">{addressNotice}</p>}
+        {addressActionStatus && <p className="form-message" role="status">{addressActionStatus}</p>}
+        {addressActionError && <p className="form-message form-message-error" role="alert">{addressActionError}</p>}
+        {!customerAddressesAreCurrent || addressesLoading ? <p className="inline-state" aria-live="polite">Carregando endereços…</p>
+          : addressesError ? <div className="inline-state inline-state-error" role="alert"><p>{addressesError}</p><button className="text-button" onClick={() => void loadCustomerAddresses()} type="button">Tentar novamente</button></div>
+            : displayedCustomerAddresses.length === 0 ? <p className="inline-state">Nenhum endereço salvo. Você pode informar um endereço diretamente ao criar o pedido.</p>
+              : <ul className="record-list customer-address-list">{displayedCustomerAddresses.map((address) => <li key={address.id}>
+                <div className="record-list-link">
+                  <div className="record-list-copy"><strong>{address.label}</strong><small title={address.address}>{address.address}</small></div>
+                  {address.is_default && <span className="neutral-status">Principal</span>}
+                  {customer.is_active && <div className="record-heading-actions">
+                    {!address.is_default && <button className="text-button" disabled={addressSaving} onClick={() => void handleSetPrimaryAddress(address)} type="button">Tornar principal</button>}
+                    <button className="text-button" disabled={addressSaving} onClick={() => openEditAddress(address)} type="button">Editar</button>
+                    <button className="text-button archive-button" disabled={addressSaving} onClick={() => void handleDeleteAddress(address)} type="button">Remover</button>
+                  </div>}
+                </div>
+              </li>)}</ul>}
+        {addressFormOpen && customer.is_active && <form className="record-form" onSubmit={handleSaveAddress}>
+          <h3>{editingAddressId ? 'Editar endereço' : 'Novo endereço'}</h3>
+          <div className="record-form-grid">
+            <label className="record-field"><span className="field-label">Nome do endereço *</span><input autoFocus className="text-input" disabled={addressSaving} maxLength={80} onChange={(event) => setAddressLabelDraft(event.target.value)} placeholder="Casa, trabalho…" required value={addressLabelDraft} /></label>
+            <label className="record-field record-field-wide"><span className="field-label">Endereço completo *</span><textarea autoComplete="street-address" className="text-input record-textarea" disabled={addressSaving} maxLength={1000} onChange={(event) => setAddressDraft(event.target.value)} placeholder="Rua, número, bairro, cidade e complemento" required rows={2} value={addressDraft} /></label>
+          </div>
+          <div className="record-form-actions">
+            <button className="button button-primary" disabled={addressSaving} type="submit">{addressSaving ? 'Salvando…' : editingAddressId ? 'Salvar endereço' : 'Adicionar endereço'}</button>
+            <button className="button button-secondary" disabled={addressSaving} onClick={() => { setAddressFormOpen(false); setEditingAddressId(null); setAddressActionError(null) }} type="button">Cancelar</button>
+          </div>
+        </form>}
+      </section>
 
       {interactionOpen && (
         <form className="surface-panel record-form" onSubmit={handleCreateInteraction}>

@@ -7,6 +7,7 @@ import { formatBRL, formatBusinessDate, parseBrazilianCurrency } from '../lib/fo
 import { supabaseClient } from '../lib/supabase'
 
 type Customer = { id: string; name: string; phone: string | null; whatsapp_phone: string | null; delivery_address: string | null }
+type CustomerAddress = { id: string; label: string; address: string; is_default: boolean }
 type Product = { id: string; name: string; inventory_unit: string | null; sale_price_cents: number | null; is_combo: boolean }
 type StockProduct = { id: string; name: string; inventory_unit: string; inventory_tracked: true }
 type ComboComponentDraft = { productId: string; quantityPerCombo: string }
@@ -172,6 +173,10 @@ export function NewOrderPage() {
   const [customerPrefillLoading, setCustomerPrefillLoading] = useState(false)
   const [customerId, setCustomerId] = useState(requestedCustomerId)
   const [customerSearchPending, setCustomerSearchPending] = useState(false)
+  const [customerAddresses, setCustomerAddresses] = useState<CustomerAddress[]>([])
+  const [customerAddressesLoading, setCustomerAddressesLoading] = useState(false)
+  const [customerAddressesError, setCustomerAddressesError] = useState<string | null>(null)
+  const [selectedAddressId, setSelectedAddressId] = useState('')
   const [requiresDelivery, setRequiresDelivery] = useState(false)
   const [deliveryAddress, setDeliveryAddress] = useState('')
   const [deliveryFee, setDeliveryFee] = useState('')
@@ -196,6 +201,7 @@ export function NewOrderPage() {
   const autoScheduleRef = useRef(true)
   const scheduleTemplateBusinessRef = useRef<string | null>(null)
   const customerOrderRequestRef = useRef(0)
+  const customerAddressRequestRef = useRef(0)
   const initialCustomerPrefillRef = useRef('')
   const customerPrefillManualRef = useRef({ items: false, address: false, delivery: false, fee: false, installments: false, baseDate: false })
   const disabled = saving || uncertain
@@ -384,6 +390,54 @@ export function NewOrderPage() {
     void loadChoices()
     return () => { choicesRequestIdRef.current += 1 }
   }, [loadChoices])
+
+  useEffect(() => {
+    const requestId = ++customerAddressRequestRef.current
+    const nextCustomerId = customerId
+    // oxlint-disable-next-line react/set-state-in-effect
+    setCustomerAddresses([])
+    setSelectedAddressId('')
+    setCustomerAddressesError(null)
+    setCustomerAddressesLoading(Boolean(nextCustomerId && supabaseClient))
+    if (!nextCustomerId || !supabaseClient) {
+      if (!nextCustomerId && !customerPrefillManualRef.current.address) setDeliveryAddress('')
+      setCustomerAddressesLoading(false)
+      return
+    }
+
+    let active = true
+    void (async () => {
+      try {
+        const { data, error: queryError } = await supabaseClient.from('customer_addresses')
+          .select('id, label, address, is_default')
+          .eq('business_id', businessId).eq('customer_id', nextCustomerId)
+          .order('is_default', { ascending: false }).order('label', { ascending: true }).order('id', { ascending: true })
+        if (!active || requestId !== customerAddressRequestRef.current) return
+        const selectedCustomer = customers.find((customer) => customer.id === nextCustomerId)
+        if (queryError) {
+          setCustomerAddressesError('Os endereços salvos não estão disponíveis. Você ainda pode informar o endereço neste pedido.')
+          if (!customerPrefillManualRef.current.address) setDeliveryAddress(selectedCustomer?.delivery_address ?? '')
+          return
+        }
+        const addresses = (data ?? []) as CustomerAddress[]
+        setCustomerAddresses(addresses)
+        const preferred = addresses.find((address) => address.is_default) ?? addresses[0]
+        if (!customerPrefillManualRef.current.address) {
+          setSelectedAddressId(preferred?.id ?? '')
+          setDeliveryAddress(preferred?.address ?? selectedCustomer?.delivery_address ?? '')
+        }
+      } catch {
+        if (active && requestId === customerAddressRequestRef.current) {
+          setCustomerAddressesError('Os endereços salvos não estão disponíveis. Você ainda pode informar o endereço neste pedido.')
+          const selectedCustomer = customers.find((customer) => customer.id === nextCustomerId)
+          if (!customerPrefillManualRef.current.address) setDeliveryAddress(selectedCustomer?.delivery_address ?? '')
+        }
+      } finally {
+        if (active && requestId === customerAddressRequestRef.current) setCustomerAddressesLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [businessId, customerId, customers])
 
   const loadCustomerOrderSuggestion = useCallback(async (nextCustomerId: string) => {
     const requestId = ++customerOrderRequestRef.current
@@ -671,6 +725,8 @@ export function NewOrderPage() {
       customerPrefillManualRef.current.address = false
       customerPrefillManualRef.current.delivery = false
       customerPrefillManualRef.current.fee = false
+      setSelectedAddressId('')
+      setCustomerAddresses([])
     }
     if (!nextId) {
       setDeliveryAddress('')
@@ -678,6 +734,14 @@ export function NewOrderPage() {
       setDeliveryFee('')
     }
     void loadCustomerOrderSuggestion(nextId)
+    setFormError(null)
+  }
+
+  function handleSavedAddressChange(addressId: string) {
+    customerPrefillManualRef.current.address = true
+    setSelectedAddressId(addressId)
+    const selected = customerAddresses.find((address) => address.id === addressId)
+    setDeliveryAddress(selected?.address ?? '')
     setFormError(null)
   }
 
@@ -1044,9 +1108,18 @@ export function NewOrderPage() {
               <div className="record-form-grid">
                 <CustomerSearchSelect customers={customers} disabled={disabled} onPendingChange={setCustomerSearchPending} onSelect={handleCustomerChange} selectedId={customerId} />
                 {requestedCustomerId && !selectedCustomer && <p className="form-message form-message-warning record-field-wide">O cliente do atalho não está ativo. Selecione outro cliente disponível.</p>}
+                {customerId && <label className="record-field record-field-wide"><span className="field-label">Endereço salvo do cliente <span className="field-optional">opcional</span></span>
+                  <select className="text-input" disabled={disabled || customerAddressesLoading} onChange={(event) => handleSavedAddressChange(event.target.value)} value={selectedAddressId}>
+                    <option value="">Informar endereço neste pedido</option>
+                    {customerAddresses.map((address) => <option key={address.id} value={address.id}>{address.label}{address.is_default ? ' · principal' : ''} — {address.address}</option>)}
+                  </select>
+                  {customerAddressesLoading && <span className="customer-whatsapp-hint" role="status">Carregando endereços salvos…</span>}
+                  {customerAddressesError && <span className="customer-whatsapp-hint" role="status">{customerAddressesError}</span>}
+                </label>}
                 <label className="record-checkbox record-field-wide order-delivery-toggle"><input checked={requiresDelivery} disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.delivery = true; setRequiresDelivery(event.target.checked) }} type="checkbox" /><span><strong>Este pedido precisa ser entregue</strong><small>Só pedidos marcados aqui entram na fila de entregas.</small></span></label>
                 <label className="record-field record-field-wide"><span className="field-label">Endereço registrado para este pedido <span className="field-optional">{requiresDelivery ? 'obrigatório para entrega' : 'opcional'}</span></span>
-                  <textarea className="text-input record-textarea" disabled={disabled} maxLength={1000} onChange={(event) => { customerPrefillManualRef.current.address = true; setDeliveryAddress(event.target.value) }} placeholder="Pode ajustar ou deixar em branco" required={requiresDelivery} rows={2} value={deliveryAddress} />
+                  <textarea className="text-input record-textarea" disabled={disabled} maxLength={1000} onChange={(event) => { customerPrefillManualRef.current.address = true; setSelectedAddressId(''); setDeliveryAddress(event.target.value) }} placeholder="Pode ajustar ou deixar em branco" required={requiresDelivery} rows={2} value={deliveryAddress} />
+                  <span className="customer-whatsapp-hint">O pedido guarda uma cópia deste endereço; alterações futuras no cadastro não mudam pedidos anteriores.</span>
                 </label>
                 <label className="record-field record-field-wide"><span className="field-label">Observações do pedido <span className="field-optional">opcional</span></span>
                   <textarea className="text-input record-textarea" disabled={disabled} maxLength={4000} onChange={(event) => setNotes(event.target.value)} rows={3} value={notes} />

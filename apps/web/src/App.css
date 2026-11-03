@@ -359,6 +359,15 @@
 .record-list-copy strong, .record-list-copy small { display: block; overflow: hidden; text-overflow: ellipsis; }
 .record-list-copy strong { color: var(--ink); font-size: 13px; font-weight: 620; }
 .record-list-copy small { margin-top: 3px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.customer-address-list .record-list-link { align-items: flex-start; flex-wrap: wrap; }
+.customer-address-list .record-list-copy { flex: 1 1 220px; }
+.customer-address-list .record-list-copy small { overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; }
+.customer-address-list .record-heading-actions { flex: 1 0 100%; min-width: 0; }
+.customer-address-list .record-heading-actions > button { flex: 0 0 auto; min-height: 38px; white-space: nowrap; }
+.customer-address-list .neutral-status { flex: 0 0 auto; }
+@media (max-width: 760px) {
+  .customer-address-list .record-heading-actions > button { min-height: 44px; }
+}
 .product-price { min-width: 118px; text-align: right; }
 .product-price strong, .product-price small { display: block; }
 .product-price strong { color: var(--ink); font-size: 13px; font-weight: 630; }
