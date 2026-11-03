@@ -19,6 +19,7 @@ const ReportsPage = lazy(async () => ({ default: (await import('../pages/Reports
 const InventoryPage = lazy(async () => ({ default: (await import('../pages/InventoryPage')).InventoryPage }))
 const DeliveriesPage = lazy(async () => ({ default: (await import('../pages/DeliveriesPage')).DeliveriesPage }))
 const FollowUpsPage = lazy(async () => ({ default: (await import('../pages/FollowUpsPage')).FollowUpsPage }))
+const WhatsAppPanelPage = lazy(async () => ({ default: (await import('../pages/WhatsAppPanelPage')).WhatsAppPanelPage }))
 const WhatsAppInboxPage = lazy(async () => ({ default: (await import('../pages/WhatsAppInboxPage')).WhatsAppInboxPage }))
 const MorePage = lazy(async () => ({ default: (await import('../pages/ModulePage')).MorePage }))
 const SettingsPage = lazy(async () => ({ default: (await import('../pages/SettingsPage')).SettingsPage }))
@@ -45,7 +46,8 @@ export function AuthRoutes() {
             <Route path="clientes" element={<CustomersPage />} />
             <Route path="clientes/:customerId" element={<CustomerDetailPage />} />
             <Route path="atendimento" element={<FollowUpsPage />} />
-            <Route path="whatsapp" element={<WhatsAppInboxPage />} />
+            <Route path="whatsapp" element={<WhatsAppPanelPage />} />
+            <Route path="whatsapp/caixa-shalom" element={<WhatsAppInboxPage />} />
             <Route path="pedidos" element={<OrdersPage />} />
             <Route path="pedidos/novo" element={<NewOrderPage />} />
             <Route path="pedidos/:orderId" element={<OrderDetailPage />} />

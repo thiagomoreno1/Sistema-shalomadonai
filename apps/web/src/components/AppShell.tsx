@@ -46,6 +46,7 @@ const routeLabels: Record<string, string> = {
 
 function getRouteLabel(pathname: string) {
   if (pathname.startsWith('/clientes/')) return 'Cliente'
+  if (pathname.startsWith('/whatsapp/')) return 'WhatsApp'
   return routeLabels[pathname] ?? 'Operação'
 }
 

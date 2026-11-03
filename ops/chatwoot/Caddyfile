@@ -8,7 +8,13 @@
 	@outside_admin_ip not remote_ip {$BOOTSTRAP_ADMIN_IP}
 	handle @onboarding {
 		respond @outside_admin_ip "Not found" 404
-		reverse_proxy rails:3000
+		reverse_proxy rails:3000 {
+			header_down -X-Frame-Options
+			header_down +Content-Security-Policy "frame-ancestors {$SHALOM_APP_ORIGIN}"
+		}
 	}
-	reverse_proxy rails:3000
+	reverse_proxy rails:3000 {
+		header_down -X-Frame-Options
+		header_down +Content-Security-Policy "frame-ancestors {$SHALOM_APP_ORIGIN}"
+	}
 }
