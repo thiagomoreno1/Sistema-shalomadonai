@@ -16,6 +16,7 @@ type InstallmentDraft = { key: string; amount: string; dueOn: string; paymentMet
 type OrderCopySummary = { customerName: string; copiedItems: number; customCompositionsCopied: number; legacyCompositionsReviewCount: number; skippedItems: number }
 type ScheduleEntry = { ordinal: number; amount_bps: number; days_after_base: number; payment_method: string | null }
 type ScheduleTemplate = { id: string; name: string; schedule: ScheduleEntry[] }
+type CustomComboOrderCapability = 'available' | 'unavailable' | 'unknown'
 type InstallmentSuggestionStatus = 'pending' | 'applied' | 'preserved' | 'incompatible' | 'none' | 'chosen_other'
 type CustomerOrderSuggestion = { customerName: string; sourceOrderId: string; sourceCreatedAt: string; copiedItems: number; customCompositionsCopied: number; legacyCompositionsReviewCount: number; skippedItems: number; itemsApplied: boolean; addressApplied: boolean; deliveryApplied: boolean; feeApplied: boolean; installmentStatus: InstallmentSuggestionStatus; preservedFields: string[] }
 
@@ -105,6 +106,19 @@ function sameComposition(left: ComboComponentDraft[], right: ComboComponentDraft
     && leftNormalized.every((value, index) => value === rightNormalized[index])
 }
 
+async function detectCustomComboOrderCapability(businessId: string): Promise<CustomComboOrderCapability> {
+  if (!supabaseClient) return 'unknown'
+  try {
+    const { error } = await supabaseClient.from('order_line_components')
+      .select('quantity_per_unit_snapshot').eq('business_id', businessId).limit(0)
+    if (!error) return 'available'
+    if (['42703', '42P01'].includes(error.code)) return 'unavailable'
+    return 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
 function snapshotsForReviewRequired(snapshots: Array<{ quantity_per_unit_snapshot: string | null }>) {
   return snapshots.some((snapshot) => snapshot.quantity_per_unit_snapshot === null)
 }
@@ -161,6 +175,8 @@ export function NewOrderPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [stockProducts, setStockProducts] = useState<StockProduct[]>([])
   const [comboDefaults, setComboDefaults] = useState<Record<string, ComboComponentDraft[]>>({})
+  const [customComboOrderCapability, setCustomComboOrderCapability] = useState<CustomComboOrderCapability>('unknown')
+  const [customComboCapabilityChecking, setCustomComboCapabilityChecking] = useState(false)
   const [loadingChoices, setLoadingChoices] = useState(true)
   const [choiceError, setChoiceError] = useState<string | null>(null)
   const [orderCopySummary, setOrderCopySummary] = useState<OrderCopySummary | null>(null)
@@ -218,7 +234,7 @@ export function NewOrderPage() {
     setOrderCopyWarning(null)
     setLegacyCompositionReviewConfirmed(false)
     try {
-      const [customersResult, productsResult, stockProductsResult] = await Promise.all([
+      const [customersResult, productsResult, stockProductsResult, customComboOrderSupport] = await Promise.all([
         supabaseClient.from('customers').select('id, name, phone, whatsapp_phone, delivery_address')
           .eq('business_id', businessId).eq('is_active', true).order('name', { ascending: true }),
         supabaseClient.from('products').select('id, name, inventory_unit, sale_price_cents, is_combo')
@@ -227,6 +243,7 @@ export function NewOrderPage() {
         supabaseClient.from('products').select('id, name, inventory_unit, inventory_tracked')
           .eq('business_id', businessId).eq('is_active', true).eq('inventory_tracked', true)
           .eq('is_combo', false).not('inventory_unit', 'is', null).order('name', { ascending: true }),
+        detectCustomComboOrderCapability(businessId),
       ])
       let loadedTemplates: ScheduleTemplate[] = []
       let templatesUnavailable = false
@@ -239,6 +256,7 @@ export function NewOrderPage() {
         templatesUnavailable = true
       }
       if (requestId !== choicesRequestIdRef.current) return
+      setCustomComboOrderCapability(customComboOrderSupport)
       if (customersResult.error || productsResult.error || stockProductsResult.error) {
         setChoiceError('Não foi possível carregar clientes e produtos ativos. Tente novamente.')
         return
@@ -384,6 +402,15 @@ export function NewOrderPage() {
       if (requestId === choicesRequestIdRef.current) setLoadingChoices(false)
     }
   }, [businessId, requestedCustomerId, sourceOrderId])
+
+  async function recheckCustomComboOrderCapability() {
+    setCustomComboCapabilityChecking(true)
+    try {
+      setCustomComboOrderCapability(await detectCustomComboOrderCapability(businessId))
+    } finally {
+      setCustomComboCapabilityChecking(false)
+    }
+  }
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
@@ -967,6 +994,12 @@ export function NewOrderPage() {
         setFormError('Confira os produtos e as quantidades da composição da cesta. Use quantidades positivas com até três casas decimais.')
         return
       }
+      if (customComboOrderCapability !== 'available' && item.components && !sameComposition(item.components, comboDefaults[item.productId] ?? [])) {
+        setFormError(customComboOrderCapability === 'unavailable'
+          ? 'Este rascunho tem uma composição diferente da cadastrada no Catálogo, e o servidor ainda não salva esse ajuste. Desfaça os ajustes da cesta antes de criar o pedido.'
+          : 'Não foi possível confirmar se o servidor salva composições personalizadas. Desfaça os ajustes da cesta ou verifique o suporte novamente antes de criar o pedido.')
+        return
+      }
     }
     const itemPayload = items.map((item) => ({
       product_id: item.productId,
@@ -1072,6 +1105,7 @@ export function NewOrderPage() {
         return 'O pedido anterior não tinha parcelas para reaproveitar.'
     }
   })()
+  const hasComboOrderItems = items.some((item) => productById.get(item.productId)?.is_combo)
 
   return (
     <div className="page-stack">
@@ -1132,6 +1166,11 @@ export function NewOrderPage() {
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">02 · PRODUTOS</p><h2 id="order-items-heading">Itens do pedido</h2></div>
               <button className="button button-secondary" disabled={disabled || products.length === 0} onClick={() => { customerPrefillManualRef.current.items = true; setLegacyCompositionReviewConfirmed(false); setItems((current) => [...current, { key: newKey(), productId: '', quantity: '1' }]) }} type="button"><Icon name="plus" /> Adicionar item</button>
             </div>
+            {hasComboOrderItems && customComboOrderCapability === 'unavailable' && <p className="section-footnote form-message-warning" role="status">A personalização por pedido ainda não está ativa neste servidor. Pedidos usarão as composições cadastradas no Catálogo.</p>}
+            {hasComboOrderItems && customComboOrderCapability === 'unknown' && <div className="section-footnote form-message-warning" role="status">
+              <p>Não foi possível confirmar se o servidor aceita composições personalizadas. Para evitar baixa de estoque diferente do conteúdo exibido, os combos usarão a composição do Catálogo.</p>
+              <button className="text-button" disabled={customComboCapabilityChecking} onClick={() => void recheckCustomComboOrderCapability()} type="button">{customComboCapabilityChecking ? 'Verificando suporte…' : 'Verificar novamente'}</button>
+            </div>}
             {products.length === 0 ? <p className="inline-state">Não há produtos ativos com preço de venda. <Link to="/catalogo">Abrir catálogo</Link></p> : (
               <div className="order-draft-list">
                 {items.map((item, index) => {
@@ -1154,18 +1193,22 @@ export function NewOrderPage() {
                       <div className="order-line-total"><span className="field-label">Valor do item</span><strong>{lineCents === null ? '—' : formatBRL(lineCents)}</strong></div>
                       <button aria-label={`Remover item ${index + 1}`} className="text-button order-remove-button" disabled={disabled || items.length === 1} onClick={() => { customerPrefillManualRef.current.items = true; setLegacyCompositionReviewConfirmed(false); setItems((current) => current.filter((row) => row.key !== item.key)) }} type="button">Remover</button>
                       {product?.is_combo && (() => {
-                        const composition = item.components ?? comboDefaults[item.productId] ?? []
+                        const catalogComposition = comboDefaults[item.productId] ?? []
+                        const composition = item.components ?? catalogComposition
                         const customized = item.components !== undefined
+                        const compositionDiffersFromCatalog = customized && !sameComposition(composition, catalogComposition)
                         if ((comboDefaults[item.productId] ?? []).length === 0) {
                           return <p className="section-footnote form-message-error">Cadastre a composição desta cesta no <Link to="/catalogo">catálogo</Link> antes de vendê-la.</p>
                         }
                         return <div className="combo-composition record-field-wide">
                           <div className="section-heading section-heading-compact">
-                            <div><p className="eyebrow">CESTA PERSONALIZÁVEL</p><h3>Conteúdo desta cesta</h3></div>
-                            <button aria-expanded={Boolean(item.compositionOpen)} className="text-button" disabled={disabled} onClick={() => toggleComboComposition(item)} type="button">
-                              {item.compositionOpen ? 'Ocultar composição' : customized ? 'Editar composição' : 'Personalizar cesta'}
-                            </button>
+                            <div><p className="eyebrow">{customComboOrderCapability === 'available' ? 'CESTA PERSONALIZÁVEL' : compositionDiffersFromCatalog ? 'COMPOSIÇÃO DIFERENTE DO CATÁLOGO' : 'COMPOSIÇÃO DO CATÁLOGO'}</p><h3>Conteúdo desta cesta</h3></div>
+                            {customComboOrderCapability === 'available'
+                              ? <button aria-expanded={Boolean(item.compositionOpen)} className="text-button" disabled={disabled} onClick={() => toggleComboComposition(item)} type="button">{item.compositionOpen ? 'Ocultar composição' : customized ? 'Editar composição' : 'Personalizar cesta'}</button>
+                              : <span className="neutral-status">Usar padrão do catálogo</span>}
                           </div>
+                          {compositionDiffersFromCatalog && customComboOrderCapability !== 'available' && <p className="section-footnote form-message-warning" role="alert">Este rascunho mostra uma composição diferente da cadastrada no Catálogo, e o servidor não confirmou que consegue salvar esse ajuste. Use “Descartar ajustes e voltar ao padrão” antes de salvar.</p>}
+                          {customComboOrderCapability !== 'available' && compositionDiffersFromCatalog && !item.compositionOpen && <button className="text-button" disabled={disabled} onClick={() => resetComboComposition(item)} type="button">Descartar ajustes e voltar ao padrão</button>}
                           {!item.compositionOpen && <p className="section-footnote">{customized ? 'Composição personalizada neste pedido.' : composition.length > 0 ? `Usando a composição padrão com ${composition.length} ${composition.length === 1 ? 'produto' : 'produtos'}.` : 'Esta cesta ainda não tem composição padrão; adicione os produtos que farão parte dela.'}</p>}
                           {item.compositionOpen && <>
                             <p className="section-footnote">A quantidade total abaixo considera a quantidade da cesta. O preço continua sendo o valor atual configurado no catálogo.</p>
@@ -1177,21 +1220,21 @@ export function NewOrderPage() {
                               const totalQuantity = quantityProduct(item.quantity, component.quantityPerCombo)
                               return <div className="combo-component-row" key={`${item.key}-${componentIndex}`}>
                                 <label className="record-field"><span className="field-label">Produto {componentIndex + 1}</span>
-                                  <select aria-label={`Produto ${componentIndex + 1} da cesta ${index + 1}`} className="text-input" disabled={disabled} onChange={(event) => updateComboComponent(item.key, componentIndex, { productId: event.target.value })} required value={component.productId}>
+                                  <select aria-label={`Produto ${componentIndex + 1} da cesta ${index + 1}`} className="text-input" disabled={disabled || customComboOrderCapability !== 'available'} onChange={(event) => updateComboComponent(item.key, componentIndex, { productId: event.target.value })} required value={component.productId}>
                                     <option value="">Selecione um produto</option>
                                     {!currentStockProduct && <option value={component.productId}>Produto indisponível</option>}
                                     {selectableProducts.map((option) => <option key={option.id} value={option.id}>{option.name}{option.inventory_unit ? ` · ${option.inventory_unit}` : ''}</option>)}
                                   </select>
                                 </label>
                                 <label className="record-field"><span className="field-label">Por cesta</span>
-                                  <input aria-label={`Quantidade por cesta de ${currentStockProduct?.name ?? `produto ${componentIndex + 1}`}`} className="text-input" disabled={disabled} inputMode="decimal" maxLength={16} onChange={(event) => updateComboComponent(item.key, componentIndex, { quantityPerCombo: event.target.value })} placeholder="1" required value={component.quantityPerCombo} />
+                                  <input aria-label={`Quantidade por cesta de ${currentStockProduct?.name ?? `produto ${componentIndex + 1}`}`} className="text-input" disabled={disabled || customComboOrderCapability !== 'available'} inputMode="decimal" maxLength={16} onChange={(event) => updateComboComponent(item.key, componentIndex, { quantityPerCombo: event.target.value })} placeholder="1" required value={component.quantityPerCombo} />
                                 </label>
                                 <div className="order-line-total"><span className="field-label">Total neste pedido</span><strong>{totalQuantity === null ? '—' : `${totalQuantity}${currentStockProduct?.inventory_unit ? ` ${currentStockProduct.inventory_unit}` : ''}`}</strong></div>
-                                <button aria-label={`Remover produto ${componentIndex + 1} da cesta ${index + 1}`} className="text-button order-remove-button" disabled={disabled || composition.length <= 1} onClick={() => removeComboComponent(item.key, componentIndex)} type="button">Remover</button>
+                                <button aria-label={`Remover produto ${componentIndex + 1} da cesta ${index + 1}`} className="text-button order-remove-button" disabled={disabled || customComboOrderCapability !== 'available' || composition.length <= 1} onClick={() => removeComboComponent(item.key, componentIndex)} type="button">Remover</button>
                               </div>
                             })}
                             <div className="record-form-actions">
-                              <button className="button button-secondary" disabled={disabled || composition.length >= 100 || stockProducts.length <= composition.length} onClick={() => addComboComponent(item)} type="button"><Icon name="plus" /> Adicionar produto</button>
+                              <button className="button button-secondary" disabled={disabled || customComboOrderCapability !== 'available' || composition.length >= 100 || stockProducts.length <= composition.length} onClick={() => addComboComponent(item)} type="button"><Icon name="plus" /> Adicionar produto</button>
                               {customized && <button className="text-button" disabled={disabled} onClick={() => resetComboComposition(item)} type="button">Descartar ajustes e voltar ao padrão</button>}
                             </div>
                           </>}
