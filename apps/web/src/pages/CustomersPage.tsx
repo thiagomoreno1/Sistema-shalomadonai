@@ -173,7 +173,9 @@ export function CustomersPage() {
       : supabaseClient.rpc('find_customer_phone_matches', { p_phone: localPhone, p_whatsapp_phone: localWhatsapp })
     const [internationalLookup, localLookup] = await Promise.all([internationalRequest, localRequest])
     const error = internationalLookup.error ?? localLookup.error
-    const data = [...new Map([...(internationalLookup.data ?? []), ...(localLookup.data ?? [])].map((match) => [match.id, match])).values()] as PhoneMatch[]
+    const data = ([...new Map([...(internationalLookup.data ?? []), ...(localLookup.data ?? [])].map((match) => [match.id, match])).values()] as PhoneMatch[])
+      .sort((left, right) => left.name.localeCompare(right.name, 'pt-BR') || left.id.localeCompare(right.id))
+      .slice(0, 5)
     return { data, error }
   }, [internationalPhone, internationalWhatsapp, phone, phoneCountry.iso, phoneIsWhatsApp, whatsappCountry.iso, whatsappPhone])
 
