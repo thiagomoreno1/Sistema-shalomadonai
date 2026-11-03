@@ -1,25 +1,444 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
+import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
+import { supabaseClient } from '../lib/supabase'
+
+type InboxStatus = 'open' | 'resolved' | 'all'
+type Message = {
+  id: string
+  content: string | null
+  created_at: string | null
+  message_type: 'incoming' | 'outgoing' | 'activity'
+  private: boolean
+  sender: { name: string | null }
+}
+type Conversation = {
+  id: string
+  inbox_id: string
+  status: string
+  can_reply: boolean
+  contact: { name: string | null; phone: string | null }
+  last_activity_at: string | null
+  last_message: Message | null
+  messages: Message[]
+}
+type Customer = { id: string; name: string; phone: string | null; whatsapp_phone: string | null }
+type Order = { id: string; created_at: string; status: 'open' | 'cancelled'; total_cents: number }
+type ConversationLink = { conversation_id: string; inbox_id: string; customer_id: string | null; order_id: string | null }
+type ConversationListResponse = { conversations?: Conversation[]; meta?: { page?: number; has_more?: boolean } }
+
+const EMPTY_CONVERSATIONS: Conversation[] = []
+
+function digitsOnly(value: string | null | undefined) {
+  return (value ?? '').replace(/\D/g, '')
+}
+
+function timestampLabel(value: string | null | undefined) {
+  if (!value) return 'Agora'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+
+function statusLabel(value: string | null | undefined) {
+  if (value === 'resolved') return 'Resolvida'
+  if (value === 'pending') return 'Pendente'
+  if (value === 'snoozed') return 'Adiada'
+  if (value === 'open') return 'Aberta'
+  return value ? `Status: ${value}` : 'Status indisponível'
+}
+
+function orderLabel(order: Order) {
+  const date = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeZone: 'America/Sao_Paulo' }).format(new Date(order.created_at))
+  const total = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(order.total_cents / 100)
+  return `${date} · ${total} · ${order.status === 'open' ? 'ativo' : 'cancelado'}`
+}
+
+async function invokeInbox<T>(body: Record<string, unknown>) {
+  if (!supabaseClient) throw new Error('A conexão segura com o Supabase não está disponível.')
+  const { data, error } = await supabaseClient.functions.invoke('chatwoot-inbox', { body })
+  if (error) throw error
+  return data as T
+}
 
 export function WhatsAppInboxPage() {
+  const { id: businessId, role } = useBusiness()
+  const [connectionChecking, setConnectionChecking] = useState(true)
+  const [configured, setConfigured] = useState(false)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
+  const [status, setStatus] = useState<InboxStatus>('open')
+  const [searchInput, setSearchInput] = useState('')
+  const [search, setSearch] = useState('')
+  const [conversations, setConversations] = useState<Conversation[]>(EMPTY_CONVERSATIONS)
+  const [listPage, setListPage] = useState(1)
+  const [hasMore, setHasMore] = useState(false)
+  const [listLoading, setListLoading] = useState(false)
+  const [listError, setListError] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState<string | null>(null)
+  const [messageDraft, setMessageDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [statusSaving, setStatusSaving] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [customers, setCustomers] = useState<Customer[]>([])
+  const [orders, setOrders] = useState<Order[]>([])
+  const [links, setLinks] = useState<Record<string, ConversationLink>>({})
+  const [linkLoading, setLinkLoading] = useState(false)
+  const [linkSaving, setLinkSaving] = useState(false)
+  const [linkError, setLinkError] = useState<string | null>(null)
+  const [linkMessage, setLinkMessage] = useState<string | null>(null)
+  const detailRequest = useRef(0)
+  const refreshInFlight = useRef(false)
+
+  const loadConversations = useCallback(async (page = 1, append = false) => {
+    if (!configured) return
+    setListLoading(true)
+    setListError(null)
+    try {
+      const result = await invokeInbox<ConversationListResponse>({
+        action: 'list', business_id: businessId, status, page, query: search || undefined,
+      })
+      const next = result.conversations ?? []
+      setConversations((current) => append ? [...current, ...next] : next)
+      setListPage(page)
+      setHasMore(result.meta?.has_more ?? next.length >= 25)
+    } catch {
+      setListError('Não foi possível carregar as conversas. Tente novamente.')
+    } finally {
+      setListLoading(false)
+    }
+  }, [businessId, configured, search, status])
+
+  const refreshLoadedConversations = useCallback(async () => {
+    if (!configured || refreshInFlight.current) return
+    refreshInFlight.current = true
+    setListLoading(true)
+    setListError(null)
+    try {
+      const combined: Conversation[] = []
+      let currentPage = 1
+      let morePages = false
+      const finalPage = Math.max(1, listPage)
+      while (currentPage <= finalPage) {
+        const result = await invokeInbox<ConversationListResponse>({
+          action: 'list', business_id: businessId, status, page: currentPage, query: search || undefined,
+        })
+        const pageRows = result.conversations ?? []
+        combined.push(...pageRows)
+        morePages = result.meta?.has_more ?? pageRows.length >= 25
+        if (currentPage >= finalPage || !morePages) break
+        currentPage += 1
+      }
+      setConversations(combined)
+      setListPage(currentPage)
+      setHasMore(morePages)
+      if (selectedId && combined.some((conversation) => conversation.id === selectedId)) {
+        const result = await invokeInbox<{ conversation?: Conversation }>({
+          action: 'conversation', business_id: businessId, conversationId: selectedId,
+        })
+        setSelectedConversation(result.conversation ?? null)
+      } else {
+        setSelectedConversation(null)
+      }
+    } catch {
+      setListError('Não foi possível atualizar as conversas. Tente novamente.')
+    } finally {
+      refreshInFlight.current = false
+      setListLoading(false)
+    }
+  }, [businessId, configured, listPage, search, selectedId, status])
+
+  useEffect(() => {
+    let active = true
+    async function checkConnection() {
+      setConnectionChecking(true)
+      setConnectionError(null)
+      try {
+        const result = await invokeInbox<{ configured?: boolean }>({ action: 'status', business_id: businessId })
+        if (active) setConfigured(result.configured === true)
+      } catch {
+        if (active) {
+          setConfigured(false)
+          setConnectionError('Não foi possível verificar a conexão com o servidor.')
+        }
+      } finally {
+        if (active) setConnectionChecking(false)
+      }
+    }
+    void checkConnection()
+    return () => { active = false }
+  }, [businessId])
+
+  useEffect(() => { if (configured) void loadConversations() }, [configured, loadConversations])
+
+  useEffect(() => {
+    if (!configured) return
+    const interval = window.setInterval(() => { void refreshLoadedConversations() }, 30_000)
+    return () => window.clearInterval(interval)
+  }, [configured, refreshLoadedConversations])
+
+  useEffect(() => {
+    setSelectedId((selected) => selected && conversations.some((item) => item.id === selected) ? selected : null)
+  }, [conversations])
+
+  useEffect(() => {
+    let active = true
+    async function loadBusinessContext() {
+      if (!configured || !supabaseClient) return
+      setLinkLoading(true)
+      const [customersResult, linksResult] = await Promise.all([
+        supabaseClient.from('customers').select('id, name, phone, whatsapp_phone').eq('business_id', businessId).eq('is_active', true).order('name', { ascending: true }),
+        supabaseClient.from('whatsapp_conversation_links').select('conversation_id, inbox_id, customer_id, order_id').eq('business_id', businessId),
+      ])
+      if (!active) return
+      if (customersResult.error || linksResult.error) {
+        setLinkError('Não foi possível carregar os vínculos com clientes e pedidos.')
+      } else {
+        setCustomers((customersResult.data ?? []) as Customer[])
+        setLinks(Object.fromEntries(((linksResult.data ?? []) as ConversationLink[]).map((link) => [link.conversation_id, link])))
+        setLinkError(null)
+      }
+      setLinkLoading(false)
+    }
+    void loadBusinessContext()
+    return () => { active = false }
+  }, [businessId, configured])
+
+  useEffect(() => {
+    if (!selectedId || !configured) {
+      setSelectedConversation(null)
+      return
+    }
+    let active = true
+    const request = ++detailRequest.current
+    async function loadConversation() {
+      setSelectedConversation(null)
+      setDetailLoading(true)
+      setDetailError(null)
+      try {
+        const result = await invokeInbox<{ conversation?: Conversation }>({ action: 'conversation', business_id: businessId, conversationId: selectedId })
+        if (active && detailRequest.current === request) setSelectedConversation(result.conversation ?? null)
+      } catch {
+        if (active && detailRequest.current === request) setDetailError('Não foi possível abrir esta conversa. Atualize a lista e tente novamente.')
+      } finally {
+        if (active && detailRequest.current === request) setDetailLoading(false)
+      }
+    }
+    void loadConversation()
+    setMessageDraft('')
+    setActionError(null)
+    setLinkError(null)
+    setLinkMessage(null)
+    return () => { active = false }
+  }, [businessId, configured, selectedId])
+
+  const selectedLink = selectedId ? links[selectedId] : undefined
+  const currentConversation = selectedConversation?.id === selectedId && conversations.some((item) => item.id === selectedId)
+    ? selectedConversation
+    : null
+  const [customerDraft, setCustomerDraft] = useState('')
+  const [orderDraft, setOrderDraft] = useState('')
+
+  useEffect(() => {
+    setCustomerDraft(selectedLink?.customer_id ?? '')
+    setOrderDraft(selectedLink?.order_id ?? '')
+  }, [selectedId, selectedLink?.customer_id, selectedLink?.order_id])
+
+  useEffect(() => {
+    let active = true
+    async function loadOrders() {
+      setOrders([])
+      if (!customerDraft || !supabaseClient) return
+      const { data, error } = await supabaseClient.from('orders')
+        .select('id, created_at, status, total_cents')
+        .eq('business_id', businessId)
+        .eq('customer_id', customerDraft)
+        .order('created_at', { ascending: false })
+        .limit(50)
+      if (active && !error) setOrders((data ?? []) as Order[])
+    }
+    void loadOrders()
+    return () => { active = false }
+  }, [businessId, customerDraft])
+
+  const phoneMatches = useMemo(() => {
+    const phone = digitsOnly(currentConversation?.contact.phone)
+    if (phone.length < 8) return []
+    return customers.filter((customer) => [customer.whatsapp_phone, customer.phone].some((value) => {
+      const candidate = digitsOnly(value)
+      return candidate.length >= 8 && (candidate.endsWith(phone) || phone.endsWith(candidate))
+    }))
+  }, [customers, currentConversation?.contact.phone])
+
+  async function handleSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSearch(searchInput.trim())
+  }
+
+  async function handleSend(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!currentConversation || !messageDraft.trim() || !currentConversation.can_reply) return
+    setSending(true)
+    setActionError(null)
+    try {
+      await invokeInbox({ action: 'send', business_id: businessId, conversationId: currentConversation.id, content: messageDraft.trim() })
+      setMessageDraft('')
+      await refreshLoadedConversations()
+    } catch {
+      setActionError('A mensagem não foi enviada. Confira a conexão e tente novamente.')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  async function handleStatusChange(nextStatus: 'open' | 'resolved') {
+    if (!currentConversation) return
+    setStatusSaving(true)
+    setActionError(null)
+    try {
+      const result = await invokeInbox<{ conversation?: Conversation }>({ action: 'set_status', business_id: businessId, conversationId: currentConversation.id, status: nextStatus })
+      setSelectedConversation(result.conversation ?? { ...currentConversation, status: nextStatus })
+      await refreshLoadedConversations()
+    } catch {
+      setActionError('Não foi possível atualizar o status desta conversa.')
+    } finally {
+      setStatusSaving(false)
+    }
+  }
+
+  async function handleSaveLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!supabaseClient || !currentConversation || role !== 'owner') return
+    setLinkSaving(true)
+    setLinkError(null)
+    setLinkMessage(null)
+    const row = {
+      business_id: businessId,
+      conversation_id: currentConversation.id,
+      inbox_id: currentConversation.inbox_id,
+      customer_id: customerDraft || null,
+      order_id: orderDraft || null,
+    }
+    const { data, error } = await supabaseClient.from('whatsapp_conversation_links')
+      .upsert(row, { onConflict: 'business_id,conversation_id' })
+      .select('conversation_id, inbox_id, customer_id, order_id')
+      .single()
+    setLinkSaving(false)
+    if (error || !data) {
+      setLinkError('Não foi possível salvar o vínculo. Confira a seleção e tente novamente.')
+      return
+    }
+    const saved = data as ConversationLink
+    setLinks((current) => ({ ...current, [saved.conversation_id]: saved }))
+    setLinkMessage('Vínculo salvo para esta conversa.')
+  }
+
+  const connectedScreen = connectionChecking ? (
+    <section className="surface-panel whatsapp-connection-state" role="status"><span className="empty-icon"><Icon name="clock" /></span><h2>Verificando a conexão segura…</h2><p>O sistema consulta a configuração do Chatwoot no servidor.</p></section>
+  ) : !configured ? (
+    <section className="surface-panel whatsapp-connection-state" aria-labelledby="whatsapp-pending-title">
+      <span className="empty-icon"><Icon name="message" /></span>
+      <p className="eyebrow">{connectionError ? 'CONEXÃO INDISPONÍVEL' : 'ETAPA 1 · CAIXA DE ENTRADA'}</p>
+      <h2 id="whatsapp-pending-title">{connectionError ? 'Não foi possível verificar a integração' : 'A caixa de entrada está preparada; falta conectar o Chatwoot'}</h2>
+      <p>{connectionError ?? 'Esta tela vai reunir as conversas do WhatsApp dentro do Shalom e permitir associá-las a clientes e pedidos. Nenhuma conversa foi simulada; nenhuma mensagem é enviada enquanto o Chatwoot e a conta WhatsApp Business não estiverem configurados.'}</p>
+      <ol className="whatsapp-setup-steps">
+        <li><span>1</span><div><strong>Configurar a conexão segura</strong><small>Endereço, conta e token do Chatwoot ficam nos secrets da função Supabase, nunca no navegador.</small></div><span className="neutral-status">Pendente</span></li>
+        <li><span>2</span><div><strong>Conectar o canal WhatsApp</strong><small>Depende da conta WhatsApp Business, do número e da configuração aprovada na Meta.</small></div><span className="neutral-status">Pendente</span></li>
+        <li><span>3</span><div><strong>Validar mensagens reais</strong><small>Depois da conexão, confirmar recebimento, resposta, status e vínculo com cadastro e pedido.</small></div><span className="neutral-status">Pendente</span></li>
+      </ol>
+      {connectionError && <button className="button button-secondary" onClick={() => { setConnectionChecking(true); setConnectionError(null); void invokeInbox<{ configured?: boolean }>({ action: 'status', business_id: businessId }).then((result) => setConfigured(result.configured === true)).catch(() => setConnectionError('Não foi possível verificar a conexão com o servidor.')).finally(() => setConnectionChecking(false)) }} type="button">Tentar novamente</button>}
+      <Link className="quiet-link" to="/configuracoes">Ver preparação da conexão <Icon name="arrow" /></Link>
+    </section>
+  ) : (
+    <section className="whatsapp-inbox" aria-label="Caixa de entrada WhatsApp">
+      <aside className={`surface-panel whatsapp-conversation-panel${selectedId ? ' is-mobile-hidden' : ''}`} aria-label="Lista de conversas">
+        <div className="whatsapp-list-heading">
+          <div><p className="eyebrow">CHATWOOT · WHATSAPP</p><h2>Conversas</h2></div>
+          <button aria-label="Atualizar conversas" className="icon-button" disabled={listLoading} onClick={() => void refreshLoadedConversations()} type="button"><Icon name="clock" /></button>
+        </div>
+        <form className="whatsapp-search" onSubmit={(event) => void handleSearch(event)} role="search">
+          <Icon name="search" />
+          <input aria-label="Buscar no conteúdo das mensagens" onChange={(event) => setSearchInput(event.target.value)} placeholder="Buscar mensagem" value={searchInput} />
+          <button className="text-button" type="submit">Buscar</button>
+        </form>
+        <div className="whatsapp-status-tabs" aria-label="Filtrar conversas por status">
+          {(['open', 'resolved', 'all'] as const).map((item) => <button aria-pressed={status === item} key={item} onClick={() => setStatus(item)} type="button">{item === 'open' ? 'Abertas' : item === 'resolved' ? 'Resolvidas' : 'Todas'}</button>)}
+        </div>
+        {listError && <div className="inline-state inline-state-error" role="alert"><p>{listError}</p><button className="text-button" onClick={() => void refreshLoadedConversations()} type="button">Tentar novamente</button></div>}
+        {listLoading && conversations.length === 0 ? <p className="inline-state" role="status">Carregando conversas…</p> : conversations.length === 0 ? (
+          <div className="whatsapp-list-empty"><Icon name="message" /><strong>Nenhuma conversa nesta lista</strong><span>As conversas recebidas pelo canal conectado aparecerão aqui.</span></div>
+        ) : (
+          <ul className="whatsapp-conversation-list">
+            {conversations.map((conversation) => <li key={conversation.id}>
+              <button aria-current={selectedId === conversation.id ? 'true' : undefined} className={`whatsapp-conversation-item${selectedId === conversation.id ? ' is-selected' : ''}`} onClick={() => { setSelectedConversation(null); setSelectedId(conversation.id) }} type="button">
+                <span className="whatsapp-contact-avatar">{(conversation.contact.name || conversation.contact.phone || '?').slice(0, 1).toLocaleUpperCase('pt-BR')}</span>
+                <span className="whatsapp-conversation-copy"><strong>{conversation.contact.name || conversation.contact.phone || 'Contato sem nome'}</strong><small>{conversation.last_message?.content || 'Sem mensagem de texto'}</small></span>
+                <span className="whatsapp-conversation-meta"><time>{timestampLabel(conversation.last_activity_at)}</time>{links[conversation.id]?.customer_id && <span className="whatsapp-linked-mark">Cliente vinculado</span>}</span>
+              </button>
+            </li>)}
+          </ul>
+        )}
+        {hasMore && <button className="button button-secondary whatsapp-load-more" disabled={listLoading} onClick={() => void loadConversations(listPage + 1, true)} type="button">{listLoading ? 'Carregando…' : 'Carregar mais conversas'}</button>}
+      </aside>
+
+      <section className={`surface-panel whatsapp-chat-panel${selectedId ? ' is-mobile-visible' : ''}`} aria-label="Conversa selecionada">
+        {!selectedId ? <div className="whatsapp-chat-empty"><Icon name="message" /><h2>Selecione uma conversa</h2><p>O histórico e as ações aparecem aqui.</p></div> : <>
+          <header className="whatsapp-chat-heading">
+            <button className="text-button whatsapp-back-button" onClick={() => setSelectedId(null)} type="button">← Conversas</button>
+            <div className="whatsapp-chat-contact"><span className="whatsapp-contact-avatar">{(currentConversation?.contact.name || '?').slice(0, 1).toLocaleUpperCase('pt-BR')}</span><div><h2>{currentConversation?.contact.name || (detailLoading ? 'Carregando contato…' : 'Contato')}</h2><span>{currentConversation?.contact.phone || 'Telefone indisponível'}</span></div></div>
+            <div className="whatsapp-chat-actions">
+              <span className={`whatsapp-status-pill${currentConversation?.status === 'open' ? '' : ' is-resolved'}`}>{statusLabel(currentConversation?.status)}</span>
+              <button className="button button-secondary" disabled={statusSaving || !currentConversation || !['open', 'resolved'].includes(currentConversation.status)} onClick={() => void handleStatusChange(currentConversation?.status === 'resolved' ? 'open' : 'resolved')} type="button">{statusSaving ? 'Salvando…' : currentConversation?.status === 'resolved' ? 'Reabrir' : 'Resolver'}</button>
+            </div>
+          </header>
+
+          {detailError && <div className="inline-state inline-state-error" role="alert">{detailError}</div>}
+          <div className="whatsapp-message-history" aria-live="polite" aria-label="Histórico de mensagens">
+            {detailLoading && <p className="inline-state" role="status">Carregando histórico…</p>}
+            {!detailLoading && currentConversation?.messages.map((message) => <article className={`whatsapp-message${message.message_type === 'outgoing' ? ' is-outgoing' : ''}${message.private ? ' is-private' : ''}`} key={message.id}>
+              {message.private && <span className="whatsapp-message-label">Nota interna</span>}
+              {message.content ? <p>{message.content}</p> : <p className="whatsapp-message-attachment">{message.message_type === 'activity' ? 'Atualização da conversa' : 'Mensagem sem texto'}</p>}
+              <footer><span>{message.message_type === 'outgoing' ? 'Equipe' : message.sender.name || currentConversation?.contact.name || 'Cliente'}</span><time>{timestampLabel(message.created_at)}</time></footer>
+            </article>)}
+            {!detailLoading && currentConversation?.messages.length === 0 && <p className="whatsapp-chat-empty-history">Ainda não há mensagens nesta conversa.</p>}
+          </div>
+
+          {actionError && <p className="form-message form-message-error whatsapp-action-error" role="alert">{actionError}</p>}
+          <form className="whatsapp-compose" onSubmit={(event) => void handleSend(event)}>
+            {currentConversation && !currentConversation.can_reply && <p className="section-footnote">O canal não permite responder a esta conversa neste momento.</p>}
+            <label className="visually-hidden" htmlFor="whatsapp-message-draft">Mensagem</label>
+            <textarea disabled={!currentConversation?.can_reply} id="whatsapp-message-draft" maxLength={4000} onChange={(event) => setMessageDraft(event.target.value)} placeholder="Escreva uma mensagem…" value={messageDraft} />
+            <div><span>{messageDraft.length}/4000</span><button className="button button-primary" disabled={sending || !messageDraft.trim() || !currentConversation?.can_reply} type="submit">{sending ? 'Enviando…' : 'Enviar'}</button></div>
+          </form>
+
+          <form className="whatsapp-context-panel" onSubmit={(event) => void handleSaveLink(event)}>
+            <div className="whatsapp-context-heading"><div><p className="eyebrow">CONTEXTO SHALOM</p><h3>Cliente e pedido</h3></div><span className="neutral-status">Vínculo manual</span></div>
+            {linkError && <p className="form-message form-message-error" role="alert">{linkError}</p>}
+            {linkMessage && <p className="form-message form-message-success" role="status">{linkMessage}</p>}
+            {phoneMatches.length > 0 && !customerDraft && <p className="whatsapp-match-hint">{phoneMatches.length === 1 ? `Telefone correspondente ao cadastro de ${phoneMatches[0].name}.` : `${phoneMatches.length} cadastros usam este telefone; escolha o cliente correto.`} A associação só será salva após sua confirmação.</p>}
+            <label className="whatsapp-context-field"><span>Cliente</span><select disabled={!currentConversation || linkLoading || role !== 'owner'} onChange={(event) => { setCustomerDraft(event.target.value); setOrderDraft('') }} value={customerDraft}><option value="">Sem cliente associado</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
+            <label className="whatsapp-context-field"><span>Pedido relacionado</span><select disabled={!currentConversation || !customerDraft || role !== 'owner'} onChange={(event) => setOrderDraft(event.target.value)} value={orderDraft}><option value="">Sem pedido associado</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
+            {role === 'owner' ? <button className="button button-secondary" disabled={!currentConversation || linkSaving || linkLoading} type="submit">{linkSaving ? 'Salvando…' : 'Salvar vínculo'}</button> : <p className="section-footnote">Somente a gestão pode alterar vínculos de atendimento.</p>}
+          </form>
+        </>}
+      </section>
+    </section>
+  )
+
   return (
     <div className="page-stack">
       <header className="page-heading">
         <div>
           <p className="eyebrow">ATENDIMENTO</p>
           <h1>WhatsApp</h1>
-          <p className="page-description">Caixa de entrada reservada para conversar com clientes dentro do sistema.</p>
+          <p className="page-description">Conversas do Chatwoot com contexto de clientes e pedidos do Shalom.</p>
         </div>
         <span className="module-heading-icon"><Icon name="message" /></span>
       </header>
-
-      <section className="module-empty-panel" aria-labelledby="whatsapp-empty-title">
-        <span className="empty-icon"><Icon name="message" /></span>
-        <p className="eyebrow">CONEXÃO PENDENTE</p>
-        <h2 id="whatsapp-empty-title">A caixa de entrada ainda não está conectada</h2>
-        <p>O número e a conta do WhatsApp Business não foram configurados. Nenhuma mensagem está sendo recebida ou enviada por este sistema.</p>
-        <p><Link className="button button-secondary" to="/configuracoes">Ver preparação da conexão</Link></p>
-      </section>
+      {connectedScreen}
     </div>
   )
 }
