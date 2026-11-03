@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link, useNavigate } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { CustomerImport } from '../components/CustomerImport'
 import { searchCustomers, toInternationalPhone } from '../lib/customer-search.mjs'
 import { supabaseClient } from '../lib/supabase'
 
@@ -116,10 +115,6 @@ export function CustomersPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [showForm, setShowForm] = useState(false)
-  const [showCustomerImport, setShowCustomerImport] = useState(false)
-  const [importCustomers, setImportCustomers] = useState<Pick<Customer, 'id' | 'name' | 'phone' | 'whatsapp_phone'>[]>([])
-  const [importLoading, setImportLoading] = useState(false)
-  const [importError, setImportError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [phone, setPhone] = useState('')
@@ -381,65 +376,21 @@ export function CustomersPage() {
     }
   }
 
-  async function openCustomerImport() {
-    if (!supabaseClient || importLoading) return
-    setImportLoading(true)
-    setImportError(null)
-    try {
-      const { data, error: queryError } = await supabaseClient.from('customers')
-        .select('id, name, phone, whatsapp_phone')
-        .eq('business_id', businessId)
-        .order('name', { ascending: true })
-      if (queryError) throw queryError
-      setImportCustomers((data ?? []) as Pick<Customer, 'id' | 'name' | 'phone' | 'whatsapp_phone'>[])
-      setShowCustomerImport(true)
-    } catch {
-      setImportError('Não foi possível conferir duplicidades agora. Tente novamente antes de importar.')
-    } finally {
-      setImportLoading(false)
-    }
-  }
-
-  async function importCustomerRecords(requestId: string, records: Array<Pick<Customer, 'name' | 'phone' | 'whatsapp_phone' | 'delivery_address' | 'notes'>>) {
-    if (!supabaseClient) throw new Error('A conexão da empresa não está disponível.')
-    const { data, error: importError, status } = await supabaseClient.rpc('import_customers', {
-      p_request_id: requestId,
-      p_customers: records,
-    })
-    if (importError) {
-      const definitiveFailure = Number.isInteger(status) && status >= 400
-      const failure = new Error(definitiveFailure
-        ? 'A importação não foi aplicada. Corrija o erro e tente novamente.'
-        : 'A resposta da importação se perdeu. Reenvie o mesmo lote para confirmar sem duplicar cadastros.')
-      Object.assign(failure, { uncertain: !definitiveFailure })
-      throw failure
-    }
-    if (!Number.isInteger(data) || data < 0) {
-      throw Object.assign(new Error('A resposta da importação veio incompleta. Reenvie o mesmo lote para confirmar sem duplicar cadastros.'), { uncertain: true })
-    }
-    setLoading(true)
-    setError(null)
-    await loadCustomers()
-  }
-
   return (
     <div className="page-stack">
       <header className="page-heading">
         <div>
           <p className="eyebrow">RELACIONAMENTO</p>
           <h1>Clientes</h1>
-          <p className="page-description">Cadastros, contatos e histórico de relacionamento.</p>
+          <p className="page-description">Cadastros, contatos e histórico de relacionamento. Inclua os registros manualmente, conforme combinado.</p>
         </div>
         <div className="record-heading-actions">
-          <button className="button button-secondary" disabled={importLoading || saving} onClick={() => void openCustomerImport()} type="button">{importLoading ? 'Preparando…' : 'Importar CSV'}</button>
           <button className="button button-primary" disabled={saving} onClick={() => { setShowForm((value) => !value); setSaveError(null); clearPhoneLookupState(); setPhone(''); setPhoneCountryIso('BR'); setCustomPhoneCallingCode(''); setPhoneIsWhatsApp(false); setShowDifferentWhatsapp(false); setWhatsappPhone(''); setWhatsappCountryIso('BR'); setCustomWhatsappCallingCode(''); setShowOptionalDetails(false); setCep(''); setCepStatus('idle'); setCepResultAddress(''); setDeliveryAddress(''); setAddressEdited(false); addressEditedRef.current = false }} type="button">
             <Icon name="plus" /> {showForm ? 'Fechar' : 'Novo cliente'}
           </button>
         </div>
       </header>
 
-      {importError && <p className="form-message form-message-error" role="alert">{importError}</p>}
-      {showCustomerImport && <CustomerImport existingCustomers={importCustomers} onImport={importCustomerRecords} onClose={() => setShowCustomerImport(false)} />}
 
       {showForm && (
         <form className="surface-panel record-form" onSubmit={handleCreateCustomer}>

@@ -738,7 +738,7 @@ export function BankReconciliationPage() {
         <div>
           <p className="eyebrow">OPEN FINANCE</p>
           <h2 id="bank-connection-heading">Conexão ainda não iniciada</h2>
-          <p>O teste de sandbox depende de projeto Supabase disponível e credenciais do provedor. Esta tela não acessa o banco nem contém movimentos fictícios. Enquanto isso, você pode registrar manualmente linhas do extrato e conciliá-las com o financeiro.</p>
+          <p>O teste de sandbox depende de acesso de desenvolvedor ao provedor, credenciais de sandbox e consentimento de teste. Esta tela ainda não acessa contas bancárias nem contém movimentos fictícios. Enquanto isso, você pode registrar manualmente linhas do extrato e conciliá-las com o financeiro.</p>
           <small>Os segredos da integração deverão ficar no servidor. Não informe senha bancária nesta tela.</small>
         </div>
         <span className="neutral-status">Não conectada</span>

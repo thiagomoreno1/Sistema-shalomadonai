@@ -158,6 +158,29 @@ begin
       raise exception using errcode = '22023', message = 'Order line components must be an array.';
     end if;
     if v_product.is_combo then
+      perform 1
+        from public.combo_components as component
+       where component.business_id = p_business_id
+         and component.combo_product_id = v_item.product_id
+       order by component.component_product_id
+       for share;
+
+      select coalesce(
+               pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+                 'product_id', component.component_product_id,
+                 'quantity_per_combo', component.quantity_per_combo
+               ) order by component.component_product_id),
+               '[]'::jsonb
+             )
+        into v_component_recipe
+        from public.combo_components as component
+       where component.business_id = p_business_id
+         and component.combo_product_id = v_item.product_id;
+
+      if pg_catalog.jsonb_array_length(v_component_recipe) = 0 then
+        raise exception using errcode = '22023', message = 'Every combo needs a saved component composition before it can be ordered.';
+      end if;
+
       if v_item.components is not null and pg_catalog.jsonb_array_length(v_item.components) > 0 then
         if pg_catalog.jsonb_array_length(v_item.components) > 100 then
           raise exception using errcode = '22023', message = 'An order line cannot contain more than 100 components.';
@@ -184,29 +207,10 @@ begin
           raise exception using errcode = '22023', message = 'Custom combo components must be unique with positive quantities to three decimal places.';
         end if;
         v_component_recipe := v_item.components;
-      else
-        perform 1
-          from public.combo_components as component
-         where component.business_id = p_business_id
-           and component.combo_product_id = v_item.product_id
-         order by component.component_product_id
-         for share;
-
-        select coalesce(
-                 pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
-                   'product_id', component.component_product_id,
-                   'quantity_per_combo', component.quantity_per_combo
-                 ) order by component.component_product_id),
-                 '[]'::jsonb
-               )
-          into v_component_recipe
-          from public.combo_components as component
-         where component.business_id = p_business_id
-           and component.combo_product_id = v_item.product_id;
       end if;
 
       if pg_catalog.jsonb_array_length(v_component_recipe) = 0 then
-        raise exception using errcode = '22023', message = 'Every combo needs a saved or custom component composition before it can be ordered.';
+        raise exception using errcode = '22023', message = 'Every combo needs a saved component composition before it can be ordered.';
       end if;
       if pg_catalog.jsonb_array_length(v_component_recipe) > 100 then
         raise exception using errcode = '22023', message = 'An order line cannot contain more than 100 components.';

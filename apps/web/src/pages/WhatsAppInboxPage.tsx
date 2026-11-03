@@ -455,7 +455,8 @@ export function WhatsAppInboxPage() {
 
   async function handleSaveLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!supabaseClient || !currentConversation || role !== 'owner') return
+    const client = supabaseClient
+    if (!client || !currentConversation || role !== 'owner') return
     setLinkSaving(true)
     setLinkError(null)
     setLinkMessage(null)
@@ -466,16 +467,25 @@ export function WhatsAppInboxPage() {
       customer_id: customerDraft || null,
       order_id: orderDraft || null,
     }
-    const { data, error } = await supabaseClient.from('whatsapp_conversation_links')
-      .upsert(row, { onConflict: 'business_id,conversation_id' })
+    const updateLink = () => client.from('whatsapp_conversation_links')
+      .update({ inbox_id: row.inbox_id, customer_id: row.customer_id, order_id: row.order_id })
+      .eq('business_id', row.business_id)
+      .eq('conversation_id', row.conversation_id)
       .select('conversation_id, inbox_id, customer_id, order_id')
       .single()
+    let result = selectedLink
+      ? await updateLink()
+      : await client.from('whatsapp_conversation_links')
+        .insert(row)
+        .select('conversation_id, inbox_id, customer_id, order_id')
+        .single()
+    if (!selectedLink && result.error?.code === '23505') result = await updateLink()
     setLinkSaving(false)
-    if (error || !data) {
+    if (result.error || !result.data) {
       setLinkError('Não foi possível salvar o vínculo. Confira a seleção e tente novamente.')
       return
     }
-    const saved = data as ConversationLink
+    const saved = result.data as ConversationLink
     setLinks((current) => ({ ...current, [saved.conversation_id]: saved }))
     setLinkMessage('Vínculo salvo para esta conversa.')
   }

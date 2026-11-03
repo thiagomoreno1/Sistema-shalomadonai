@@ -54,22 +54,6 @@ function installmentsFromSchedule(schedule: ScheduleEntry[], baseDate: string, t
   return result.some((entry) => entry === null) ? null : result as InstallmentDraft[]
 }
 
-function readLastPaymentTemplate(businessId: string) {
-  try {
-    return localStorage.getItem(`shalom:last-payment-template:${businessId}`)
-  } catch {
-    return null
-  }
-}
-
-function rememberPaymentTemplate(businessId: string, templateId: string) {
-  try {
-    localStorage.setItem(`shalom:last-payment-template:${businessId}`, templateId)
-  } catch {
-    // Template automation still works when browser storage is unavailable.
-  }
-}
-
 function quantityInThousandths(value: string) {
   const cleaned = value.trim().replace(',', '.')
   const match = /^(\d+)(?:\.(\d{1,3}))?$/.exec(cleaned)
@@ -285,13 +269,8 @@ export function NewOrderPage() {
         setScheduleTemplates(loadedTemplates)
         setScheduleTemplateLoadError(null)
         if (scheduleTemplateBusinessRef.current !== businessId) {
-          const lastUsedTemplateId = readLastPaymentTemplate(businessId)
-          const selectedDefault = loadedTemplates.length === 1
-            ? loadedTemplates[0].id
-            : loadedTemplates.some((template) => template.id === lastUsedTemplateId) ? lastUsedTemplateId! : ''
-          setSelectedScheduleTemplateId(selectedDefault)
-          if (selectedDefault) rememberPaymentTemplate(businessId, selectedDefault)
-          autoScheduleRef.current = true
+          setSelectedScheduleTemplateId('')
+          autoScheduleRef.current = false
           scheduleTemplateBusinessRef.current = businessId
         }
       }
@@ -409,14 +388,6 @@ export function NewOrderPage() {
   const loadCustomerOrderSuggestion = useCallback(async (nextCustomerId: string) => {
     const requestId = ++customerOrderRequestRef.current
     const manual = customerPrefillManualRef.current
-    const restoreDefaultSchedule = () => {
-      if (manual.installments || selectedScheduleTemplateId) return
-      const lastUsedTemplateId = readLastPaymentTemplate(businessId)
-      if (scheduleTemplates.some((template) => template.id === lastUsedTemplateId)) {
-        setSelectedScheduleTemplateId(lastUsedTemplateId!)
-        autoScheduleRef.current = true
-      }
-    }
     setCustomerOrderSuggestion(null)
     setCustomerSuggestedItems([])
     setLegacyCompositionReviewConfirmed(false)
@@ -430,7 +401,7 @@ export function NewOrderPage() {
     if (!manual.installments) {
       setInstallments([{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
       if (!manual.baseDate) setScheduleBaseDate(businessDateForTimestamp(new Date(), timezone))
-      autoScheduleRef.current = true
+      autoScheduleRef.current = false
     }
 
     if (!nextCustomerId || !supabaseClient) return
@@ -448,7 +419,6 @@ export function NewOrderPage() {
         return
       }
       if (!sourceOrder) {
-        restoreDefaultSchedule()
         setCustomerPrefillNotice('Sem pedido anterior para reaproveitar: carreguei o endereço do cadastro e reiniciei entrega e taxa para este cliente.')
         return
       }
@@ -551,7 +521,7 @@ export function NewOrderPage() {
         if (!manual.baseDate) setScheduleBaseDate(businessDateForTimestamp(new Date(), timezone))
         customerPrefillManualRef.current.installments = false
         autoScheduleRef.current = false
-      } else if (!validPaymentPattern) restoreDefaultSchedule()
+      }
 
       const currentCustomer = customers.find((candidate) => candidate.id === nextCustomerId)
       setCustomerOrderSuggestion({
@@ -586,7 +556,7 @@ export function NewOrderPage() {
     } finally {
       if (requestId === customerOrderRequestRef.current) setCustomerPrefillLoading(false)
     }
-  }, [businessId, comboDefaults, customers, products, scheduleTemplates, selectedScheduleTemplateId, stockProducts, timezone])
+  }, [businessId, comboDefaults, customers, products, stockProducts, timezone])
 
   useEffect(() => {
     if (sourceOrderId || !requestedCustomerId || loadingChoices || customerId !== requestedCustomerId) return
@@ -807,11 +777,9 @@ export function NewOrderPage() {
       } : current)
       return
     }
-    setInstallments(nextInstallments)
-    setCustomerOrderSuggestion((current) => current && current.installmentStatus !== 'applied' ? {
+    setCustomerOrderSuggestion((current) => current && current.installmentStatus !== 'pending' ? {
       ...current,
-      installmentStatus: 'applied',
-      preservedFields: current.preservedFields.filter((field) => field !== 'parcelas'),
+      installmentStatus: 'pending',
     } : current)
   }, [customerPaymentPattern, estimate.invalid, scheduleBaseDate, totalCents])
 
@@ -864,12 +832,11 @@ export function NewOrderPage() {
         return
       }
       setScheduleTemplates((current) => [...current, data as ScheduleTemplate].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR')))
-      autoScheduleRef.current = true
+      autoScheduleRef.current = false
       customerPrefillManualRef.current.installments = true
       setCustomerPaymentPattern(null)
       setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current)
-      setSelectedScheduleTemplateId(data.id)
-      rememberPaymentTemplate(businessId, data.id)
+      setSelectedScheduleTemplateId('')
       setNewTemplateName('')
       setScheduleTemplateMessage(`Modelo “${data.name}” salvo. Ele poderá ser aplicado a outro pedido depois.`)
     } catch {
@@ -922,8 +889,12 @@ export function NewOrderPage() {
         }
         continue
       }
+      if ((comboDefaults[item.productId] ?? []).length === 0) {
+        setFormError('Cada cesta precisa ter uma composição cadastrada no catálogo antes de entrar em um pedido.')
+        return
+      }
       if (components.length === 0 || components.length > 100) {
-        setFormError('Cada cesta precisa ter de 1 a 100 produtos na composição. Confira a composição padrão ou personalize esta cesta.')
+        setFormError('Cada cesta precisa ter de 1 a 100 produtos na composição. Confira a composição cadastrada ou personalize esta cesta.')
         return
       }
       const componentIds = components.map((component) => component.productId)
@@ -1030,7 +1001,7 @@ export function NewOrderPage() {
       case 'incompatible':
         return `A distribuição anterior não cabe no total atual. Ajuste o total ou a quantidade/valores das parcelas antes de reaplicá-la.${customerOrderSuggestion.preservedFields.includes('parcelas') ? ' Suas edições foram preservadas.' : ''}`
       case 'pending':
-        return 'Parcelas anteriores encontradas; calculando para o total atual.'
+        return 'Encontrei a distribuição de parcelas no pedido anterior. Os vencimentos ficam em branco até você escolher reaproveitá-la.'
       case 'chosen_other':
         return 'A distribuição do pedido anterior não está sendo usada porque você escolheu outro modelo ou alterou o seletor.'
       default:
@@ -1063,7 +1034,7 @@ export function NewOrderPage() {
         {customerOrderSuggestion.skippedItems > 0 && <p>{customerOrderSuggestion.skippedItems} {customerOrderSuggestion.skippedItems === 1 ? 'item não foi copiado' : 'itens não foram copiados'} porque o produto ou sua composição não está disponível no catálogo.</p>}
         {customerOrderSuggestion.preservedFields.length > 0 && <p>Preservei suas alterações em: {customerOrderSuggestion.preservedFields.join(', ')}.</p>}
         {customerPrefillManualRef.current.items && customerSuggestedItems.length > 0 && <button className="text-button" disabled={disabled} onClick={applyCustomerSuggestedItems} type="button">Usar os itens deste pedido</button>}
-        {customerOrderSuggestion.installmentStatus === 'preserved' && customerPaymentPattern && <button className="text-button" disabled={disabled} onClick={applyCustomerPaymentSuggestion} type="button">Usar as parcelas deste pedido, recalculadas para hoje</button>}
+        {(customerOrderSuggestion.installmentStatus === 'preserved' || customerOrderSuggestion.installmentStatus === 'pending') && customerPaymentPattern && <button className="text-button" disabled={disabled} onClick={applyCustomerPaymentSuggestion} type="button">Usar as parcelas deste pedido, recalculadas para hoje</button>}
       </div>}
       {loadingChoices ? <p className="inline-state" aria-live="polite">Carregando clientes e produtos ativos…</p> : (
         <form className="order-create-form" onSubmit={handleSubmit}>
@@ -1098,7 +1069,10 @@ export function NewOrderPage() {
                       <label className="record-field order-product-select"><span className="field-label">Produto {index + 1} <span aria-hidden="true">*</span></span>
                         <select className="text-input" disabled={disabled} onChange={(event) => updateItem(item.key, { productId: event.target.value })} required value={item.productId}>
                           <option value="">Selecione um produto</option>
-                          {products.map((option) => <option key={option.id} value={option.id}>{option.name} · {formatBRL(option.sale_price_cents)}{option.inventory_unit ? ` / ${option.inventory_unit}` : ''}</option>)}
+                          {products.map((option) => {
+                            const missingComboComposition = option.is_combo && (comboDefaults[option.id] ?? []).length === 0
+                            return <option disabled={missingComboComposition} key={option.id} value={option.id}>{option.name} · {formatBRL(option.sale_price_cents)}{option.inventory_unit ? ` / ${option.inventory_unit}` : ''}{missingComboComposition ? ' · cadastre a composição no catálogo' : ''}</option>
+                          })}
                         </select>
                       </label>
                       <label className="record-field order-quantity-field"><span className="field-label">Quantidade <span aria-hidden="true">*</span></span>
@@ -1109,6 +1083,9 @@ export function NewOrderPage() {
                       {product?.is_combo && (() => {
                         const composition = item.components ?? comboDefaults[item.productId] ?? []
                         const customized = item.components !== undefined
+                        if ((comboDefaults[item.productId] ?? []).length === 0) {
+                          return <p className="section-footnote form-message-error">Cadastre a composição desta cesta no <Link to="/catalogo">catálogo</Link> antes de vendê-la.</p>
+                        }
                         return <div className="combo-composition record-field-wide">
                           <div className="section-heading section-heading-compact">
                             <div><p className="eyebrow">CESTA PERSONALIZÁVEL</p><h3>Conteúdo desta cesta</h3></div>
@@ -1174,12 +1151,12 @@ export function NewOrderPage() {
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO COMBINADO</p><h2 id="order-installments-heading">Vencimentos informados neste pedido</h2></div>
               <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: '' }]) }} type="button"><Icon name="plus" /> Adicionar vencimento</button>
             </div>
-            <p className="section-footnote order-payment-hint">Com um modelo salvo, valores e datas são preenchidos automaticamente conforme o total e a data-base. Você pode ajustar qualquer vencimento antes de salvar.</p>
+            <p className="section-footnote order-payment-hint">Informe os vencimentos deste pedido. Se você selecionar um modelo, ele preencherá valores e datas; você pode conferir e ajustar tudo antes de salvar.</p>
             <p className="section-footnote">Cada pedido pode ter no máximo 120 vencimentos.</p>
             {scheduleTemplateLoadError && <p className="form-message form-message-warning" role="status">{scheduleTemplateLoadError}</p>}
             {scheduleTemplates.length > 0 && <div className="record-form-grid order-adjustments" aria-label="Aplicar modelo de vencimentos">
               <label className="record-field"><span className="field-label">Modelo salvo</span>
-                <select className="text-input" disabled={disabled} onChange={(event) => { const nextId = event.target.value; customerPrefillManualRef.current.installments = true; autoScheduleRef.current = Boolean(nextId); setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); setSelectedScheduleTemplateId(nextId); if (nextId) rememberPaymentTemplate(businessId, nextId); setScheduleTemplateError(null); setScheduleTemplateMessage(null) }} value={selectedScheduleTemplateId}>
+                <select className="text-input" disabled={disabled} onChange={(event) => { const nextId = event.target.value; customerPrefillManualRef.current.installments = true; autoScheduleRef.current = Boolean(nextId); setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); setSelectedScheduleTemplateId(nextId); setScheduleTemplateError(null); setScheduleTemplateMessage(null) }} value={selectedScheduleTemplateId}>
                   <option value="">Selecione um modelo</option>
                   {scheduleTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
                 </select>
