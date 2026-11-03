@@ -41,7 +41,7 @@ export function WhatsAppPanelPage() {
       ) : (
         <section className="surface-panel chatwoot-embed-panel" aria-label="Painel de atendimento Chatwoot">
           <div className="chatwoot-embed-toolbar">
-            <p className="section-footnote">Entre com seu usuário do Chatwoot. A sessão é separada do Shalom; os vínculos com clientes e pedidos ficam na caixa nativa.</p>
+            <p className="section-footnote">Entre com seu usuário do Chatwoot. A sessão é separada do Shalom; para associar conversas a clientes e pedidos, use a caixa nativa.</p>
             <div className="chatwoot-embed-actions">
               <Link className="quiet-link" to="/whatsapp/caixa-shalom">Caixa nativa do Shalom</Link>
               <a className="button button-secondary" href={dashboardUrl} rel="noopener noreferrer" target="_blank">Abrir em nova guia</a>
@@ -53,7 +53,7 @@ export function WhatsAppPanelPage() {
             src={dashboardUrl}
             title="Painel de atendimento Chatwoot"
           />
-          <p className="section-footnote">Se o painel não carregar neste navegador, abra-o em uma nova guia.</p>
+          <p className="section-footnote">Se a tela ficar em branco ou o login voltar repetidamente, o navegador ou a configuração do Chatwoot pode estar bloqueando o painel embutido. Abra o Chatwoot em uma nova guia para entrar.</p>
         </section>
       )}
     </div>

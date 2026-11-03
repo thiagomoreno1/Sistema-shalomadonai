@@ -190,7 +190,7 @@ export function SettingsPage() {
               <h3 id="whatsapp-title">Caixa de entrada WhatsApp</h3>
               <span className="neutral-status">Não conectada</span>
             </div>
-            <p className="settings-integration-copy">A caixa de entrada do Shalom usará o Chatwoot para listar e responder conversas. Se a infraestrutura ficar na Contabo, ela hospedará o Chatwoot; a conexão continuará protegida pelo servidor.</p>
+            <p className="settings-integration-copy">Quando a instância estiver configurada, o painel original do Chatwoot ficará dentro do Shalom. O login e as permissões continuam sendo gerenciados no Chatwoot; a caixa nativa do Shalom, ainda pendente de conexão, está preparada para associar conversas a clientes e pedidos.</p>
             <dl className="settings-detail-list settings-integration-details">
               <div><dt>Provedor de atendimento</dt><dd>Chatwoot · preparação em andamento</dd></div>
               <div><dt>Infraestrutura</dt><dd>Contabo, se escolhida para hospedagem; versão própria 4.19+</dd></div>

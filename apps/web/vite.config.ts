@@ -23,7 +23,7 @@ export default defineConfig(({ mode }) => {
       const hasCredentialsOrQuery = Boolean(parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash)
 
       if ((!secureProtocol && !localHttp) || !isAppPath || hasCredentialsOrQuery) {
-        chatwootDashboardConfigError = 'VITE_CHATWOOT_DASHBOARD_URL precisa ser HTTPS, apontar para /app e não conter credenciais, consulta ou fragmento.'
+        chatwootDashboardConfigError = 'VITE_CHATWOOT_DASHBOARD_URL precisa ser HTTPS (ou HTTP local em localhost), apontar para /app e não conter credenciais, consulta ou fragmento.'
       } else {
         validChatwootDashboardUrl = parsedUrl.toString().replace(/\/+$/, '')
       }
