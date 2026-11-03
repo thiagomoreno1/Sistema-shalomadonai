@@ -18,9 +18,14 @@ type WidgetResponse = {
 }
 
 type VerifiedLink = {
+  owned?: boolean
   verified?: boolean
   institution?: string
   status?: string
+}
+
+type DeletedLink = {
+  deleted?: boolean
 }
 
 function getMessage(error: unknown) {
@@ -35,6 +40,7 @@ function formatMissingKey(key: string) {
     BELVO_SANDBOX_TERMS_URL: 'URL pública dos termos de uso',
     BELVO_SANDBOX_APP_ORIGIN: 'origem HTTPS pública do aplicativo',
     BELVO_SANDBOX_WEBHOOK_TOKEN: 'token de autenticação do webhook',
+    BELVO_SANDBOX_LINK_STATE_SECRET: 'chave secreta estável para proteger o vínculo de teste',
   }
   return labels[key] ?? key
 }
@@ -53,6 +59,8 @@ export function BelvoSandboxCard() {
   const [callbackMessageIsWarning, setCallbackMessageIsWarning] = useState(false)
   const [callbackError, setCallbackError] = useState<string | null>(null)
   const [verifiedLink, setVerifiedLink] = useState<VerifiedLink | null>(null)
+  const [verifiedLinkId, setVerifiedLinkId] = useState<string | null>(null)
+  const [deletingLink, setDeletingLink] = useState(false)
   const processedCallback = useRef<string | null>(null)
 
   async function verifyLink(linkId: string) {
@@ -66,13 +74,41 @@ export function BelvoSandboxCard() {
         body: { action: 'verify_link', business_id: businessId, link_id: linkId },
       })
       if (error) throw error
-      if (!data?.verified) throw new Error('A Belvo não confirmou o vínculo de teste.')
+      if (!data?.owned) throw new Error('A Belvo não confirmou que este vínculo foi criado nesta sessão.')
       setVerifiedLink(data)
+      setVerifiedLinkId(linkId)
       setPendingLinkId(null)
-      setCallbackMessage('Vínculo de teste confirmado. Nenhuma movimentação foi importada.')
+      if (data.verified) {
+        setCallbackMessage('Vínculo de teste confirmado. Nenhuma movimentação foi importada.')
+      } else {
+        setCallbackMessageIsWarning(true)
+        setCallbackMessage(`A Belvo encontrou o vínculo de teste, mas informou o estado “${data.status ?? 'não confirmado'}”. Você pode excluí-lo nesta sessão.`)
+      }
     } catch (error) {
       setCallbackMessage(null)
       setCallbackError(getMessage(error))
+    }
+  }
+
+  async function deleteVerifiedLink() {
+    if (!verifiedLinkId || !window.confirm('Excluir permanentemente este vínculo fictício da Belvo Sandbox?')) return
+    setDeletingLink(true)
+    setCallbackError(null)
+    try {
+      if (!supabaseClient) throw new Error('A conexão segura com o Supabase não está disponível.')
+      const { data, error } = await supabaseClient.functions.invoke<DeletedLink>('belvo-open-finance', {
+        body: { action: 'delete_link', business_id: businessId, link_id: verifiedLinkId },
+      })
+      if (error) throw error
+      if (!data?.deleted) throw new Error('A Belvo não confirmou a exclusão do vínculo de teste.')
+      setVerifiedLink(null)
+      setVerifiedLinkId(null)
+      setCallbackMessageIsWarning(false)
+      setCallbackMessage('O vínculo fictício e os dados associados foram excluídos da Belvo Sandbox.')
+    } catch (error) {
+      setCallbackError(getMessage(error))
+    } finally {
+      setDeletingLink(false)
     }
   }
 
@@ -103,13 +139,15 @@ export function BelvoSandboxCard() {
     if (!callback) return
 
     const linkId = url.searchParams.get('link')
-    const errorCode = url.searchParams.get('error') ?? url.searchParams.get('last_encountered_error_code')
-    const safeErrorCode = errorCode && /^[A-Z0-9_]{1,80}$/.test(errorCode) ? errorCode : null
+    const errorCode = url.searchParams.get('error') ?? url.searchParams.get('last_encountered_error_code') ?? url.searchParams.get('last_encountered_error')
+    const safeErrorCode = errorCode && /^[a-zA-Z0-9_-]{1,80}$/.test(errorCode) ? errorCode : null
+    const warningCode = url.searchParams.get('warning')
+    const safeWarningCode = warningCode && /^[a-zA-Z0-9_-]{1,80}$/.test(warningCode) ? warningCode : null
     const callbackKey = `${callback}:${linkId ?? ''}`
     if (processedCallback.current === callbackKey) return
     processedCallback.current = callbackKey
 
-    for (const key of ['belvo_callback', 'link', 'institution', 'last_encountered_error_code', 'meta_data_institution_name', 'meta_data_step', 'error', 'error_message']) {
+    for (const key of ['belvo_callback', 'link', 'institution', 'last_encountered_error', 'last_encountered_error_code', 'last_encountered_error_message', 'meta_data_institution_name', 'meta_data_step', 'error', 'error_message', 'warning', 'warning_message']) {
       url.searchParams.delete(key)
     }
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
@@ -121,6 +159,12 @@ export function BelvoSandboxCard() {
 
     if (callback === 'success') {
       setCallbackError('A Belvo retornou ao sistema sem o identificador do vínculo. Nenhuma movimentação foi importada; tente novamente.')
+      return
+    }
+
+    if (callback === 'warning' || (callback === 'event' && safeWarningCode)) {
+      setCallbackMessageIsWarning(true)
+      setCallbackMessage(`A Belvo enviou um aviso durante o teste${safeWarningCode ? ` (${safeWarningCode})` : ''}. O vínculo ainda não foi confirmado.`)
       return
     }
 
@@ -183,7 +227,12 @@ export function BelvoSandboxCard() {
 
       <div className="belvo-sandbox-scope" role="note">
         <strong>O widget ficará restrito à instituição fictícia da Belvo Sandbox.</strong>
-        <span>A Belvo solicitará somente dados de conta fictícios e configuramos retenção de 1 dia (`stale_in=1d`); não solicitaremos transações e o Shalom não importará extratos nem movimentos. A tela de consentimento exibe as permissões padrão OFDA da Belvo, mas a busca assíncrona desta prova fica limitada a `ACCOUNTS`. Use a identidade fictícia indicada no <a href={BELVO_SANDBOX_GUIDE} rel="noreferrer" target="_blank">guia oficial da Belvo Sandbox</a>. O nome e o CPF fictícios serão enviados à Belvo pelo servidor para gerar o token; não informe CPF, senha ou código de uma conta real.</span>
+        <p>A Belvo pedirá seu consentimento para cadastro, contas, cartões e operações de crédito.</p>
+        <p>Nesta prova, o aplicativo buscará somente dados de contas (<code>ACCOUNTS</code>). Não pediremos <code>TRANSACTIONS</code> nem importaremos extratos ou movimentos para o Shalom.</p>
+        <p>O teste cria um vínculo único (<code>access_mode=single</code>). Sem configuração específica, a Belvo pode reter credenciais desse tipo de vínculo por até 365 dias. A regra <code>stale_in=1d</code> remove dados derivados após 1 dia sem atualização, mas não exclui o vínculo.</p>
+        <p>Depois da confirmação, use <strong>Excluir vínculo de teste</strong> antes de sair desta tela. O Shalom não salva o ID do vínculo; se você sair sem excluir, esse botão não poderá recuperá-lo depois.</p>
+        <p>Use somente a identidade fictícia indicada no <a href={BELVO_SANDBOX_GUIDE} rel="noreferrer" target="_blank">guia oficial da Belvo Sandbox</a>.</p>
+        <p>O nome e o CPF fictícios serão enviados à Belvo pelo servidor para gerar o token, mas não serão salvos pelo Shalom. Não informe CPF, senha ou código de uma conta real.</p>
       </div>
 
       {statusLoading && <p className="belvo-sandbox-status" role="status">Verificando a configuração segura da sandbox…</p>}
@@ -217,6 +266,10 @@ export function BelvoSandboxCard() {
         <div><dt>Instituição de teste</dt><dd>{verifiedLink.institution ?? 'Confirmada pela Belvo'}</dd></div>
         <div><dt>Estado informado pela Belvo</dt><dd>{verifiedLink.status ?? 'Vínculo confirmado'}</dd></div>
       </dl>}
+      {verifiedLink && role === 'owner' && <div className="belvo-sandbox-retry">
+        <button className="button button-secondary" disabled={deletingLink} onClick={() => void deleteVerifiedLink()} type="button">{deletingLink ? 'Excluindo vínculo…' : 'Excluir vínculo de teste'}</button>
+        <small>A exclusão é permanente na Belvo Sandbox e apaga os dados associados a este vínculo fictício.</small>
+      </div>}
 
       <p className="belvo-sandbox-next-step">Próxima etapa após esta prova: processar webhooks, buscar transações, validar duplicidade e permitir conciliação. Nenhum movimento é gravado no histórico bancário, e o ID do vínculo e o resultado do teste ficam apenas nesta sessão; sair ou atualizar exige iniciar outra prova.</p>
     </section>

@@ -37,12 +37,14 @@ function isUuid(value: unknown): value is string {
 
 function isEventEnvelope(value: unknown): boolean {
   if (!isRecord(value)) return false
-  const validWebhookId = typeof value.webhook_id === 'string' && /^[a-f0-9]{32}$/i.test(value.webhook_id)
+  const validWebhookId = typeof value.webhook_id === 'string' &&
+    (/^[a-f0-9]{32}$/i.test(value.webhook_id) ||
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.webhook_id))
   const validType = typeof value.webhook_type === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/i.test(value.webhook_type)
   const validCode = typeof value.webhook_code === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]{0,95}$/.test(value.webhook_code)
-  const validProcess = value.process_type === undefined ||
+  const validProcess = value.process_type === undefined || value.process_type === null ||
     (typeof value.process_type === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]{0,95}$/.test(value.process_type))
-  const validData = isRecord(value.data)
+  const validData = value.data === null || isRecord(value.data)
   return validWebhookId && validType && validCode && validProcess && isUuid(value.link_id) && validData
 }
 

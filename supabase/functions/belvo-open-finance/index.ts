@@ -22,6 +22,7 @@ const CONFIG_KEYS = [
   'BELVO_SANDBOX_TERMS_URL',
   'BELVO_SANDBOX_APP_ORIGIN',
   'BELVO_SANDBOX_WEBHOOK_TOKEN',
+  'BELVO_SANDBOX_LINK_STATE_SECRET',
 ] as const
 
 type BelvoConfiguration = {
@@ -30,6 +31,7 @@ type BelvoConfiguration = {
   termsUrl: string
   appOrigin: URL | null
   webhookToken: string
+  linkStateSecret: string
   missingConfig: string[]
 }
 
@@ -85,6 +87,7 @@ function loadConfiguration(): BelvoConfiguration {
   const termsValue = Deno.env.get('BELVO_SANDBOX_TERMS_URL')?.trim() ?? ''
   const originValue = Deno.env.get('BELVO_SANDBOX_APP_ORIGIN')?.trim() ?? ''
   const webhookToken = Deno.env.get('BELVO_SANDBOX_WEBHOOK_TOKEN')?.trim() ?? ''
+  const linkStateSecret = Deno.env.get('BELVO_SANDBOX_LINK_STATE_SECRET')?.trim() ?? ''
   const terms = httpsUrl(termsValue)
   const origin = appOrigin(originValue)
   const missingConfig: string[] = []
@@ -94,6 +97,7 @@ function loadConfiguration(): BelvoConfiguration {
   if (!terms) missingConfig.push(CONFIG_KEYS[2])
   if (!origin) missingConfig.push(CONFIG_KEYS[3])
   if (webhookToken.length < 32) missingConfig.push(CONFIG_KEYS[4])
+  if (linkStateSecret.length < 32) missingConfig.push(CONFIG_KEYS[5])
 
   return {
     secretId,
@@ -101,6 +105,7 @@ function loadConfiguration(): BelvoConfiguration {
     termsUrl: terms?.toString() ?? '',
     appOrigin: origin,
     webhookToken,
+    linkStateSecret,
     missingConfig,
   }
 }
@@ -136,11 +141,13 @@ function digitsOnlyCpf(value: unknown): string | null {
   return digits.length === 11 ? digits : null
 }
 
-function widgetResponseUrl(accessToken: string): string {
+function widgetResponseUrl(accessToken: string, externalId: string): string {
   const url = new URL(BELVO_WIDGET_URL)
   url.searchParams.set('access_token', accessToken)
   url.searchParams.set('locale', 'pt')
   url.searchParams.set('integration_type', 'openfinance')
+  url.searchParams.set('access_mode', 'single')
+  url.searchParams.set('external_id', externalId)
   url.searchParams.set('institution_types', 'retail')
   url.searchParams.set('institutions', 'ofmockbank_br_retail')
   url.searchParams.set('country_codes', 'BR')
@@ -149,13 +156,14 @@ function widgetResponseUrl(accessToken: string): string {
 }
 
 function credentialsReady(config: BelvoConfiguration): boolean {
-  return Boolean(config.secretId && config.secretPassword && config.termsUrl && config.appOrigin && config.webhookToken.length >= 32)
+  return Boolean(config.secretId && config.secretPassword && config.termsUrl && config.appOrigin &&
+    config.webhookToken.length >= 32 && config.linkStateSecret.length >= 32)
 }
 
 async function belvoGetLink(
   config: BelvoConfiguration,
   linkId: string,
-): Promise<{ verified: boolean; status: string; institution: string | null }> {
+): Promise<{ verified: boolean; status: string; institution: string | null; externalId: string | null }> {
   const authorization = `Basic ${btoa(`${config.secretId}:${config.secretPassword}`)}`
   const response = await fetch(`${BELVO_SANDBOX_API}/links/${encodeURIComponent(linkId)}/`, {
     method: 'GET',
@@ -183,7 +191,81 @@ async function belvoGetLink(
     ? rawInstitution
     : null
   if (institution !== BELVO_SANDBOX_INSTITUTION) throw new RequestError(403, 'sandbox_institution_mismatch')
-  return { verified: rawStatus === 'valid', status: rawStatus, institution }
+  const externalId = typeof providerResponse.external_id === 'string' && /^[a-z0-9_-]{3,120}$/i.test(providerResponse.external_id)
+    ? providerResponse.external_id
+    : null
+  return { verified: rawStatus === 'valid', status: rawStatus, institution, externalId }
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function constantTimeTextEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false
+  let difference = 0
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index)
+  }
+  return difference === 0
+}
+
+async function signSandboxExternalId(
+  config: BelvoConfiguration,
+  businessId: string,
+  userId: string,
+  nonce: string,
+): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(config.linkStateSecret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const message = `shalom-belvo-sandbox-link-v1|${businessId}|${userId}|${nonce}`
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message))
+  return base64Url(new Uint8Array(signature))
+}
+
+async function createSandboxExternalId(config: BelvoConfiguration, businessId: string, userId: string): Promise<string> {
+  const nonce = crypto.randomUUID().replace(/-/g, '')
+  const signature = await signSandboxExternalId(config, businessId, userId, nonce)
+  return `shalom-sandbox_${nonce}_${signature}`
+}
+
+async function verifySandboxLinkOwner(
+  config: BelvoConfiguration,
+  linkId: string,
+  businessId: string,
+  userId: string,
+): Promise<{ owned: true; verified: boolean; status: string; institution: string | null }> {
+  const link = await belvoGetLink(config, linkId)
+  const match = link.externalId?.match(/^shalom-sandbox_([a-f0-9]{32})_([A-Za-z0-9_-]{43})$/)
+  if (!match) throw new RequestError(403, 'sandbox_link_not_owned')
+  const expectedSignature = await signSandboxExternalId(config, businessId, userId, match[1])
+  if (!constantTimeTextEqual(expectedSignature, match[2])) throw new RequestError(403, 'sandbox_link_not_owned')
+  return { owned: true, verified: link.verified, status: link.status, institution: link.institution }
+}
+
+async function belvoDeleteSandboxLink(
+  config: BelvoConfiguration,
+  linkId: string,
+  businessId: string,
+  userId: string,
+): Promise<{ deleted: true }> {
+  await verifySandboxLinkOwner(config, linkId, businessId, userId)
+
+  const authorization = `Basic ${btoa(`${config.secretId}:${config.secretPassword}`)}`
+  const response = await fetch(`${BELVO_SANDBOX_API}/links/${encodeURIComponent(linkId)}/`, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(15_000),
+    headers: { Authorization: authorization, Accept: 'application/json' },
+  })
+  if (!response.ok) throw new RequestError(502, 'belvo_link_deletion_failed')
+  return { deleted: true }
 }
 
 Deno.serve(async (request: Request) => {
@@ -209,7 +291,7 @@ Deno.serve(async (request: Request) => {
 
   const action = body.action
   const businessId = body.business_id
-  if (!['status', 'create_widget_token', 'verify_link'].includes(String(action))) {
+  if (!['status', 'create_widget_token', 'verify_link', 'delete_link'].includes(String(action))) {
     return json({ error: 'invalid_action' }, 400)
   }
   if (!isUuid(businessId)) return json({ error: 'invalid_business_id' }, 400)
@@ -237,12 +319,21 @@ Deno.serve(async (request: Request) => {
       return json({ ready: config.missingConfig.length === 0, environment: 'sandbox', missing_config: config.missingConfig })
     }
 
-    if (!credentialsReady(config)) return json({ error: 'belvo_sandbox_not_configured' }, 503)
+    if (!config.secretId || !config.secretPassword || config.linkStateSecret.length < 32) {
+      return json({ error: 'belvo_sandbox_not_configured' }, 503)
+    }
 
     if (action === 'verify_link') {
       if (!isUuid(body.link_id)) return json({ error: 'invalid_link_id' }, 400)
-      return json(await belvoGetLink(config, body.link_id))
+      return json(await verifySandboxLinkOwner(config, body.link_id, businessId, userData.user.id))
     }
+
+    if (action === 'delete_link') {
+      if (!isUuid(body.link_id)) return json({ error: 'invalid_link_id' }, 400)
+      return json(await belvoDeleteSandboxLink(config, body.link_id, businessId, userData.user.id))
+    }
+
+    if (!credentialsReady(config)) return json({ error: 'belvo_sandbox_not_configured' }, 503)
 
     const fullName = nonEmptyString(body.full_name, 120)
     const cpf = digitsOnlyCpf(body.cpf)
@@ -282,6 +373,8 @@ Deno.serve(async (request: Request) => {
           company_terms_url: config.termsUrl,
         },
         consent: {
+          // Keep this field here to satisfy the current token API schema; the general guide also documents widget.purpose above.
+          purpose: TEST_PURPOSE,
           terms_and_conditions_url: config.termsUrl,
           permissions: BELVO_PERMISSIONS,
           identification_info: [{ type: 'CPF', number: cpf, name: fullName }],
@@ -308,8 +401,9 @@ Deno.serve(async (request: Request) => {
     }
 
     const accessToken = providerResponse.access.trim()
+    const externalId = await createSandboxExternalId(config, businessId, userData.user.id)
     return json({
-      widget_url: widgetResponseUrl(accessToken),
+      widget_url: widgetResponseUrl(accessToken, externalId),
       expires_in_seconds: TOKEN_TTL_SECONDS,
     })
   } catch (error) {
