@@ -218,7 +218,7 @@ export function BelvoSandboxCard() {
         <div><dt>Estado informado pela Belvo</dt><dd>{verifiedLink.status ?? 'Vínculo confirmado'}</dd></div>
       </dl>}
 
-      <p className="belvo-sandbox-next-step">Próxima etapa após esta prova: processar webhooks, buscar transações, validar duplicidade e permitir conciliação. Esses dados ainda não são gravados no histórico bancário.</p>
+      <p className="belvo-sandbox-next-step">Próxima etapa após esta prova: processar webhooks, buscar transações, validar duplicidade e permitir conciliação. Nenhum movimento é gravado no histórico bancário, e o ID do vínculo e o resultado do teste ficam apenas nesta sessão; sair ou atualizar exige iniciar outra prova.</p>
     </section>
   )
 }
