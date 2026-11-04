@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useBusiness } from '../business/BusinessContext'
@@ -13,6 +13,13 @@ type AccessRequest = {
   created_at: string
 }
 
+type BusinessMember = {
+  member_user_id: string
+  member_email: string | null
+  member_role: 'owner' | 'staff'
+  member_created_at: string
+}
+
 export function SettingsPage() {
   const { session } = useAuth()
   const business = useBusiness()
@@ -22,11 +29,28 @@ export function SettingsPage() {
   const [requestActionId, setRequestActionId] = useState<string | null>(null)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [requestMessage, setRequestMessage] = useState<string | null>(null)
+  const [members, setMembers] = useState<BusinessMember[]>([])
+  const [membersLoading, setMembersLoading] = useState(true)
+  const [memberManagementPending, setMemberManagementPending] = useState(false)
+  const [membersError, setMembersError] = useState<string | null>(null)
+  const [membersMessage, setMembersMessage] = useState<string | null>(null)
+  const membersMessageRef = useRef<HTMLParagraphElement>(null)
+  const [pendingRemoval, setPendingRemoval] = useState<{ userId: string; email: string; requestId: string } | null>(null)
+  const [removalError, setRemovalError] = useState<string | null>(null)
+  const [removalSaving, setRemovalSaving] = useState(false)
+  const removalConfirmRef = useRef<HTMLButtonElement>(null)
+  const memberActionRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+
+  useEffect(() => {
+    if (pendingRemoval) removalConfirmRef.current?.focus()
+  }, [pendingRemoval])
+
+  useEffect(() => {
+    if (membersMessage) membersMessageRef.current?.focus()
+  }, [membersMessage])
 
   const loadAccessRequests = useCallback(async () => {
     if (!supabaseClient || business.role !== 'owner') return
-    setRequestsLoading(true)
-    setRequestError(null)
     const { data, error } = await supabaseClient
       .from('business_access_requests')
       .select('id, user_id, email, created_at')
@@ -40,7 +64,70 @@ export function SettingsPage() {
     setRequestsLoading(false)
   }, [business.id, business.role])
 
-  useEffect(() => { void loadAccessRequests() }, [loadAccessRequests])
+  const loadMembers = useCallback(async () => {
+    if (!supabaseClient || business.role !== 'owner') {
+      return
+    }
+    const { data, error } = await supabaseClient.rpc('list_business_members', { p_business_id: business.id })
+    if (error) {
+      if (isMissingRpc(error)) {
+        setMemberManagementPending(true)
+        setMembersError(null)
+      } else setMembersError('Não foi possível carregar as pessoas com acesso. Tente novamente.')
+    } else {
+      setMemberManagementPending(false)
+      setMembers((data ?? []) as BusinessMember[])
+    }
+    setMembersLoading(false)
+  }, [business.id, business.role])
+
+  useEffect(() => {
+    if (!supabaseClient || business.role !== 'owner') return
+    let active = true
+    supabaseClient
+      .from('business_access_requests')
+      .select('id, user_id, email, created_at')
+      .eq('business_id', business.id)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (!active) return
+        if (error) setRequestError('Não foi possível carregar os pedidos de acesso.')
+        else setAccessRequests((data ?? []) as AccessRequest[])
+        setRequestsLoading(false)
+      })
+    return () => { active = false }
+  }, [business.id, business.role])
+
+  useEffect(() => {
+    if (!supabaseClient || business.role !== 'owner') return
+    let active = true
+    supabaseClient.rpc('list_business_members', { p_business_id: business.id }).then(({ data, error }) => {
+      if (!active) return
+      if (error) {
+        if (isMissingRpc(error)) {
+          setMemberManagementPending(true)
+          setMembersError(null)
+        } else setMembersError('Não foi possível carregar as pessoas com acesso. Tente novamente.')
+      } else {
+        setMemberManagementPending(false)
+        setMembers((data ?? []) as BusinessMember[])
+      }
+      setMembersLoading(false)
+    })
+    return () => { active = false }
+  }, [business.id, business.role])
+
+  function retryAccessRequests() {
+    setRequestsLoading(true)
+    setRequestError(null)
+    void loadAccessRequests()
+  }
+
+  function retryMembers() {
+    setMembersLoading(true)
+    setMembersError(null)
+    void loadMembers()
+  }
 
   async function approveAccessRequest(request: AccessRequest) {
     if (!supabaseClient) return
@@ -59,6 +146,11 @@ export function SettingsPage() {
     }
     setRequestMessage(`Acesso liberado para ${request.email}.`)
     setAccessRequests((current) => current.filter((item) => item.id !== request.id))
+    setMembers((current) => current.some((member) => member.member_user_id === request.user_id) ? current : [
+      ...current,
+      { member_user_id: request.user_id, member_email: request.email, member_role: 'staff', member_created_at: new Date().toISOString() },
+    ])
+    void loadMembers()
   }
 
   async function rejectAccessRequest(request: AccessRequest) {
@@ -78,6 +170,59 @@ export function SettingsPage() {
     }
     setRequestMessage('Pedido recusado. A pessoa poderá solicitar novamente pela tela de acesso.')
     setAccessRequests((current) => current.filter((item) => item.id !== request.id))
+  }
+
+  function requestMemberRemoval(member: BusinessMember) {
+    if (member.member_role !== 'staff' || !member.member_email) return
+    setMembersMessage(null)
+    setRemovalError(null)
+    setPendingRemoval({ userId: member.member_user_id, email: member.member_email ?? 'esta conta', requestId: crypto.randomUUID() })
+  }
+
+  function cancelMemberRemoval(userId: string) {
+    setPendingRemoval(null)
+    setRemovalError(null)
+    window.requestAnimationFrame(() => memberActionRefs.current[userId]?.focus())
+  }
+
+  async function confirmMemberRemoval() {
+    if (!supabaseClient || !pendingRemoval || removalSaving) return
+    setRemovalSaving(true)
+    setRemovalError(null)
+    const { error } = await supabaseClient.rpc('revoke_business_staff_access', {
+      p_business_id: business.id,
+      p_user_id: pendingRemoval.userId,
+      p_request_id: pendingRemoval.requestId,
+    })
+    if (error) {
+      if (isMissingRpc(error)) {
+        setMemberManagementPending(true)
+        setPendingRemoval(null)
+        setRemovalSaving(false)
+        setRemovalError(null)
+        return
+      }
+      const { data: currentMembers, error: refreshError } = await supabaseClient.rpc('list_business_members', { p_business_id: business.id })
+      if (!refreshError) {
+        const refreshedMembers = (currentMembers ?? []) as BusinessMember[]
+        setMemberManagementPending(false)
+        setMembers(refreshedMembers)
+        if (!refreshedMembers.some((member) => member.member_user_id === pendingRemoval.userId)) {
+          setMembersMessage(`O acesso de ${pendingRemoval.email} foi removido. A pessoa poderá solicitar novamente.`)
+          setPendingRemoval(null)
+          setRemovalSaving(false)
+          return
+        }
+      }
+      setRemovalSaving(false)
+      setRemovalError('Não foi possível confirmar a remoção. Tente novamente; o mesmo pedido será reutilizado com segurança.')
+      return
+    }
+    setRemovalSaving(false)
+    setMembers((current) => current.filter((member) => member.member_user_id !== pendingRemoval.userId))
+    setMembersMessage(`O acesso de ${pendingRemoval.email} foi removido. A pessoa poderá solicitar novamente.`)
+    setPendingRemoval(null)
+    setRemovalError(null)
   }
 
   return (
@@ -119,10 +264,12 @@ export function SettingsPage() {
         {business.role === 'owner' ? (
           <>
             <p className="settings-appearance-description">Novas contas só acessam os dados da empresa depois que você aprovar o pedido.</p>
-            {requestError && <p className="form-message form-message-error" role="alert">{requestError}</p>}
+            {requestError && accessRequests.length > 0 && <p className="form-message form-message-error" role="alert">{requestError}</p>}
             {requestMessage && <p className="form-message form-message-success" role="status">{requestMessage}</p>}
             {requestsLoading ? (
               <p className="settings-team-empty" role="status">Carregando pedidos…</p>
+            ) : requestError && accessRequests.length === 0 ? (
+              <div className="settings-team-feedback"><p className="form-message form-message-error" role="alert">{requestError}</p><button className="button button-secondary" disabled={requestsLoading} onClick={retryAccessRequests} type="button">Tentar novamente</button></div>
             ) : accessRequests.length ? (
               <ul className="settings-access-requests">
                 {accessRequests.map((request) => (
@@ -151,6 +298,55 @@ export function SettingsPage() {
           <p className="settings-team-empty">A aprovação de novos acessos é feita pela pessoa proprietária da empresa.</p>
         )}
       </section>
+
+      {business.role === 'owner' && <section className="surface-panel settings-panel" aria-labelledby="team-members-title">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">EQUIPE AUTORIZADA</p>
+            <h2 id="team-members-title">Pessoas com acesso</h2>
+          </div>
+          <span className="neutral-status">{membersLoading ? 'Carregando…' : memberManagementPending ? 'Atualização pendente' : `${members.length} pessoas`}</span>
+        </div>
+        <p className="settings-appearance-description">O proprietário mantém o acesso de gestão. Você pode remover o acesso de integrantes da equipe quando necessário.</p>
+        {memberManagementPending && <p className="settings-team-empty" role="status">A configuração do banco para gerenciar a equipe ainda está pendente. A lista completa e a remoção de acessos ficarão disponíveis quando a migration de gestão da equipe for aplicada.</p>}
+        {membersError && <div className="settings-team-feedback"><p className="form-message form-message-error" role="alert">{membersError}</p><button className="button button-secondary" disabled={membersLoading} onClick={retryMembers} type="button">Tentar novamente</button></div>}
+        {membersMessage && <p className="form-message form-message-success settings-team-success" ref={membersMessageRef} role="status" tabIndex={-1}>{membersMessage}</p>}
+        {membersLoading ? (
+          <p className="settings-team-empty" role="status">Carregando acessos…</p>
+        ) : members.length ? (
+          <ul className="settings-team-members">
+            {members.map((member) => {
+              const memberEmail = member.member_email ?? `Conta ${member.member_user_id.slice(0, 8)} · e-mail indisponível`
+              const isPendingRemoval = pendingRemoval?.userId === member.member_user_id
+              return <li key={member.member_user_id}>
+                <div className="settings-access-request-main">
+                  <strong>{memberEmail}</strong>
+                  <small>{member.member_role === 'owner' ? 'Proprietário' : 'Equipe'} · Acesso desde {new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium' }).format(new Date(member.member_created_at))}</small>
+                </div>
+                {member.member_role === 'owner' ? <span className="neutral-status">Acesso principal</span> : memberManagementPending ? (
+                  <span className="settings-team-member-note">Remoção disponível após atualizar o banco.</span>
+                ) : member.member_email ? (
+                  <div className="settings-team-member-actions">
+                    <button className="button button-secondary" disabled={removalSaving || membersLoading || Boolean(membersError) || Boolean(removalError)} onClick={() => isPendingRemoval ? cancelMemberRemoval(member.member_user_id) : requestMemberRemoval(member)} ref={(element) => { memberActionRefs.current[member.member_user_id] = element }} type="button">
+                      {isPendingRemoval ? 'Fechar confirmação' : 'Remover acesso'}
+                    </button>
+                  </div>
+                ) : <span className="settings-team-member-note">Remoção indisponível sem e-mail para o histórico.</span>}
+                {isPendingRemoval && pendingRemoval && <div className="settings-member-confirmation" role="group" aria-label={`Confirmar remoção do acesso de ${pendingRemoval.email}`}>
+                  <p>Remover o acesso de <strong>{pendingRemoval.email}</strong>? A pessoa perderá o acesso à empresa e poderá enviar um novo pedido para a gestão.</p>
+                  {removalError && <p className="form-message form-message-error" role="alert">{removalError}</p>}
+                  <div className="settings-access-request-actions">
+                    <button className="button button-primary" disabled={removalSaving} onClick={() => void confirmMemberRemoval()} ref={removalConfirmRef} type="button">{removalSaving ? 'Removendo…' : removalError ? 'Tentar novamente' : 'Confirmar remoção'}</button>
+                    <button className="text-button" disabled={removalSaving} onClick={() => cancelMemberRemoval(member.member_user_id)} type="button">Manter acesso</button>
+                  </div>
+                </div>}
+              </li>
+            })}
+          </ul>
+        ) : !membersError && !memberManagementPending ? (
+          <p className="settings-team-empty">Nenhum integrante da equipe tem acesso no momento.</p>
+        ) : null}
+      </section>}
 
       <section className="surface-panel settings-panel" aria-labelledby="appearance-title">
         <div className="section-heading">
@@ -248,4 +444,8 @@ export function SettingsPage() {
       </section>
     </div>
   )
+}
+
+function isMissingRpc(error: unknown) {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === 'PGRST202'
 }

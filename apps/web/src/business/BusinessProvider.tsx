@@ -20,14 +20,19 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const userId = session?.user.id
     let active = true
+    let checking = false
+    let resolved = false
 
-    async function loadBusiness() {
+    async function loadBusiness(silent = false) {
+      if (checking) return
+      checking = true
       if (!supabaseClient || !userId) {
-        setState({ business: null, loading: false, issue: 'unavailable' })
+        if (active) setState({ business: null, loading: false, issue: 'unavailable' })
+        checking = false
         return
       }
 
-      setState({ business: null, loading: true, issue: null })
+      if (!silent && !resolved) setState({ business: null, loading: true, issue: null })
       try {
         const { data: memberships, error: membershipError } = await supabaseClient
           .from('business_memberships')
@@ -37,10 +42,12 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
 
         if (membershipError) throw membershipError
         if (!memberships?.length) {
+          resolved = true
           if (active) setState({ business: null, loading: false, issue: 'missing' })
           return
         }
         if (memberships.length > 1) {
+          resolved = true
           if (active) setState({ business: null, loading: false, issue: 'ambiguous' })
           return
         }
@@ -52,6 +59,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
           .single()
 
         if (businessError || !business) throw businessError
+        resolved = true
         if (active) {
           setState({
             business: {
@@ -67,11 +75,24 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
         }
       } catch {
         if (active) setState({ business: null, loading: false, issue: 'unavailable' })
+      } finally {
+        checking = false
       }
     }
 
     void loadBusiness()
-    return () => { active = false }
+    const revalidate = () => {
+      if (document.visibilityState === 'visible') void loadBusiness(true)
+    }
+    const intervalId = window.setInterval(revalidate, 30_000)
+    document.addEventListener('visibilitychange', revalidate)
+    window.addEventListener('focus', revalidate)
+    return () => {
+      active = false
+      window.clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', revalidate)
+      window.removeEventListener('focus', revalidate)
+    }
   }, [session?.user.id, attempt])
 
   if (state.loading) return <LoadingScreen label="Carregando a empresa" />
@@ -137,17 +158,17 @@ function BusinessUnavailable({ issue, onRetry, userId }: { issue: 'missing' | 'a
       <section className="setup-card" aria-labelledby="business-setup-title">
         <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
         <p className="eyebrow">Shalom Adonai · Operação</p>
-        <h1 id="business-setup-title">{issue === 'missing' ? hasPendingRequest ? 'Pedido aguardando aprovação' : 'Acesso à empresa pendente' : 'A empresa ainda não está conectada'}</h1>
+        <h1 id="business-setup-title">{issue === 'missing' ? hasPendingRequest ? 'Pedido aguardando aprovação' : 'Acesso à empresa pendente' : issue === 'ambiguous' ? 'Esta conta está vinculada a mais de uma empresa' : 'Não foi possível confirmar o acesso'}</h1>
         <p className="setup-copy">
           {issue === 'missing'
             ? 'Esta conta ainda não tem acesso à empresa. Se você acabou de criar uma conta, a gestão precisa aprovar seu pedido antes de liberar os dados.'
             : issue === 'ambiguous'
-              ? 'Esta conta está vinculada a mais de uma empresa, mas a seleção entre empresas ainda não está disponível. Ajuste o acesso para deixar somente a empresa correta vinculada.'
-              : 'Não foi possível carregar os dados da empresa. Verifique a conexão e tente novamente.'}
+              ? 'A seleção entre empresas ainda não está disponível. Ajuste o acesso para deixar somente a empresa correta vinculada.'
+              : 'Não foi possível confirmar se esta conta ainda tem acesso à empresa. Os dados operacionais estão ocultos por segurança; verifique a conexão e tente novamente.'}
         </p>
         <div className="setup-note">
           <Icon name="shield" />
-          <span>{issue === 'missing' ? 'Os dados operacionais só aparecem depois que a gestão aprova o acesso desta conta.' : 'Os dados operacionais só aparecem depois que a conta autorizada encontra a empresa vinculada.'}</span>
+          <span>{issue === 'missing' ? 'Os dados operacionais só aparecem depois que a gestão aprova o acesso desta conta.' : issue === 'ambiguous' ? 'Os dados operacionais permanecem bloqueados até a associação com uma única empresa ser corrigida.' : 'Os dados operacionais foram ocultados até que o acesso possa ser confirmado.'}</span>
         </div>
         {issue === 'missing' && hasPendingRequest === null && (
           <p className="settings-team-empty" role="status">Verificando seu pedido de acesso…</p>
