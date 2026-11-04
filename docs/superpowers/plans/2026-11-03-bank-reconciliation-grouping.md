@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-03-bank-reconciliation-grouping-design.md`
 
+**Status (2026-11-04):** the schema/RPC, manual selection UI, compatibility fallback, and local verification are implemented and pushed to `main`. Hosted rollout remains pending; the approved scope kept this migration local and versioned. Authenticated browser acceptance of the reconciliation screen remains pending because this machine has no running local database, and the current hosted schema does not include the grouping migration.
+
 ## Global Constraints
 
 - Only the authenticated owner may reconcile, reverse, or read business reconciliation records.
@@ -45,11 +47,11 @@
 - Keep `match_bank_transaction` one-to-one for old clients and legacy rows. Update `unmatch_bank_transaction` so a child link from a group reverses its entire group; a legacy row without a group still uses the existing single-match reversal.
 - During group reversal, append the group event and one compatible child reversal per link in the same transaction. This keeps the existing summary, candidate, duplicate, and outflow-void checks correct without rewriting their historical migrations.
 
-- [ ] Use `npx supabase migration new bank_reconciliation_grouping` after checking CLI help/version; do not invent the timestamped filename.
-- [ ] Create the group/reversal tables, FK/indexes, owner-only RLS, read grants, append-only row/truncate protection, and group link column; do not rewrite or discard historical match rows.
-- [ ] Implement owner-only atomic matching and reversal. Normalize item order for fingerprinting; lock the movement and source rows in stable order; validate business, direction, duplicates, active-match state, void state, exact sum, and the 50-item limit before writing.
-- [ ] Preserve old RPC compatibility and verify that one active child makes the movement reconciled once, while grouped child reversals release the complete group for candidate, duplicate, and outflow-void checks.
-- [ ] Add SQL verification for exact receipt and outflow groups, mismatched totals, wrong direction, repeated IDs, owner isolation, retry idempotency, and full group reversal.
+- [x] Use `npx supabase migration new bank_reconciliation_grouping` after checking CLI help/version; do not invent the timestamped filename.
+- [x] Create the group/reversal tables, FK/indexes, owner-only RLS, read grants, append-only row/truncate protection, and group link column; do not rewrite or discard historical match rows.
+- [x] Implement owner-only atomic matching and reversal. Normalize item order for fingerprinting; lock the movement and source rows in stable order; validate business, direction, duplicates, active-match state, void state, exact sum, and the 50-item limit before writing.
+- [x] Preserve old RPC compatibility and verify that one active child makes the movement reconciled once, while grouped child reversals release the complete group for candidate, duplicate, and outflow-void checks.
+- [x] Add SQL verification for exact receipt and outflow groups, mismatched totals, wrong direction, repeated IDs, owner isolation, retry idempotency, and full group reversal.
 
 ### Task 2: Add manual grouped selection to bank reconciliation
 
@@ -65,11 +67,11 @@
 - Display each link under one bank-movement row, and reverse the entire group with the existing required-reason pattern.
 - If the hosted schema/RPC is absent, keep the page loadable and keep one-to-one reconciliation available through the legacy RPC; explain that multi-item confirmation needs the migration.
 
-- [ ] Expand candidate loading to same-direction source rows with amount less than or equal to the bank amount, preserving date and duplicate/void checks.
-- [ ] Add accessible multi-selection, incremental candidate reveal, running total/difference, exact-match confirmation, and request retry behavior.
-- [ ] Load grouped rows/reversals without making the entire page fail when the hosted migration is missing; render legacy one-to-one matches unchanged.
-- [ ] Show grouped labels and grouped reversal history under the movement; ensure reversal closes every child link and refreshes statuses and summary.
-- [ ] Inspect phone and desktop layouts, keyboard focus, loading/error/retry/empty states, and migration-missing fallback.
+- [x] Expand candidate loading to same-direction source rows with amount less than or equal to the bank amount, preserving date and duplicate/void checks.
+- [x] Add accessible multi-selection, incremental candidate reveal, running total/difference, exact-match confirmation, and request retry behavior.
+- [x] Load grouped rows/reversals without making the entire page fail when the hosted migration is missing; render legacy one-to-one matches unchanged.
+- [x] Show grouped labels and grouped reversal history under the movement; ensure reversal closes every child link and refreshes statuses and summary.
+- [ ] Inspect phone and desktop layouts, keyboard focus, loading/error/retry/empty states, and migration-missing fallback in an authenticated browser session.
 
 ### Task 3: Record and verify the milestone
 
@@ -77,7 +79,7 @@
 - Modify: `docs/technical-plan.md`
 - Modify: `README.md`
 
-- [ ] Document grouped exact-sum behavior, compatibility, local migration status, and that hosted reconciliation remains one-to-one until separately rolled out.
-- [ ] Check local Supabase data counts before any reset; if no local records need preservation, run `npx supabase db reset --no-seed` and keep all database verification local.
-- [ ] Run `npm run lint`, `npm run build`, `npx supabase db lint --schema public,private --level warning`, and `npx supabase test db supabase/tests/bank_reconciliation_grouping.test.sql`; record the exact results.
-- [ ] Review the complete diff for RLS, retry/collision, and financial-total semantics; then commit and push the coherent change.
+- [x] Document grouped exact-sum behavior, compatibility, local migration status, and that hosted reconciliation remains one-to-one until separately rolled out.
+- [x] Check local Supabase data counts before any reset; if no local records need preserving, run `npx supabase db reset --no-seed` and keep all database verification local.
+- [x] Run `npm run lint`, `npm run build`, `npx supabase db lint --schema public,private --level warning`, and `npx supabase test db supabase/tests/bank_reconciliation_grouping.test.sql`; record the exact results.
+- [x] Review the complete diff for RLS, retry/collision, and financial-total semantics; then commit and push the coherent change.
