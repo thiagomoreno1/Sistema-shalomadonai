@@ -173,13 +173,21 @@ function WhatsAppPreview({ inbox = false, today }: { inbox?: boolean; today: str
 function OrdersPreview({ today, detailId, newOrder = false }: { today: string; detailId?: string; newOrder?: boolean }) {
   const customers = getCustomers(today)
   const orders = getOrders(today)
-  if (newOrder) return <div className="page-stack demo-preview-page">
+  if (newOrder) {
+    const draftLines: DemoOrderLine[] = [
+      { name: 'Detergente neutro 5 L', quantity: '8 un.', totalCents: 23_920 },
+      { name: 'Aromatizador de ambiente 500 ml', quantity: '3 un.', totalCents: 13_770 },
+    ]
+    const draftCustomer = customers[2]
+    const draftTotal = draftLines.reduce((total, line) => total + line.totalCents, 0)
+    return <div className="page-stack demo-preview-page">
     <DemoHeading eyebrow="PEDIDOS · FORMULÁRIO DE EXEMPLO" title="Novo pedido" description="Visualização de um pedido preenchido; campos e gravação estão desativados." action={<Link className="quiet-link" to="/pedidos"><Icon name="arrow" /> Voltar aos pedidos</Link>} />
     <div className="demo-callout"><Icon name="shield" /><p><strong>Somente visualização.</strong> Este formulário fictício não cria pedido nem altera estoque.</p></div>
-    <DemoPanel title="Cliente e atendimento" subtitle="Exemplo de pedido"><div className="demo-form-grid"><label>Cliente<input disabled value="Mercado Boa Praça" /></label><label>Tipo de pedido<input disabled value="Entrega" /></label><label>Data prevista<input disabled value={dateLabel(today)} /></label><label>Responsável<input disabled value="Equipe de gestão" /></label></div></DemoPanel>
-    <DemoPanel title="Itens do pedido" subtitle="Preço e quantidade registrados no exemplo"><DemoTable caption="Itens do pedido fictício" headings={['Produto', 'Quantidade', 'Preço unitário', 'Total']} rows={orders[0].lines.map((line) => [line.name, line.quantity, brl(line.totalCents / Number.parseInt(line.quantity, 10)), brl(line.totalCents)])} /><div className="demo-total-row"><span>Total do pedido</span><strong>{brl(orders[0].totalCents)}</strong></div><p className="demo-footnote">O preço unitário é o valor registrado neste pedido; uma negociação pode diferir do preço atual do catálogo.</p></DemoPanel>
-    <DemoPanel title="Pagamento e entrega" subtitle="Condições informadas no exemplo"><div className="demo-form-grid"><label>Forma de pagamento<input disabled value="Pix" /></label><label>Prazo<input disabled value="2 parcelas · 2ª vence em 2 dias" /></label><label>Endereço<input disabled value={customers[0].address} /></label><label>Observações<input disabled value="Confirmar horário antes de sair para entrega." /></label></div></DemoPanel>
+    <DemoPanel title="Cliente e atendimento" subtitle="Exemplo de pedido"><div className="demo-form-grid"><label>Cliente<input disabled value={draftCustomer.name} /></label><label>Tipo de pedido<input disabled value="Entrega" /></label><label>Data prevista<input disabled value={dateLabel(today)} /></label><label>Responsável<input disabled value="Equipe de gestão" /></label></div></DemoPanel>
+    <DemoPanel title="Itens do pedido" subtitle="Preço e quantidade registrados no exemplo"><DemoTable caption="Itens do pedido fictício" headings={['Produto', 'Quantidade', 'Preço unitário', 'Total']} rows={draftLines.map((line) => [line.name, line.quantity, brl(line.totalCents / Number.parseInt(line.quantity, 10)), brl(line.totalCents)])} /><div className="demo-total-row"><span>Total do pedido</span><strong>{brl(draftTotal)}</strong></div><p className="demo-footnote">O preço unitário fica registrado no pedido; alterações futuras no catálogo não mudam este registro.</p></DemoPanel>
+    <DemoPanel title="Pagamento e entrega" subtitle="Condições informadas no exemplo"><div className="demo-form-grid"><label>Forma de pagamento<input disabled value="Boleto" /></label><label>Prazo<input disabled value="1ª parcela · vencimento em 15 dias" /></label><label>Endereço<input disabled value={draftCustomer.address} /></label><label>Observações<input disabled value="Confirmar horário antes de sair para entrega." /></label></div></DemoPanel>
   </div>
+  }
   const order = detailId ? orders.find((item) => item.id === detailId) ?? orders[0] : null
   if (order) {
     const customer = customers.find((item) => item.id === order.customerId) ?? customers[0]
