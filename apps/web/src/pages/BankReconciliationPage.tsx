@@ -6,7 +6,7 @@ import { Icon } from '../components/Icon'
 import { businessToday, formatBRLExact, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { useBusiness } from '../business/BusinessContext'
 import { supabaseClient } from '../lib/supabase'
-import { isMissingGroupingSchema, matchSelectionSummary, updateMatchSelection, type MatchSelection } from '../lib/bank-match-selection.mjs'
+import { isMissingGroupingSchema, loadVoidedOutflows, matchSelectionSummary, updateMatchSelection, type MatchSelection } from '../lib/bank-match-selection.mjs'
 
 const PAGE_SIZE = 25
 
@@ -592,7 +592,7 @@ export function BankReconciliationPage() {
       const outflowIds = outflows.map((row) => row.id)
       const [orderResult, voidResult, paymentMatchResult, outflowMatchResult] = await Promise.all([
         orderIds.length ? client.from('orders').select('id, customer_name_snapshot').eq('business_id', businessId).in('id', orderIds) : Promise.resolve({ data: [], error: null }),
-        outflowIds.length ? client.from('financial_outflow_voids').select('outflow_id').eq('business_id', businessId).in('outflow_id', outflowIds) : Promise.resolve({ data: [], error: null }),
+        loadVoidedOutflows(outflowIds, (ids) => client.from('financial_outflow_voids').select('outflow_id').eq('business_id', businessId).in('outflow_id', ids)),
         paymentIds.length ? loadAllPages<{ id: string; order_payment_id: string | null; financial_outflow_id: string | null; created_at: string }>((from, to) => client.from('bank_reconciliation_matches').select('id, order_payment_id, financial_outflow_id, created_at', { count: 'exact' }).eq('business_id', businessId).in('order_payment_id', paymentIds).order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, to)) : Promise.resolve({ data: [], error: null }),
         outflowIds.length ? loadAllPages<{ id: string; order_payment_id: string | null; financial_outflow_id: string | null; created_at: string }>((from, to) => client.from('bank_reconciliation_matches').select('id, order_payment_id, financial_outflow_id, created_at', { count: 'exact' }).eq('business_id', businessId).in('financial_outflow_id', outflowIds).order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, to)) : Promise.resolve({ data: [], error: null }),
       ])

@@ -25,3 +25,14 @@ export function updateMatchSelection(previous, items, newRequestId) {
 export function isMissingGroupingSchema(error) {
   return ['42703', '42P01', '42883', 'PGRST202', 'PGRST204', 'PGRST205'].includes(error?.code)
 }
+
+export async function loadVoidedOutflows(ids, loadChunk) {
+  const rows = []
+  // One void per business/outflow: 100 IDs stay below the API row cap and bound the URL.
+  for (let offset = 0; offset < ids.length; offset += 100) {
+    const { data, error } = await loadChunk(ids.slice(offset, offset + 100))
+    if (error) return { data: null, error }
+    rows.push(...(data ?? []))
+  }
+  return { data: rows, error: null }
+}

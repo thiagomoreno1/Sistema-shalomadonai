@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { canonicalMatchItems, matchSelectionSummary, updateMatchSelection, isMissingGroupingSchema } from '../src/lib/bank-match-selection.mjs'
+import { canonicalMatchItems, matchSelectionSummary, updateMatchSelection, isMissingGroupingSchema, loadVoidedOutflows } from '../src/lib/bank-match-selection.mjs'
 
 // Guards monetary rounding, permissive confirmation, duplicate payloads and unsafe retries.
 test('totals cents beyond Number precision with BigInt', () => {
@@ -58,4 +58,38 @@ test('only missing schema/function errors activate legacy mode', () => {
   for (const error of [{ code: '42501' }, { code: '23505' }, { message: 'network error' }, null]) {
     assert.equal(isMissingGroupingSchema(error), false)
   }
+})
+
+test('loads all void exclusions beyond the API row cap without oversized ID filters', async () => {
+  const ids = Array.from({ length: 2105 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`)
+  const rows = ids.map((outflow_id) => ({ outflow_id }))
+  const querySizes = []
+  const result = await loadVoidedOutflows(ids, async (chunk) => {
+    querySizes.push(chunk.length)
+    const filter = new Set(chunk)
+    // Model the real 1,000-row API limit; a single query silently loses exclusions.
+    return { data: rows.filter((row) => filter.has(row.outflow_id)).slice(0, 1000), error: null }
+  })
+  assert.equal(result.error, null)
+  assert.equal(result.data.length, 2105)
+  assert.equal(new Set(result.data.map((row) => row.outflow_id)).size, 2105)
+  assert.equal(result.data.at(-1).outflow_id, '00000000-0000-4000-8000-000000002104')
+  assert.ok(querySizes.every((size) => size <= 100), 'UUID filters must remain small enough for query URLs')
+})
+
+test('failed void exclusion batch rejects the incomplete set and stops loading', async () => {
+  const ids = Array.from({ length: 250 }, (_, i) => String(i))
+  const failure = { code: 'XX000', message: 'void lookup failed' }
+  let queries = 0
+  const result = await loadVoidedOutflows(ids, async (chunk) => {
+    queries += 1
+    return queries === 2 ? { data: null, error: failure } : { data: chunk.map((outflow_id) => ({ outflow_id })), error: null }
+  })
+  assert.deepEqual(result, { data: null, error: failure })
+  assert.equal(queries, 2)
+})
+
+test('no candidate outflows requires no void lookup', async () => {
+  const result = await loadVoidedOutflows([], async () => { throw new Error('empty filter must not be queried') })
+  assert.deepEqual(result, { data: [], error: null })
 })
