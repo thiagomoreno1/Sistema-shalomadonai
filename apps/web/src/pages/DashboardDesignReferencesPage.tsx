@@ -93,8 +93,7 @@ function AttentionOverview({ prominent = false }: { prominent?: boolean }) {
       <div className="dashboard-reference-attention-grid">
         <div className="is-followups"><span>Retornos</span><strong>—</strong><small>Atrasados ou de hoje</small></div>
         <div className="is-deliveries"><span>Entregas</span><strong>—</strong><small>Precisam de atualização</small></div>
-        <div className="is-overdue"><span>Contas vencidas</span><strong>R$ —</strong><small>Saldo em aberto</small></div>
-        <div className="is-due-today"><span>Vencem hoje</span><strong>R$ —</strong><small>Saldo do dia</small></div>
+        <div className="is-receivables"><span>Recebimentos</span><strong><small>Vencidas</small> R$ —</strong><strong><small>Vencem hoje</small> R$ —</strong></div>
         <div className="is-inventory"><span>Estoque</span><strong>—</strong><small>Produtos em atenção</small></div>
       </div>
     </section>
