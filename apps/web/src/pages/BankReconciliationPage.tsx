@@ -793,8 +793,8 @@ export function BankReconciliationPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">FINANCEIRO</p>
-          <h1>Conciliação bancária</h1>
-          <p className="page-description">Compare movimentos do banco com recebimentos e saídas registrados.</p>
+          <h1>Conferir extrato do banco</h1>
+          <p className="page-description">Compare cada movimento do banco com um pagamento recebido ou gasto já registrado. Esta conferência é manual.</p>
         </div>
         <span className="module-heading-icon"><Icon name="coin" /></span>
       </header>
@@ -814,7 +814,7 @@ export function BankReconciliationPage() {
         <p className="section-footnote">Use um nome curto e, se quiser, apenas os 4 últimos dígitos. Não informe senha, token ou número completo de conta.</p>
 
         {accountFormOpen && <form className="record-form bank-inline-form" onSubmit={(event) => void saveAccount(event)}>
-          <h2 ref={accountFormHeadingRef} tabIndex={-1}>Nova conta para conciliação</h2>
+          <h2 ref={accountFormHeadingRef} tabIndex={-1}>Cadastrar conta bancária</h2>
           <div className="record-form-grid">
             <label className="record-field"><span className="field-label">Banco ou instituição</span><input autoComplete="off" className="text-input" maxLength={120} onChange={(event) => setInstitutionName(event.target.value)} required value={institutionName} /></label>
             <label className="record-field"><span className="field-label">Nome da conta</span><input autoComplete="off" className="text-input" maxLength={120} onChange={(event) => setAccountLabel(event.target.value)} required value={accountLabel} /></label>
@@ -840,7 +840,7 @@ export function BankReconciliationPage() {
           <div><p className="eyebrow">MOVIMENTOS</p><h2 id="bank-movements-heading">Movimentos do extrato</h2></div>
           <button className="button button-primary" disabled={activeAccounts.length === 0 || loading || Boolean(loadError)} onClick={() => { setAccountId(activeAccounts[0]?.id ?? ''); setMovementFormOpen((value) => !value); setFormError(null) }} ref={movementTriggerRef} type="button">{movementFormOpen ? 'Fechar' : 'Registrar movimento'}</button>
         </div>
-        <p className="section-footnote">A conciliação é manual e exige confirmação. Vincule cada movimento a um ou mais recebimentos ou saídas da mesma direção, com soma exata. Cada lançamento é vinculado por inteiro.</p>
+        <p className="section-footnote">Para conferir, ligue cada movimento do banco a um ou mais pagamentos recebidos ou gastos pagos. A soma precisa ser igual ao valor do banco; cada registro entra inteiro. Nada é ligado automaticamente.</p>
 
         {(summaryBusinessId !== businessId || summaryLoading) && <p className="inline-state bank-summary-loading" aria-live="polite">Carregando resumo de todos os movimentos…</p>}
         {summaryBusinessId === businessId && !summaryLoading && summaryError && <div className="bank-summary-error" role="alert"><p>{summaryError}</p><button className="text-button" onClick={() => void loadReconciliationSummary()} type="button">Tentar novamente</button></div>}
@@ -977,7 +977,7 @@ export function BankReconciliationPage() {
         {loadError && transactions.length > 0 && <p className="inline-state inline-state-error">A lista anterior está desatualizada e as ações de conciliação estão suspensas.</p>}
       </section>
 
-      <p className="section-footnote bank-scope-note">Movimentos manuais não alteram recebimentos, despesas ou o resultado gerencial. O relatório bancário só poderá ser considerado conciliado após importar ou consultar uma fonte bancária aprovada.</p>
+      <p className="section-footnote bank-scope-note">Anotações manuais não alteram pagamentos recebidos, gastos pagos ou o lucro estimado. A conferência do extrato só mostra dados reais depois que uma conta bancária for conectada ou um arquivo for importado.</p>
     </div>
   )
 }

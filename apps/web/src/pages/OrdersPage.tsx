@@ -108,13 +108,13 @@ export function OrdersPage() {
                 <strong>{order.customer_name_snapshot}</strong>
                 <small>Pedido de {formatOrderDate(order.created_at)} · {order.requires_delivery ? order.status === 'cancelled' ? 'Entrega cancelada' : 'Entrega' : order.status === 'cancelled' ? 'Retirada cancelada' : order.has_pickup ? 'Retirada registrada' : 'Retirada pendente'}</small>
                 <span className={`order-status ${order.status === 'cancelled' ? 'order-status-cancelled' : order.outstanding_cents > 0 ? 'order-status-open' : 'order-status-received'}`}>
-                  {order.status === 'cancelled' ? 'Cancelado' : order.outstanding_cents > 0 ? 'Em aberto' : 'Recebido'}
+                  {order.status === 'cancelled' ? 'Cancelado' : order.outstanding_cents > 0 ? 'Pagamento pendente' : 'Pago'}
                 </span>
               </span>
               <span className="order-financials">
-                <span><small>Pedido</small><strong>{formatBRL(order.total_cents)}</strong></span>
-                <span><small>Recebido</small><strong>{formatBRL(order.received_cents)}</strong></span>
-                <span><small>Em aberto</small><strong>{formatBRL(order.outstanding_cents)}</strong></span>
+                <span><small>Total do pedido</small><strong>{formatBRL(order.total_cents)}</strong></span>
+                <span><small>Pago</small><strong>{formatBRL(order.received_cents)}</strong></span>
+                <span><small>Falta receber</small><strong>{formatBRL(order.outstanding_cents)}</strong></span>
               </span>
               <Icon className="order-list-arrow" name="arrow" />
             </Link>
@@ -130,12 +130,12 @@ export function OrdersPage() {
         <div>
           <p className="eyebrow">VENDAS E RECEBÍVEIS</p>
           <h1>Pedidos</h1>
-          <p className="page-description">Pedidos, prazos combinados e valores recebidos manualmente.</p>
+          <p className="page-description">Pedidos, prazos de pagamento e valores que você já recebeu.</p>
         </div>
         <Link className="button button-primary" to="/pedidos/novo"><Icon name="plus" /> Novo pedido</Link>
       </header>
 
-      <p className="section-footnote order-policy-note">Prazos, valores e formas combinadas são informados em cada pedido. O registro de um recebimento não processa pagamentos.</p>
+      <p className="section-footnote order-policy-note">Cada pedido informa quando o pagamento vence e quanto falta receber. Registrar um pagamento aqui não movimenta a conta bancária.</p>
 
       {error && (
         <div className="inline-state inline-state-error" role="alert">
@@ -160,7 +160,7 @@ export function OrdersPage() {
             </div>
             {renderOrders(cancelledOrders, 'Nenhum pedido cancelado.')}
           </section>
-          {orders.length === 0 && <p className="section-footnote">O total do pedido, o valor recebido e o saldo em aberto aparecem separados em cada registro.</p>}
+          {orders.length === 0 && <p className="section-footnote">Cada registro mostra o total do pedido, quanto já foi pago e quanto falta receber.</p>}
         </>
       )}
     </div>

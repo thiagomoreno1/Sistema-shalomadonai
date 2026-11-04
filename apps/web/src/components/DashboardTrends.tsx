@@ -30,8 +30,8 @@ type ChartSeries = {
 }
 
 const moneySeries: ChartSeries[] = [
-  { key: 'receipts_cents', label: 'Recebimentos informados', className: 'is-receipt' },
-  { key: 'paid_outflows_cents', label: 'Saídas pagas', className: 'is-outflow' },
+  { key: 'receipts_cents', label: 'Pagamentos recebidos', className: 'is-receipt' },
+  { key: 'paid_outflows_cents', label: 'Gastos pagos', className: 'is-outflow' },
 ]
 const orderSeries: ChartSeries[] = [{ key: 'order_count', label: 'Pedidos registrados', className: 'is-order' }]
 const integerFormatter = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 })
@@ -122,7 +122,7 @@ export function DashboardTrends({ days, startOn, endOn, period, loading, error, 
       <div className="section-heading dashboard-trends-heading">
         <div>
           <p className="eyebrow">ACOMPANHAMENTO</p>
-          <h2 id={headingId}>Ritmo da operação</h2>
+          <h2 id={headingId}>Dinheiro que entrou e saiu</h2>
           <p className="dashboard-trends-range">{dateRange} · horário de São Paulo</p>
         </div>
         <div className="dashboard-period-control" role="group" aria-label="Período dos gráficos">
@@ -132,24 +132,24 @@ export function DashboardTrends({ days, startOn, endOn, period, loading, error, 
 
       <div className="dashboard-trends-grid" aria-busy={loading}>
         <figure className="surface-panel dashboard-trend-panel" aria-labelledby={moneyHeadingId}>
-          <div className="dashboard-trend-heading"><h3 id={moneyHeadingId}>Movimento registrado</h3><span>R$ por dia</span></div>
+          <div className="dashboard-trend-heading"><h3 id={moneyHeadingId}>Entradas e gastos</h3><span>R$ por dia</span></div>
           {ready ? <>
             <dl className="dashboard-trend-totals">
-              <div><dt><span className="dashboard-chart-key is-receipt" aria-hidden="true" />Recebimentos informados</dt><dd>{formatBRLExact(receipts)}</dd></div>
-              <div><dt><span className="dashboard-chart-key is-outflow" aria-hidden="true" />Saídas pagas</dt><dd>{formatBRLExact(outflows)}</dd></div>
+              <div><dt><span className="dashboard-chart-key is-receipt" aria-hidden="true" />Pagamentos recebidos</dt><dd>{formatBRLExact(receipts)}</dd></div>
+              <div><dt><span className="dashboard-chart-key is-outflow" aria-hidden="true" />Gastos pagos</dt><dd>{formatBRLExact(outflows)}</dd></div>
             </dl>
             <DailyBars
               days={days}
               series={moneySeries}
-              label={`Recebimentos informados e saídas pagas por dia, de ${dateRange}. Totais: ${formatBRLExact(receipts)} em recebimentos e ${formatBRLExact(outflows)} em saídas. Os valores de cada dia estão na tabela abaixo.`}
+              label={`Pagamentos recebidos e gastos pagos por dia, de ${dateRange}. Totais: ${formatBRLExact(receipts)} recebidos e ${formatBRLExact(outflows)} pagos. Os valores de cada dia estão na tabela abaixo.`}
               emptyMessage="Nenhuma movimentação neste período"
               formatValue={formatBRLExact}
               formatAxisValue={(value) => moneyAxisFormatter.format(Number(value) / 100)}
             />
-            <p className="dashboard-trend-insight">Diferença registrada: <strong>{formatBRLExact(receipts - outflows)}</strong></p>
-            {receipts === 0n && outflows === 0n && <p className="dashboard-trend-empty-copy">Registre recebimentos e saídas pagas para acompanhar o movimento ao longo dos dias.</p>}
+            <p className="dashboard-trend-insight">Entradas menos gastos: <strong>{formatBRLExact(receipts - outflows)}</strong></p>
+            {receipts === 0n && outflows === 0n && <p className="dashboard-trend-empty-copy">Registre os pagamentos recebidos e os gastos pagos para acompanhar o dinheiro ao longo dos dias.</p>}
           </> : <ChartState loading={loading} onRetry={onRetry} />}
-          <figcaption className="dashboard-trend-footer"><p>Lançamentos manuais; não representa saldo bancário.</p><Link className="quiet-link" to="/financeiro">Abrir financeiro <Icon name="arrow" /></Link></figcaption>
+          <figcaption className="dashboard-trend-footer"><p>Valores registrados manualmente; não são o saldo bancário.</p><Link className="quiet-link" to="/financeiro">Abrir financeiro <Icon name="arrow" /></Link></figcaption>
         </figure>
 
         <figure className="surface-panel dashboard-trend-panel" aria-labelledby={ordersHeadingId}>
@@ -175,7 +175,7 @@ export function DashboardTrends({ days, startOn, endOn, period, loading, error, 
         <div className="dashboard-trend-table-wrap" role="region" aria-label="Valores diários dos gráficos" tabIndex={0}>
           <table className="dashboard-trend-table">
             <caption>Valores diários de {dateRange}, no horário de São Paulo. Dias sem registros aparecem com zero.</caption>
-            <thead><tr><th scope="col">Data</th><th scope="col">Pedidos registrados</th><th scope="col">Recebimentos informados</th><th scope="col">Saídas pagas</th></tr></thead>
+            <thead><tr><th scope="col">Data</th><th scope="col">Pedidos criados</th><th scope="col">Pagamentos recebidos</th><th scope="col">Gastos pagos</th></tr></thead>
             <tbody>{days.map((day) => <tr key={day.business_date}><th scope="row">{formatBusinessDate(day.business_date)}</th><td>{integerFormatter.format(day.order_count)}</td><td>{formatBRLExact(day.receipts_cents)}</td><td>{formatBRLExact(day.paid_outflows_cents)}</td></tr>)}</tbody>
           </table>
         </div>

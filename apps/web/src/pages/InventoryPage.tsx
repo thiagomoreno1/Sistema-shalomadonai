@@ -608,13 +608,13 @@ export function InventoryPage() {
   return (
     <div className="page-stack">
       <header className="page-heading">
-        <div><p className="eyebrow">OPERAÇÃO · ESTOQUE</p><h1>Estoque</h1><p className="page-description">Saldos controlados, entradas recebidas e movimentações registradas.</p></div>
+        <div><p className="eyebrow">OPERAÇÃO · ESTOQUE</p><h1>Estoque</h1><p className="page-description">Quantidade atual de cada produto, compras recebidas e alterações registradas.</p></div>
         <div className="record-heading-actions"><button className="button button-secondary" disabled={countStarting} onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Ajuste, perda ou retorno</button><button className="button button-secondary" disabled={loading || countStarting || balances.length === 0 || balances.length > 500} onClick={startCount} ref={countTriggerRef} type="button"><Icon name="box" /> Contagem física</button><button className="button button-primary" disabled={countStarting} onClick={startReceipt} ref={receiptTriggerRef} type="button"><Icon name="box" /> Receber compra</button></div>
       </header>
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadData() }} type="button">Tentar novamente</button></div>}
-      {!loading && balances.length > 500 && <p className="form-message form-message-warning" role="status">A contagem física está indisponível para este estoque: há {balances.length} produtos controlados, e o limite atual é 500.</p>}
+      {!loading && balances.length > 500 && <p className="form-message form-message-warning" role="status">A contagem física está indisponível: há {balances.length} produtos com quantidade acompanhada, e o limite atual é 500.</p>}
 
       {showCountForm && <form className="surface-panel record-form" onSubmit={(event) => void handleCountSubmit(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">CONFERÊNCIA FÍSICA</p><h2 ref={countHeadingRef} tabIndex={-1}>Contagem de estoque</h2></div><button className="text-button" disabled={saving || uncertain || countStarting} onClick={() => setShowCountForm(false)} type="button">Fechar</button></div>
@@ -639,9 +639,9 @@ export function InventoryPage() {
       </form>}
 
       <section className="order-balance-grid inventory-summary" aria-label="Resumo do estoque">
-        <article className="surface-panel order-balance-card"><span>Produtos controlados</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>Unidade e contagem inicial registradas.</small></article>
+        <article className="surface-panel order-balance-card"><span>Produtos com quantidade acompanhada</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>O saldo muda quando produtos são vendidos ou recebidos.</small></article>
         <article className="surface-panel order-balance-card"><span>Abaixo do mínimo</span><strong>{loading ? '—' : belowMinimum.length}</strong><small>Somente produtos com limite configurado.</small></article>
-        <article className="surface-panel order-balance-card"><span>Saldo negativo</span><strong>{loading ? '—' : negativeBalances.length}</strong><small>Vendas despachadas acima do saldo disponível.</small></article>
+        <article className="surface-panel order-balance-card"><span>Estoque abaixo de zero</span><strong>{loading ? '—' : negativeBalances.length}</strong><small>Foram despachadas mais unidades do que havia no estoque.</small></article>
       </section>
 
       {showReceiptForm && <form className="surface-panel record-form" onSubmit={(event) => void handleReceiptSubmit(event)}>
@@ -693,7 +693,7 @@ export function InventoryPage() {
       </form>}
 
       <section className="surface-panel record-panel" aria-labelledby="inventory-balance-heading">
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">SALDOS ATUAIS</p><h2 id="inventory-balance-heading">Produtos com estoque configurado</h2></div><span className="neutral-status">{loading ? '—' : balances.length}</span></div>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">QUANTIDADE ATUAL</p><h2 id="inventory-balance-heading">Produtos acompanhados</h2></div><span className="neutral-status">{loading ? '—' : balances.length}</span></div>
         {!loading && balances.length > 0 && <label className="search-field"><Icon name="search" /><span className="visually-hidden">Buscar produtos no estoque</span><input onChange={(event) => setBalanceSearch(event.target.value)} placeholder="Buscar produto" value={balanceSearch} /></label>}
         {loading ? <p className="inline-state" aria-live="polite">Carregando saldos…</p> : balances.length === 0 ? <div className="inline-state"><p>Não há saldos configurados. Configure a unidade e a contagem inicial no catálogo.</p><Link className="quiet-link" to="/catalogo">Abrir catálogo →</Link></div> : <ul className="inventory-balance-list">
           {filteredBalances.length === 0 ? <li className="inline-state">Nenhum produto corresponde à busca.</li> : filteredBalances.map((balance) => {
@@ -703,7 +703,7 @@ export function InventoryPage() {
             const isBelow = balance.minimum_stock !== null && quantity < Number(balance.minimum_stock)
             return <li key={balance.product_id}>
               <span className="inventory-balance-copy"><strong>{balance.product_name}</strong><small>Unidade: {balance.inventory_unit}{balance.minimum_stock !== null ? ' · Mínimo ' + formatQuantity(Number(balance.minimum_stock)) : ' · Sem limite mínimo'}</small></span>
-              <span className="inventory-balance-value"><strong>{formatQuantity(quantity)} <small>{balance.inventory_unit}</small></strong><span className={'stock-state' + (isNegative ? ' stock-state-negative' : isZero ? ' stock-state-zero' : isBelow ? ' stock-state-low' : '')}>{isNegative ? 'Saldo negativo' : isZero ? 'Zerado' : isBelow ? 'Abaixo do mínimo' : 'Disponível'}</span></span>
+              <span className="inventory-balance-value"><strong>{formatQuantity(quantity)} <small>{balance.inventory_unit}</small></strong><span className={'stock-state' + (isNegative ? ' stock-state-negative' : isZero ? ' stock-state-zero' : isBelow ? ' stock-state-low' : '')}>{isNegative ? 'Abaixo de zero' : isZero ? 'Sem estoque' : isBelow ? 'Abaixo do mínimo' : 'Disponível'}</span></span>
             </li>
           })}
         </ul>}

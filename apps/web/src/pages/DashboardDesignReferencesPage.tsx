@@ -77,11 +77,11 @@ function PreviewHeader({ title, period = 'Período a escolher' }: { title: strin
 function MetricsOverview({ compact = false }: { compact?: boolean }) {
   return (
     <div className={`dashboard-reference-metric-grid is-three${compact ? ' is-compact' : ''}`}>
-      <MetricStub emphasis label="Vendas no período" />
-      <MetricStub emphasis label="Resultado gerencial" />
-      <MetricStub label="Recebido no período" />
-      <MetricStub label="Contas vencidas" />
-      <MetricStub label="Vencem hoje" />
+      <MetricStub emphasis label="Faturamento bruto" />
+      <MetricStub emphasis label="Lucro estimado" />
+      <MetricStub label="Pagamentos recebidos" />
+      <MetricStub label="Pagamentos atrasados" />
+      <MetricStub label="Pagamentos para hoje" />
     </div>
   )
 }
@@ -93,7 +93,7 @@ function AttentionOverview({ prominent = false }: { prominent?: boolean }) {
       <div className="dashboard-reference-attention-grid">
         <div className="is-followups"><span>Retornos</span><strong>—</strong><small>Atrasados ou de hoje</small></div>
         <div className="is-deliveries"><span>Entregas</span><strong>—</strong><small>Precisam de atualização</small></div>
-        <div className="is-receivables"><span>Recebimentos</span><strong><small>Vencidas</small> R$ —</strong><strong><small>Vencem hoje</small> R$ —</strong></div>
+        <div className="is-receivables"><span>Pagamentos</span><strong><small>Atrasados</small> R$ —</strong><strong><small>Vencem hoje</small> R$ —</strong></div>
         <div className="is-inventory"><span>Estoque</span><strong>—</strong><small>Produtos em atenção</small></div>
       </div>
     </section>
@@ -103,10 +103,10 @@ function AttentionOverview({ prominent = false }: { prominent?: boolean }) {
 function ActionQueuePreview() {
   return (
     <section className="dashboard-reference-section">
-      <div className="dashboard-reference-section-heading"><strong>Fila de ações do dia</strong><span>Retornos · recebimentos · entregas</span></div>
+      <div className="dashboard-reference-section-heading"><strong>Fila de ações do dia</strong><span>Retornos · pagamentos · entregas</span></div>
       <ul className="dashboard-reference-action-list">
         <li><span className="is-followup">Retorno</span><span><strong>Confirmar próximo passo</strong><small>Cliente · prazo —</small></span><b>Ver →</b></li>
-        <li><span className="is-receivable">Recebimento</span><span><strong>Parcela a acompanhar</strong><small>Cliente · vencimento —</small></span><b>R$ —</b></li>
+        <li><span className="is-receivable">Pagamento</span><span><strong>Parcela que falta receber</strong><small>Cliente · data limite —</small></span><b>R$ —</b></li>
         <li><span className="is-delivery">Entrega</span><span><strong>Atualizar andamento</strong><small>Pedido — · status —</small></span><b>Ver →</b></li>
       </ul>
     </section>
@@ -137,13 +137,13 @@ function OperationalDetails() {
 function ResultComposition() {
   return (
     <section className="dashboard-reference-section">
-      <div className="dashboard-reference-section-heading"><strong>Como o resultado é formado</strong><span>Visão gerencial</span></div>
-      <div className="dashboard-reference-bridge" aria-label="Composição proposta do resultado gerencial">
-        <div><span>Vendas concluídas após descontos</span><strong>R$ —</strong></div>
-        <div><span>− Custo dos itens vendidos</span><strong>R$ —</strong></div>
-        <div><span>− Despesas operacionais pagas</span><strong>R$ —</strong></div>
-        <div><span>− Custo real de entrega</span><strong>R$ —</strong></div>
-        <div className="is-total"><span>Resultado gerencial</span><strong>R$ —</strong></div>
+      <div className="dashboard-reference-section-heading"><strong>Como calculamos o lucro estimado</strong><span>Antes de impostos</span></div>
+      <div className="dashboard-reference-bridge" aria-label="Como o lucro estimado é calculado">
+        <div><span>Faturamento líquido dos pedidos entregues</span><strong>R$ —</strong></div>
+        <div><span>− Custo dos produtos vendidos</span><strong>R$ —</strong></div>
+        <div><span>− Gastos da empresa pagos</span><strong>R$ —</strong></div>
+        <div><span>− Pagamentos de entrega</span><strong>R$ —</strong></div>
+        <div className="is-total"><span>Lucro estimado antes de impostos</span><strong>R$ —</strong></div>
       </div>
     </section>
   )
@@ -169,7 +169,7 @@ function ReferenceMockup({ id }: { id: ReferenceId }) {
       </>}
       {id === 'trend' && <>
         <div className="dashboard-reference-desktop-split is-chart-focus">
-          <div className="dashboard-reference-graph-block"><PreviewHeader title="Ritmo de vendas" period="Gráfico em destaque" /><ChartPlaceholder kind="bars" title="Gráfico completo para acompanhar o ritmo de vendas" large /><div className="dashboard-reference-legend"><span>Vendas</span><span>Recebimentos</span><span>Saídas pagas</span></div></div>
+          <div className="dashboard-reference-graph-block"><PreviewHeader title="Ritmo de vendas" period="Gráfico em destaque" /><ChartPlaceholder kind="bars" title="Gráfico completo para acompanhar o ritmo de vendas" large /><div className="dashboard-reference-legend"><span>Faturamento</span><span>Pagamentos recebidos</span><span>Gastos pagos</span></div></div>
           <AttentionOverview prominent />
         </div>
         <MetricsOverview compact />
@@ -252,7 +252,7 @@ export function DashboardDesignReferencesPage() {
       </div>
 
       <p className="dashboard-reference-selection" aria-live="polite">{preferred ? 'A escolha fica somente nesta tela; me diga qual opção você prefere.' : 'Você pode marcar uma opção para facilitar a conversa. A Central do dia continua igual por enquanto.'}</p>
-      <p className="dashboard-reference-finance-note">Retornos, entregas, vencimentos e alertas de estoque aparecem em todas as opções. “Vendas”, “recebimentos” e “resultado gerencial” são indicadores diferentes; o detalhamento financeiro completo continua em Financeiro e Relatórios.</p>
+      <p className="dashboard-reference-finance-note">Retornos, entregas, pagamentos com prazo vencido e alertas de estoque aparecem em todas as opções. Faturamento, pagamentos recebidos e lucro estimado são indicadores diferentes; os detalhes ficam em Financeiro e Relatórios.</p>
     </main>
   )
 }

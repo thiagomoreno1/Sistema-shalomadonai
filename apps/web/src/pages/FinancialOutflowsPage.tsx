@@ -48,9 +48,9 @@ function isCalendarDate(value: string) {
 
 function outflowTypeLabel(type: OutflowType) {
   return ({
-    purchase: 'Compra de estoque',
-    operating_expense: 'Despesa operacional',
-    delivery_cost: 'Custo de entrega',
+    purchase: 'Compra de produtos para revenda',
+    operating_expense: 'Gasto da empresa',
+    delivery_cost: 'Pagamento de entrega',
   })[type]
 }
 
@@ -395,7 +395,7 @@ export function FinancialOutflowsPage() {
       return
     }
     if (!outflowType) {
-      setFormError('Escolha o tipo de saída para classificar o lançamento corretamente.')
+      setFormError('Escolha o tipo de gasto para salvar o registro.')
       return
     }
     if (outflowType !== 'purchase' && selectedReceiptIds.length > 0) {
@@ -430,7 +430,7 @@ export function FinancialOutflowsPage() {
         }
         return
       }
-      setNotice('Saída paga registrada manualmente. Nenhum pagamento foi processado e nenhum banco foi consultado.')
+      setNotice('Gasto pago registrado. O sistema não processou o pagamento nem consultou o banco.')
       setShowForm(false)
       resetForm()
       requestIdRef.current = newRequestId()
@@ -525,11 +525,11 @@ export function FinancialOutflowsPage() {
       <FinanceNavigation active="outflows" />
       <header className="page-heading">
         <div>
-          <p className="eyebrow">FINANCEIRO · SAÍDAS PAGAS</p>
-          <h1>Saídas pagas</h1>
-          <p className="page-description">Registre compras de estoque, despesas operacionais e custos reais de entrega somente depois de pagos.</p>
+          <p className="eyebrow">FINANCEIRO · GASTOS PAGOS</p>
+          <h1>Gastos pagos</h1>
+          <p className="page-description">Registre compras de produtos, gastos da empresa e pagamentos de entrega depois que o dinheiro sair.</p>
         </div>
-        <button className="button button-primary" disabled={Boolean(voidTarget)} onClick={() => { resetForm(); setNotice(null); setVoidNotice(null); setShowForm(true) }} ref={formTriggerRef} type="button">Novo lançamento pago</button>
+        <button className="button button-primary" disabled={Boolean(voidTarget)} onClick={() => { resetForm(); setNotice(null); setVoidNotice(null); setShowForm(true) }} ref={formTriggerRef} type="button">Registrar gasto pago</button>
       </header>
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
@@ -538,23 +538,23 @@ export function FinancialOutflowsPage() {
       {showForm && (
         <form className="surface-panel record-form" onSubmit={handleSubmit}>
           <div className="section-heading section-heading-compact">
-            <div><p className="eyebrow">LANÇAMENTOS</p><h2 ref={formHeadingRef} tabIndex={-1}>Registrar saída já paga</h2></div>
+            <div><p className="eyebrow">LANÇAMENTOS</p><h2 ref={formHeadingRef} tabIndex={-1}>Registrar gasto já pago</h2></div>
             <button className="text-button" disabled={saving || uncertain} onClick={() => setShowForm(false)} type="button">Fechar</button>
           </div>
-          <p className="section-footnote">Cada lançamento representa um valor que já saiu do caixa, informado manualmente. Não há contas a pagar nem acompanhamento de valores ainda não pagos.</p>
+          <p className="section-footnote">Cada registro representa um valor que você já pagou. Esta tela não acompanha contas que ainda não foram pagas.</p>
 
           <div className="record-form-grid">
             <label className="record-field">
-              <span className="field-label">Tipo de saída <span aria-hidden="true">*</span></span>
+              <span className="field-label">Tipo de gasto <span aria-hidden="true">*</span></span>
               <select className="text-input" disabled={saving || uncertain} onChange={(event) => changeOutflowType(event.target.value as OutflowType | '')} required value={outflowType}>
-                <option value="">Selecione o tipo de saída</option>
-                <option value="purchase">Compra de estoque</option>
-                <option value="operating_expense">Despesa operacional</option>
-                <option value="delivery_cost">Custo de entrega</option>
+                <option value="">Selecione o tipo de gasto</option>
+                <option value="purchase">Compra de produtos para revenda</option>
+                <option value="operating_expense">Gasto da empresa</option>
+                <option value="delivery_cost">Pagamento de entrega</option>
               </select>
-              {outflowType === 'purchase' && <small className="field-optional">Use para itens comprados para revenda. Outras compras entram como despesa operacional.</small>}
-              {outflowType === 'operating_expense' && <small className="field-optional">Inclui despesas e compras que não entram no estoque de produtos para revenda.</small>}
-              {outflowType === 'delivery_cost' && <small className="field-optional">Registre o valor real pago ao entregador/prestador, separado da taxa cobrada do cliente.</small>}
+              {outflowType === 'purchase' && <small className="field-optional">Use quando comprar produtos que serão revendidos. Esse valor entra no lucro quando o produto é vendido.</small>}
+              {outflowType === 'operating_expense' && <small className="field-optional">Use para contas da empresa, materiais e compras que não serão revendidos.</small>}
+              {outflowType === 'delivery_cost' && <small className="field-optional">Informe quanto você pagou ao entregador. Esse valor pode ser diferente da taxa cobrada do cliente.</small>}
             </label>
             <label className="record-field">
               <span className="field-label">Valor pago (R$) <span aria-hidden="true">*</span></span>

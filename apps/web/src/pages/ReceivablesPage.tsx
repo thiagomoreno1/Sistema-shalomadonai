@@ -257,7 +257,7 @@ export function ReceivablesPage() {
         .order('id', { ascending: true })
         .range(from, to))
       if (ordersResult.error) {
-        setError('Não foi possível carregar as contas a receber. Tente novamente.')
+        setError('Não foi possível carregar os pagamentos que faltam receber. Tente novamente.')
         return
       }
 
@@ -319,7 +319,7 @@ export function ReceivablesPage() {
       setReceivables(nextReceivables)
       setError(null)
     } catch {
-      setError('Não foi possível carregar as contas a receber. Tente novamente.')
+      setError('Não foi possível carregar os pagamentos que faltam receber. Tente novamente.')
     } finally {
       setLoading(false)
     }
@@ -517,7 +517,7 @@ export function ReceivablesPage() {
                   <strong>{formatBusinessDate(item.due_on)}</strong>
                   <small>Parcela {item.installment_number}</small>
                 </span>
-                <span className="receivable-customer"><strong>{item.customer_name}</strong><small className={item.overdue ? 'receivable-overdue-label' : undefined}>{item.overdue ? 'Vencido' : item.due_on === today ? 'Vence hoje' : 'A vencer'}</small></span>
+                <span className="receivable-customer"><strong>{item.customer_name}</strong><small className={item.overdue ? 'receivable-overdue-label' : undefined}>{item.overdue ? 'Atrasado' : item.due_on === today ? 'Vence hoje' : 'Próximo vencimento'}</small></span>
                 <span className="receivable-balance"><small>Saldo do vencimento</small><strong>{formatBRL(item.balance_cents)}</strong></span>
               </Link>
               <div className="receivable-actions">
@@ -557,8 +557,8 @@ export function ReceivablesPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">FINANCEIRO · PEDIDOS</p>
-          <h1>Contas a receber</h1>
-          <p className="page-description">Saldos de vencimentos informados manualmente em pedidos ativos.</p>
+          <h1>Pagamentos a receber</h1>
+          <p className="page-description">Parcelas de pedidos que você ainda não recebeu. Os valores e as datas vêm de cada pedido.</p>
         </div>
         <Link className="button button-secondary" to="/pedidos">Ver pedidos</Link>
       </header>
@@ -575,10 +575,10 @@ export function ReceivablesPage() {
 
       {followUpNotice && <p className="form-message form-message-success" role="status">{followUpNotice} <Link to="/atendimento">Abrir fila de Atendimento</Link></p>}
 
-      {!loading && !error && <section className="receivable-summary-grid" aria-label="Resumo das contas a receber">
-        <article className="surface-panel receivable-summary-card"><span>Saldo vencido</span><strong>{formatBRL(groupTotal(overdue))}</strong><small>{overdue.length} vencimentos</small></article>
-        <article className="surface-panel receivable-summary-card"><span>Vence hoje</span><strong>{formatBRL(groupTotal(dueToday))}</strong><small>{dueToday.length} vencimentos</small></article>
-        <article className="surface-panel receivable-summary-card"><span>A vencer</span><strong>{formatBRL(groupTotal(upcoming))}</strong><small>{upcoming.length} vencimentos</small></article>
+      {!loading && !error && <section className="receivable-summary-grid" aria-label="Resumo dos pagamentos a receber">
+        <article className="surface-panel receivable-summary-card"><span>Pagamentos atrasados</span><strong>{formatBRL(groupTotal(overdue))}</strong><small>{overdue.length} parcelas passaram da data</small></article>
+        <article className="surface-panel receivable-summary-card"><span>Parcelas que vencem hoje</span><strong>{formatBRL(groupTotal(dueToday))}</strong><small>{dueToday.length} parcelas ainda sem pagamento</small></article>
+        <article className="surface-panel receivable-summary-card"><span>Próximos vencimentos</span><strong>{formatBRL(groupTotal(upcoming))}</strong><small>{upcoming.length} parcelas ainda sem pagamento</small></article>
       </section>}
 
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void loadReceivables()} type="button">Tentar novamente</button></div>}
@@ -586,18 +586,18 @@ export function ReceivablesPage() {
       {loading ? <p className="inline-state" aria-live="polite">Carregando vencimentos…</p> : !error && (
         <div className="page-stack receivable-groups">
           <section className="surface-panel record-panel" aria-labelledby="receivable-overdue-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">PRIORIDADE</p><h2 id="receivable-overdue-heading">Vencidos</h2></div><span className="neutral-status">{overdue.length}</span></div>
-            {renderGroup(overdue, 'Nenhum vencimento em atraso.')}
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">PRIORIDADE</p><h2 id="receivable-overdue-heading">Pagamentos atrasados</h2></div><span className="neutral-status">{overdue.length}</span></div>
+            {renderGroup(overdue, 'Nenhum pagamento atrasado.')}
           </section>
           <section className="surface-panel record-panel" aria-labelledby="receivable-today-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">HOJE</p><h2 id="receivable-today-heading">Vencem hoje</h2></div><span className="neutral-status">{dueToday.length}</span></div>
-            {renderGroup(dueToday, 'Nenhum vencimento para hoje.')}
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">HOJE</p><h2 id="receivable-today-heading">Parcelas que vencem hoje</h2></div><span className="neutral-status">{dueToday.length}</span></div>
+            {renderGroup(dueToday, 'Nenhuma parcela vence hoje.')}
           </section>
           <section className="surface-panel record-panel" aria-labelledby="receivable-upcoming-heading">
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">AGENDA</p><h2 id="receivable-upcoming-heading">Próximos vencimentos</h2></div><span className="neutral-status">{upcoming.length}</span></div>
-            {renderGroup(upcoming, 'Nenhum vencimento futuro em aberto.')}
+            {renderGroup(upcoming, 'Nenhum pagamento com vencimento futuro.')}
           </section>
-          {receivables.length === 0 && <p className="section-footnote">Despesas, caixa, conciliação e resultado gerencial continuam pendentes das regras e fontes de dados da próxima etapa.</p>}
+          {receivables.length === 0 && <p className="section-footnote">Gastos, conferência do extrato bancário e lucro estimado aparecem nas outras telas do Financeiro quando houver registros.</p>}
         </div>
       )}
     </div>

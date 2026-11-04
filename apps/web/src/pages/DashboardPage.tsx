@@ -43,6 +43,9 @@ type DashboardFinancialSummary = {
   receipts: { amount_cents: string }
   managerial_result: {
     sales_cents: string
+    product_subtotal_cents: string
+    customer_delivery_fee_cents: string
+    discount_cents: string
     item_cost_cents: string | null
     missing_cost_line_count: number
     returned_order_count: number
@@ -58,7 +61,7 @@ type ActionFilter = 'all' | 'followups' | 'receivables' | 'deliveries'
 const actionFilters: Array<{ value: ActionFilter; label: string }> = [
   { value: 'all', label: 'Todos' },
   { value: 'followups', label: 'Retornos' },
-  { value: 'receivables', label: 'Recebimentos' },
+  { value: 'receivables', label: 'Pagamentos' },
   { value: 'deliveries', label: 'Entregas' },
 ]
 
@@ -72,7 +75,7 @@ const deliveryStatusLabels: Record<DashboardPriorities['deliveries']['items'][nu
   awaiting_separation: 'Aguardando separação',
   ready: 'Pronta para despacho',
   dispatched: 'Em rota',
-  attempted: 'Tentativa sem sucesso',
+  attempted: 'Entrega não concluída',
   rescheduled: 'Reagendada',
 }
 
@@ -137,7 +140,10 @@ function createDemoTrends(startOn: string, period: DashboardTrendPeriod): Dashbo
 
 function createDemoFinancialSummary(days: DashboardTrendDay[]): DashboardFinancialSummary {
   const orders = days.reduce((total, day) => total + day.order_count, 0n)
-  const sales = orders * 218000n
+  const grossSales = orders * 230000n
+  const deliveryFees = orders * 5000n
+  const discounts = orders * 12000n
+  const sales = grossSales - discounts
   const paidOutflows = days.reduce((total, day) => total + day.paid_outflows_cents, 0n)
   const itemCost = sales * 55n / 100n
   const operatingExpenses = paidOutflows * 80n / 100n
@@ -146,6 +152,9 @@ function createDemoFinancialSummary(days: DashboardTrendDay[]): DashboardFinanci
     receipts: { amount_cents: days.reduce((total, day) => total + day.receipts_cents, 0n).toString() },
     managerial_result: {
       sales_cents: sales.toString(),
+      product_subtotal_cents: (grossSales - deliveryFees).toString(),
+      customer_delivery_fee_cents: deliveryFees.toString(),
+      discount_cents: discounts.toString(),
       item_cost_cents: itemCost.toString(),
       missing_cost_line_count: 0,
       returned_order_count: 0,
@@ -360,6 +369,11 @@ export function DashboardPage() {
     return () => { financialSummaryRequestId.current += 1 }
   }, [loadFinancialSummary])
 
+  const financialSummary = currentFinancialSummary.data?.managerial_result
+  const grossSalesCents = financialSummary
+    ? (BigInt(financialSummary.product_subtotal_cents) + BigInt(financialSummary.customer_delivery_fee_cents)).toString()
+    : null
+
   return (
     <div className="page-stack dashboard-page">
       <header className="page-heading dashboard-heading">
@@ -381,13 +395,13 @@ export function DashboardPage() {
         </Link>
         <Link className="dashboard-summary-link is-overdue" to="/financeiro">
           <span className="dashboard-summary-icon"><Icon name="coin" /></span>
-          <span className="dashboard-summary-copy"><strong>Contas vencidas</strong><small>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : prioritiesLoading ? 'Carregando saldo…' : 'Saldo indisponível'}</small></span>
+          <span className="dashboard-summary-copy"><strong>Pagamentos atrasados</strong><small>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.receivables.overdue_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
         <Link className="dashboard-summary-link is-due-today" to="/financeiro">
           <span className="dashboard-summary-icon"><Icon name="clock" /></span>
-          <span className="dashboard-summary-copy"><strong>Vencem hoje</strong><small>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando saldo…' : 'Saldo indisponível'}</small></span>
+          <span className="dashboard-summary-copy"><strong>Parcelas que vencem hoje</strong><small>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.receivables.due_today_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
@@ -435,13 +449,13 @@ export function DashboardPage() {
               </section>}
 
               {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.receivables.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-receivables-title">
-                <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Recebimentos a acompanhar</h3><Link className="quiet-link" to="/financeiro">Ver contas <Icon name="arrow" /></Link></div>
-                {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma conta vencida ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Pagamentos para acompanhar</h3><Link className="quiet-link" to="/financeiro">Ver pagamentos <Icon name="arrow" /></Link></div>
+                {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma parcela atrasada ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
                   {priorities.receivables.items.map((item) => <li key={item.installment_id}>
                     <Link to={demoPreview ? '/financeiro' : `/pedidos/${item.order_id}`}>
                       <span className={`dashboard-action-symbol${item.overdue ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
                       <span className="dashboard-action-copy"><strong>{item.customer_name}</strong><small>Parcela {item.installment_number} · {formatBusinessDate(item.due_on)}</small></span>
-                      <span className="dashboard-action-meta"><strong>{formatBRLExact(item.balance_cents)}</strong><span className={`dashboard-row-state${item.overdue ? ' is-overdue' : ' is-today'}`}>{item.overdue ? 'Vencido' : 'Vence hoje'}</span></span>
+                      <span className="dashboard-action-meta"><strong>{formatBRLExact(item.balance_cents)}</strong><span className={`dashboard-row-state${item.overdue ? ' is-overdue' : ' is-today'}`}>{item.overdue ? 'Atrasado' : 'Vence hoje'}</span></span>
                       <Icon className="dashboard-row-arrow" name="arrow" />
                     </Link>
                   </li>)}
@@ -469,11 +483,11 @@ export function DashboardPage() {
 
       </div>
       {role === 'owner' && <section className="dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
-        <div className="section-heading dashboard-financial-heading">
+          <div className="section-heading dashboard-financial-heading">
           <div>
             <p className="eyebrow">ÚLTIMOS {trendPeriod} DIAS</p>
-            <h2 id="dashboard-financial-title">Indicadores e resultado</h2>
-            <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)} · vendas, recebimentos e resultado seguem o período; vencimentos refletem hoje</p>
+            <h2 id="dashboard-financial-title">Resumo de vendas e pagamentos</h2>
+            <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)} · faturamento e lucro seguem a entrega ou retirada; pagamentos seguem a data registrada; parcelas atrasadas refletem hoje</p>
           </div>
           <Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link>
         </div>
@@ -481,22 +495,25 @@ export function DashboardPage() {
         {!currentFinancialSummary.loading && currentFinancialSummary.error && <div className="dashboard-panel-state" role="alert"><p>Não foi possível carregar os indicadores financeiros.</p><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
         {!currentFinancialSummary.loading && !currentFinancialSummary.error && currentFinancialSummary.data && <>
           <div className="indicator-grid dashboard-financial-indicators">
-            <article className="indicator-card"><p>Vendas concluídas</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</strong><span>Por entrega ou retirada no período</span></article>
-            <article className="indicator-card"><p>Resultado gerencial</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>{currentFinancialSummary.data.managerial_result.available ? 'Após custos e despesas pagas' : 'Há custo pendente ou devolução sem ajuste'}</span></article>
-            <article className="indicator-card"><p>Recebimentos informados</p><strong>{formatBRLExact(currentFinancialSummary.data.receipts.amount_cents)}</strong><span>Por data de recebimento</span></article>
-            <article className="indicator-card"><p>Saldo vencido hoje</p><strong>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.overdue_count} em aberto` : 'Saldo indisponível'}</span></article>
-            <article className="indicator-card"><p>Vencem hoje</p><strong>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.due_today_count} para acompanhar` : 'Saldo de hoje'}</span></article>
+            <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossSalesCents === null ? '—' : formatBRLExact(grossSalesCents)}</strong><span>Produtos + entrega, antes dos descontos</span></article>
+            <article className="indicator-card"><p>Faturamento líquido</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</strong><span>Total dos pedidos após descontos</span></article>
+            <article className="indicator-card"><p>Pagamentos recebidos</p><strong>{formatBRLExact(currentFinancialSummary.data.receipts.amount_cents)}</strong><span>Valores que você marcou como recebidos</span></article>
+            <article className="indicator-card"><p>Pagamentos atrasados</p><strong>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.overdue_count} parcelas não pagas após a data` : 'Indisponível'}</span></article>
+            <article className="indicator-card"><p>Parcelas que vencem hoje</p><strong>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.due_today_count} ainda não pagas` : 'Indisponível'}</span></article>
+            <article className="indicator-card"><p>Lucro estimado</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>Após produtos e gastos pagos · antes de impostos</span></article>
           </div>
           <section className="surface-panel dashboard-result-breakdown" aria-labelledby="dashboard-result-breakdown-title">
-            <div className="dashboard-result-breakdown-heading"><h3 id="dashboard-result-breakdown-title">Como o resultado é formado</h3><span>Compras para estoque entram quando o item é vendido</span></div>
+            <div className="dashboard-result-breakdown-heading"><h3 id="dashboard-result-breakdown-title">Como calculamos o lucro estimado</h3><span>Compra para estoque entra na conta quando o produto é vendido</span></div>
             <dl>
-              <div><dt>Vendas concluídas após descontos</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</dd></div>
-              <div><dt>Custo dos itens vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}</dd></div>
-              <div><dt>Despesas operacionais pagas</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
-              <div><dt>Custos reais de entrega pagos</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
-              <div className="is-total"><dt>Resultado gerencial</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
+              <div><dt>Faturamento bruto · antes de descontos</dt><dd>{grossSalesCents === null ? 'Indisponível' : formatBRLExact(grossSalesCents)}</dd></div>
+              <div><dt>Descontos nos pedidos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
+              <div><dt>Faturamento líquido · após descontos</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</dd></div>
+              <div><dt>Custo dos produtos vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
+              <div><dt>Gastos da empresa já pagos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
+              <div><dt>Pagamentos de entrega</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
+              <div className="is-total"><dt>Lucro estimado · antes de impostos</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
             </dl>
-            {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">{currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `${currentFinancialSummary.data.managerial_result.missing_cost_line_count} item(ns) sem custo congelado. ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) com devolução sem regra de ajuste financeiro. ` : ''}O resultado fica oculto até os componentes permitirem um cálculo confiável.</p>}
+            {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">Não foi possível calcular o lucro: {currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `faltam os custos de ${currentFinancialSummary.data.managerial_result.missing_cost_line_count} item(ns) vendido(s). ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) têm devolução sem ajuste financeiro. ` : ''}</p>}
           </section>
         </>}
       </section>}
@@ -546,9 +563,9 @@ export function DashboardPage() {
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count === 0 && <div className="small-empty-state"><p>Nenhum produto está configurado para controle de estoque.</p><Link className="quiet-link" to="/catalogo">Configurar produtos <Icon name="arrow" /></Link></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count > 0 && priorities.inventory.attention_count === 0 && <div className="small-empty-state"><p>Nenhum saldo está negativo ou abaixo do mínimo definido.{priorities.inventory.without_minimum_count > 0 ? ` ${priorities.inventory.without_minimum_count} produto(s) ainda sem mínimo definido.` : ''}</p><Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.attention_count > 0 && <>
-            <ul className="dashboard-stock-list">{priorities.inventory.items.map((item) => <li key={item.product_id}><span><strong>{item.product_name}</strong><small>{item.minimum_stock === null ? 'Saldo negativo · sem mínimo definido' : `${item.quantity_on_hand < 0 ? 'Saldo negativo · ' : ''}Mínimo ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span><span className="dashboard-stock-quantity">{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span></li>)}</ul>
+            <ul className="dashboard-stock-list">{priorities.inventory.items.map((item) => <li key={item.product_id}><span><strong>{item.product_name}</strong><small>{item.minimum_stock === null ? 'Abaixo de zero · defina o estoque mínimo' : item.quantity_on_hand < 0 ? `Abaixo de zero · mínimo ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}` : `Estoque mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span><span className="dashboard-stock-quantity">{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span></li>)}</ul>
             {priorities.inventory.attention_count > priorities.inventory.items.length && <p className="section-footnote">Mostrando {priorities.inventory.items.length} de {priorities.inventory.attention_count} produtos em atenção.</p>}
-            {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">{priorities.inventory.without_minimum_count} produto(s) controlado(s) ainda sem mínimo definido.</p>}
+            {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">{priorities.inventory.without_minimum_count} produto(s) com quantidade acompanhada ainda sem estoque mínimo definido.</p>}
             <Link className="quiet-link" to="/estoque">Ver produtos em atenção <Icon name="arrow" /></Link>
           </>}
         </section>

@@ -960,7 +960,7 @@ export function CustomerDetailPage() {
                   <dl className="customer-order-values">
                     <div><dt>Total do pedido</dt><dd>{formatBRL(order.total_cents)}</dd></div>
                     <div><dt>Recebido</dt><dd>{financeAvailable ? formatBRL(order.received_cents!) : 'Indisponível'}</dd></div>
-                    <div><dt>Saldo a receber</dt><dd>{financeAvailable ? formatBRL(order.outstanding_cents!) : 'Indisponível'}</dd></div>
+                    <div><dt>Falta receber</dt><dd>{financeAvailable ? formatBRL(order.outstanding_cents!) : 'Indisponível'}</dd></div>
                   </dl>
                   {order.installments && order.installments.length > 0 && (
                     <details className="customer-installment-details">
@@ -970,11 +970,11 @@ export function CustomerDetailPage() {
                           <li key={installment.id}>
                             <div className="customer-installment-copy">
                               <strong>Parcela {installment.installment_number} · {formatBusinessDate(installment.due_on)}</strong>
-                              <small className={installment.overdue ? 'customer-installment-overdue' : undefined}>{installment.overdue ? 'Vencida · ' : ''}{installment.payment_method || 'Forma não informada'}</small>
+                              <small className={installment.overdue ? 'customer-installment-overdue' : undefined}>{installment.overdue ? 'Atrasada · ' : ''}{installment.payment_method || 'Forma não informada'}</small>
                             </div>
                             <div className="customer-installment-values">
                               <strong>{formatBRL(installment.amount_cents)}</strong>
-                              <small>{order.status === 'cancelled' ? 'Cancelado · sem saldo a receber' : 'Recebido ' + formatBRL(installment.received_cents) + ' · saldo ' + formatBRL(installment.balance_cents)}</small>
+                              <small>{order.status === 'cancelled' ? 'Pedido cancelado · sem pagamento pendente' : 'Pago ' + formatBRL(installment.received_cents) + ' · falta receber ' + formatBRL(installment.balance_cents)}</small>
                             </div>
                           </li>
                         ))}

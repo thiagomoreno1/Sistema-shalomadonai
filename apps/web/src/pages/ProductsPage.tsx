@@ -195,6 +195,7 @@ export function ProductsPage() {
   const [categories, setCategories] = useState<ProductCategory[]>([])
   const [comboComponents, setComboComponents] = useState<ComboComponent[]>([])
   const [search, setSearch] = useState('')
+  const [selectedCategoryId, setSelectedCategoryId] = useState('all')
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
@@ -356,13 +357,16 @@ export function ProductsPage() {
 
   const filteredProducts = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase('pt-BR')
-    if (!needle) return products
     const categoryNames = new Map(categories.map((category) => [category.id, category.name]))
-    return products.filter((product) =>
-      `${product.name} ${product.description ?? ''} ${categoryNames.get(product.category_id ?? '') ?? ''}`
-        .toLocaleLowerCase('pt-BR').includes(needle),
-    )
-  }, [products, categories, search])
+    return products.filter((product) => {
+      const matchesCategory = selectedCategoryId === 'all' || (selectedCategoryId === 'uncategorized'
+        ? product.category_id === null
+        : product.category_id === selectedCategoryId)
+      const matchesSearch = !needle || `${product.name} ${product.description ?? ''} ${categoryNames.get(product.category_id ?? '') ?? ''}`
+        .toLocaleLowerCase('pt-BR').includes(needle)
+      return matchesCategory && matchesSearch
+    })
+  }, [products, categories, search, selectedCategoryId])
 
   function startCreate() {
     setNotice(null)
@@ -691,7 +695,7 @@ export function ProductsPage() {
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
 
-      <p className="section-footnote">Preços e custos são dados atuais do cadastro. Produtos sem estoque configurado permanecem identificados como não controlados.</p>
+      <p className="section-footnote">Preços e custos são os valores atuais do cadastro. Para acompanhar a quantidade, informe a unidade e o saldo inicial; o sistema atualiza o saldo quando uma venda sai ou uma compra chega.</p>
 
       {showForm && (
         <form className="surface-panel record-form" key={editingProduct?.id ?? 'new-product'} onSubmit={handleSaveProduct}>
@@ -700,7 +704,7 @@ export function ProductsPage() {
             <label className="record-field record-field-wide"><span className="field-label">Nome do produto <span aria-hidden="true">*</span></span><input autoFocus className="text-input" defaultValue={editingProduct?.name ?? ''} maxLength={160} name="name" required /></label>
             <label className="record-field"><span className="field-label">Categoria <span className="field-optional">opcional</span></span><select className="text-input" defaultValue={editingProduct?.category_id ?? ''} name="category_id"><option value="">Sem categoria</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
             <div className="record-field record-field-actions"><span className="field-label">Categorias</span><button className="text-button" onClick={() => { setShowCategoryForm((value) => !value); setCategoryError(null) }} type="button">{showCategoryForm ? 'Fechar categorias' : 'Cadastrar categoria'}</button></div>
-            <label className="record-field"><span className="field-label">Unidade de estoque <span className="field-optional">{inventoryEnabled ? 'obrigatória para controlar' : 'opcional'}</span></span><input className="text-input" defaultValue={editingProduct?.inventory_unit ?? ''} disabled={saving || Boolean(editingProduct?.inventory_tracked)} maxLength={32} name="inventory_unit" placeholder="Ex.: un, kg" required={inventoryEnabled} /></label>
+            <label className="record-field"><span className="field-label">Unidade de estoque <span className="field-optional">{inventoryEnabled ? 'obrigatória para acompanhar quantidade' : 'opcional'}</span></span><input className="text-input" defaultValue={editingProduct?.inventory_unit ?? ''} disabled={saving || Boolean(editingProduct?.inventory_tracked)} maxLength={32} name="inventory_unit" placeholder="Ex.: un, kg" required={inventoryEnabled} /></label>
             <label className="record-field"><span className="field-label">Preço de venda <span className="field-optional">R$</span></span><input className="text-input" defaultValue={editingProduct?.sale_price_cents === null || !editingProduct ? '' : (editingProduct.sale_price_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="sale_price" placeholder="0,00" /></label>
             <label className="record-field"><span className="field-label">Custo atual <span className="field-optional">R$ · opcional</span></span><input className="text-input" defaultValue={editingProduct?.cost_cents === null || !editingProduct ? '' : (editingProduct.cost_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="cost" placeholder="0,00" /></label>
             {editingProduct && <div className="record-field record-field-wide"><ProductPriceHistory businessId={businessId} productId={editingProduct.id} refreshToken={priceHistoryRefreshToken} /></div>}
@@ -734,13 +738,13 @@ export function ProductsPage() {
               {(saving && selectedPhoto) && <p className="section-footnote" aria-live="polite" role="status">Salvando produto e enviando foto…</p>}
               {photoError && <p className="form-message form-message-error" role="alert">{photoError}</p>}
             </div>
-            <label className="record-checkbox record-field-wide"><input checked={inventoryEnabled} disabled={saving || Boolean(editingProduct?.inventory_tracked) || comboEnabled} onChange={(event) => { setInventoryEnabled(event.target.checked); setMinimumStock('') }} name="inventory_tracked" type="checkbox" /><span><strong>Controlar saldo deste produto</strong><small>Para iniciar, informe a unidade e a contagem física atual, inclusive quando for zero.</small></span></label>
+            <label className="record-checkbox record-field-wide"><input checked={inventoryEnabled} disabled={saving || Boolean(editingProduct?.inventory_tracked) || comboEnabled} onChange={(event) => { setInventoryEnabled(event.target.checked); setMinimumStock('') }} name="inventory_tracked" type="checkbox" /><span><strong>Acompanhar a quantidade deste produto</strong><small>O sistema atualiza o saldo quando o produto é despachado ou recebido. Para começar, informe a unidade e a quantidade atual, mesmo que seja zero.</small></span></label>
             {inventoryEnabled && !editingProduct?.inventory_tracked && <>
               <label className="record-field"><span className="field-label">Contagem inicial <span aria-hidden="true">*</span></span><input className="text-input" inputMode="decimal" onChange={(event) => setOpeningQuantity(event.target.value)} placeholder="0" required value={openingQuantity} /></label>
               <label className="record-field"><span className="field-label">Estoque mínimo <span className="field-optional">opcional</span></span><input className="text-input" inputMode="decimal" onChange={(event) => setMinimumStock(event.target.value)} placeholder="Sem alerta" value={minimumStock} /></label>
             </>}
             {inventoryEnabled && editingProduct?.inventory_tracked && <label className="record-field"><span className="field-label">Estoque mínimo <span className="field-optional">opcional</span></span><input className="text-input" inputMode="decimal" onChange={(event) => setMinimumStock(event.target.value)} placeholder="Sem alerta" value={minimumStock} /></label>}
-            <label className="record-checkbox record-field-wide"><input checked={comboEnabled} disabled={saving || Boolean(editingProduct?.is_combo) || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => { setComboEnabled(event.target.checked); if (event.target.checked) setInventoryEnabled(false) }} name="is_combo" type="checkbox" /><span><strong>Este produto é um combo</strong><small>O saldo será calculado pelos componentes cadastrados.</small></span></label>
+            <label className="record-checkbox record-field-wide"><input checked={comboEnabled} disabled={saving || Boolean(editingProduct?.is_combo) || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => { setComboEnabled(event.target.checked); if (event.target.checked) setInventoryEnabled(false) }} name="is_combo" type="checkbox" /><span><strong>Este produto é um combo</strong><small>A quantidade disponível depende dos produtos que compõem o combo.</small></span></label>
             {comboEnabled && <div className="combo-composition record-field-wide">
               <div className="section-heading section-heading-compact"><div><p className="eyebrow">COMPOSIÇÃO</p><h3>Itens consumidos por combo</h3></div><button className="button button-secondary" disabled={saving} onClick={() => setComboDraft((current) => [...current, { key: newKey(), componentProductId: '', quantity: '1' }])} type="button"><Icon name="plus" /> Adicionar item</button></div>
               <p className="section-footnote">Cada componente precisa ter unidade e estoque inicial configurados. Pedidos existentes guardam a composição usada na venda.</p>
@@ -768,12 +772,20 @@ export function ProductsPage() {
       )}
 
       <section className="surface-panel record-panel" aria-labelledby="product-list-title">
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">CADASTRO</p><h2 id="product-list-title">Produtos</h2></div><span className="neutral-status">{products.length} {products.length === 1 ? 'produto' : 'produtos'}</span></div>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">CADASTRO</p><h2 id="product-list-title">Produtos</h2></div><span className="neutral-status">{filteredProducts.length} de {products.length} {products.length === 1 ? 'produto' : 'produtos'}</span></div>
         <label className="search-field"><Icon name="search" /><span className="visually-hidden">Buscar produtos por nome ou categoria</span><input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nome ou categoria" value={search} /></label>
+        <div className="product-category-filters" role="group" aria-label="Filtrar produtos por uma categoria">
+          <button aria-pressed={selectedCategoryId === 'all'} className={selectedCategoryId === 'all' ? 'is-active' : ''} onClick={() => setSelectedCategoryId('all')} type="button">Todos <span>{products.length}</span></button>
+          {categories.map((category) => {
+            const count = products.filter((product) => product.category_id === category.id).length
+            return <button aria-pressed={selectedCategoryId === category.id} className={selectedCategoryId === category.id ? 'is-active' : ''} key={category.id} onClick={() => setSelectedCategoryId(category.id)} type="button">{category.name} <span>{count}</span></button>
+          })}
+          {products.some((product) => product.category_id === null) && <button aria-pressed={selectedCategoryId === 'uncategorized'} className={selectedCategoryId === 'uncategorized' ? 'is-active' : ''} onClick={() => setSelectedCategoryId('uncategorized')} type="button">Sem categoria <span>{products.filter((product) => product.category_id === null).length}</span></button>}
+        </div>
         {loading && <p className="inline-state" aria-live="polite">Carregando produtos…</p>}
         {!loading && error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadProducts() }} type="button">Tentar novamente</button></div>}
         {!loading && !error && products.length === 0 && <div className="module-empty-panel record-empty"><span className="empty-icon"><Icon name="box" /></span><h2>Nenhum produto cadastrado</h2><p>Cadastre produtos, configure unidade e contagem inicial para iniciar o controle, e monte os componentes dos combos.</p><button className="button button-primary" onClick={startCreate} type="button">Cadastrar primeiro produto</button></div>}
-        {!loading && !error && products.length > 0 && filteredProducts.length === 0 && <div className="inline-state"><p>Nenhum produto corresponde à busca.</p><button className="text-button" onClick={() => setSearch('')} type="button">Limpar busca</button></div>}
+        {!loading && !error && products.length > 0 && filteredProducts.length === 0 && <div className="inline-state"><p>Nenhum produto corresponde à busca ou categoria selecionada.</p><button className="text-button" onClick={() => { setSearch(''); setSelectedCategoryId('all') }} type="button">Limpar filtros</button></div>}
         {!loading && !error && filteredProducts.length > 0 && (
           <ul className="record-list product-list">
             {filteredProducts.map((product) => (
@@ -782,7 +794,7 @@ export function ProductsPage() {
                   <span className="record-avatar">{product.image_url
                     ? <img alt={`Foto de ${product.name}`} onError={() => { if (product.image_path) void refreshProductPhoto(product.id, product.image_path) }} src={product.image_url} />
                     : <Icon name="box" />}</span>
-                  <span className="record-list-copy"><strong>{product.name}</strong><small>{categoryNames.get(product.category_id ?? '') ?? 'Sem categoria'}{product.inventory_unit ? ' · ' + product.inventory_unit : ''}{product.is_combo ? ' · Combo (' + comboComponents.filter((component) => component.combo_product_id === product.id).length + ' itens)' : product.inventory_tracked ? ' · Estoque controlado' : ' · Estoque não configurado'}</small></span>
+                  <span className="record-list-copy"><strong>{product.name}</strong><small>{categoryNames.get(product.category_id ?? '') ?? 'Sem categoria'}{product.inventory_unit ? ' · ' + product.inventory_unit : ''}{product.is_combo ? ' · Combo (' + comboComponents.filter((component) => component.combo_product_id === product.id).length + ' itens)' : product.inventory_tracked ? ' · Quantidade acompanhada' : ' · Quantidade não acompanhada'}</small></span>
                   <span className="product-price"><strong>{formatBRL(product.sale_price_cents)}</strong><small>{product.is_active ? 'Ativo' : 'Inativo'}{product.is_combo && comboComponents.filter((component) => component.combo_product_id === product.id).length === 0 ? ' · Sem composição' : ''}</small></span>
                   <button className="text-button" onClick={() => startEdit(product)} type="button">Editar</button>
                 </div>

@@ -19,6 +19,10 @@ function brl(cents: number) {
   return formatBRLExact(String(cents))
 }
 
+function stockLabel(product: (typeof products)[number]) {
+  return product.stock < 0 ? `Faltam ${Math.abs(product.stock)} ${product.unit}` : `${product.stock} ${product.unit}`
+}
+
 function dateLabel(value: string) {
   return formatBusinessDate(value)
 }
@@ -66,8 +70,8 @@ function DemoHeading({ eyebrow, title, description, action }: { eyebrow: string;
   return <header className="page-heading demo-page-heading"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="page-description">{description}</p></div>{action && <div className="demo-page-action">{action}</div>}</header>
 }
 
-function DemoMetrics({ items }: { items: Metric[] }) {
-  return <div className="demo-metric-grid">{items.map((item) => <article className="surface-panel demo-metric" key={item.label}><div className="demo-metric-label">{item.icon && <Icon name={item.icon} />}<span>{item.label}</span></div><strong>{item.value}</strong><small>{item.note}</small></article>)}</div>
+function DemoMetrics({ items, className = '' }: { items: Metric[]; className?: string }) {
+  return <div className={`demo-metric-grid ${className}`.trim()}>{items.map((item) => <article className="surface-panel demo-metric" key={item.label}><div className="demo-metric-label">{item.icon && <Icon name={item.icon} />}<span>{item.label}</span></div><strong>{item.value}</strong><small>{item.note}</small></article>)}</div>
 }
 
 function DemoPanel({ title, subtitle, action, children, className = '' }: { title: string; subtitle?: string; action?: ReactNode; children: ReactNode; className?: string }) {
@@ -88,9 +92,9 @@ function ReadOnlyButton({ children }: { children: ReactNode }) {
 
 function FinanceTabs({ current }: { current: 'receivables' | 'outflows' | 'banks' }) {
   return <nav className="finance-subnav" aria-label="Seções financeiras">
-    <Link className={current === 'receivables' ? 'is-active' : ''} to="/financeiro">A receber</Link>
-    <Link className={current === 'outflows' ? 'is-active' : ''} to="/financeiro/saidas">Saídas pagas</Link>
-    <Link className={current === 'banks' ? 'is-active' : ''} to="/financeiro/bancos">Conciliação</Link>
+    <Link className={current === 'receivables' ? 'is-active' : ''} to="/financeiro">Pagamentos pendentes</Link>
+    <Link className={current === 'outflows' ? 'is-active' : ''} to="/financeiro/saidas">Gastos pagos</Link>
+    <Link className={current === 'banks' ? 'is-active' : ''} to="/financeiro/bancos">Extrato do banco</Link>
   </nav>
 }
 
@@ -109,12 +113,16 @@ function statusTone(status: string): 'neutral' | 'success' | 'warning' | 'danger
   return 'accent'
 }
 
+function orderStatusLabel(status: string) {
+  return status === 'Tentativa sem sucesso' ? 'Entrega não concluída' : status
+}
+
 function CustomerList({ today }: { today: string }) {
   const [search, setSearch] = useState('')
   const customers = getCustomers(today).filter((customer) => `${customer.name} ${customer.contact} ${customer.kind}`.toLocaleLowerCase('pt-BR').includes(search.toLocaleLowerCase('pt-BR')))
   return <div className="page-stack demo-preview-page">
     <DemoHeading eyebrow="RELACIONAMENTO" title="Clientes" description="Cadastros, contatos e histórico de compras da carteira." action={<ReadOnlyButton><Icon name="people" /> Novo cliente</ReadOnlyButton>} />
-    <DemoMetrics items={[{ label: 'Clientes ativos', value: '42', note: '+4 neste mês', icon: 'people' }, { label: 'Compraram nos últimos 30 dias', value: '28', note: '67% da carteira', icon: 'bag' }, { label: 'Retornos pendentes', value: '6', note: '2 vencidos ou de hoje', icon: 'phone' }, { label: 'Saldo em aberto', value: 'R$ 1.284,00', note: '3 clientes para acompanhar', icon: 'coin' }]} />
+    <DemoMetrics items={[{ label: 'Clientes ativos', value: '42', note: '+4 neste mês', icon: 'people' }, { label: 'Compraram nos últimos 30 dias', value: '28', note: '67% da carteira', icon: 'bag' }, { label: 'Retornos pendentes', value: '6', note: '2 passaram do prazo ou vencem hoje', icon: 'phone' }, { label: 'Pagamentos pendentes', value: 'R$ 1.284,00', note: '3 clientes ainda têm valores a pagar', icon: 'coin' }]} />
     <DemoPanel title="Carteira de clientes" subtitle={`${customers.length} registros de exemplo`} action={<label className="demo-search"><span>Buscar</span><input aria-label="Buscar cliente fictício" onChange={(event) => setSearch(event.target.value)} placeholder="Nome, contato ou tipo" value={search} /></label>}>
       <DemoTable caption="Clientes fictícios" headings={['Cliente', 'Tipo', 'Contato', 'Último pedido', 'Situação']} rows={customers.map((customer) => [customerLink(customer), customer.kind, <span className="demo-secondary-copy">{customer.contact}<small>{customer.phone}</small></span>, dateLabel(customer.lastOrder), <DemoBadge tone="success">Ativo</DemoBadge>])} />
     </DemoPanel>
@@ -132,11 +140,12 @@ function CustomerDetail({ customerId, today }: { customerId: string; today: stri
   const orders = getOrders(today).filter((order) => order.customerId === customer.id)
   return <div className="page-stack demo-preview-page">
     <DemoHeading eyebrow="CLIENTE · CADASTRO DEMONSTRATIVO" title={customer.name} description={`${customer.kind} · cliente fictício desde agosto de 2026`} action={<Link className="quiet-link" to="/clientes"><Icon name="arrow" /> Voltar aos clientes</Link>} />
+    <DemoMetrics className="demo-customer-metrics" items={[{ label: 'Pedidos feitos', value: orders.length ? String(orders.length) : '0', note: 'Compras registradas no exemplo', icon: 'bag' }, { label: 'Falta receber', value: customer.id === 'demo-customer-1' ? 'R$ 120,00' : customer.id === 'demo-customer-2' ? 'R$ 87,00' : 'R$ 198,00', note: 'Valor de pedidos ainda não pagos', icon: 'coin' }]} />
     <div className="demo-two-column">
       <DemoPanel title="Contato e entrega" subtitle="Informações de exemplo"><dl className="demo-detail-list"><div><dt>Contato principal</dt><dd>{customer.contact}</dd></div><div><dt>Telefone / WhatsApp</dt><dd>{customer.phone}</dd></div><div><dt>E-mail</dt><dd>{customer.email}</dd></div><div><dt>Endereço de entrega</dt><dd>{customer.address}</dd></div><div><dt>Preferência</dt><dd>WhatsApp em horário comercial</dd></div></dl></DemoPanel>
-      <div className="demo-stack"><DemoMetrics items={[{ label: 'Compras no período', value: orders.length ? String(orders.length) : '8', note: 'Pedidos fictícios', icon: 'bag' }, { label: 'Saldo a receber', value: customer.id === 'demo-customer-2' ? 'R$ 87,00' : 'R$ 198,00', note: 'Vencimento conforme exemplo', icon: 'coin' }]} /><DemoPanel title="Observação interna"><p className="demo-body-copy">Cliente recorrente. Costuma confirmar reposições e horários de entrega pelo WhatsApp.</p><DemoBadge tone="accent">Cadastro demonstrativo</DemoBadge></DemoPanel></div>
+      <DemoPanel title="Observação interna"><p className="demo-body-copy">Cliente recorrente. Costuma confirmar reposições e horários de entrega pelo WhatsApp.</p><DemoBadge tone="accent">Cadastro demonstrativo</DemoBadge></DemoPanel>
     </div>
-    <DemoPanel title="Pedidos recentes" subtitle="Histórico de compras de exemplo"><DemoTable caption={`Pedidos fictícios de ${customer.name}`} headings={['Pedido', 'Data', 'Entrega', 'Situação', 'Total']} rows={(orders.length ? orders : getOrders(today).slice(0, 2)).map((order) => [orderLink(order), dateLabel(order.createdOn), order.delivery, <DemoBadge tone={statusTone(order.status)}>{order.status}</DemoBadge>, brl(order.totalCents)])} /></DemoPanel>
+    <DemoPanel title="Pedidos recentes" subtitle="Histórico de compras de exemplo"><DemoTable caption={`Pedidos fictícios de ${customer.name}`} headings={['Pedido', 'Data', 'Entrega', 'Situação', 'Total']} rows={(orders.length ? orders : getOrders(today).slice(0, 2)).map((order) => [orderLink(order), dateLabel(order.createdOn), order.delivery, <DemoBadge tone={statusTone(order.status)}>{orderStatusLabel(order.status)}</DemoBadge>, brl(order.totalCents)])} /></DemoPanel>
     <DemoPanel title="Linha do tempo"><div className="demo-activity-list"><ActivityItem date={dateLabel(day(today, 0))} title="Contato de acompanhamento" detail="Retorno programado para confirmar o próximo pedido." icon="phone" /><ActivityItem date={dateLabel(day(today, -5))} title="Pedido concluído" detail="Entrega confirmada e pagamento registrado no exemplo." icon="check" /></div></DemoPanel>
   </div>
 }
@@ -193,25 +202,34 @@ function OrdersPreview({ today, detailId, newOrder = false }: { today: string; d
     const customer = customers.find((item) => item.id === order.customerId) ?? customers[0]
     return <div className="page-stack demo-preview-page">
       <DemoHeading eyebrow={`PEDIDO · ${order.number}`} title={customer.name} description={`${dateLabel(order.createdOn)} · ${order.delivery.toLocaleLowerCase('pt-BR')} · registro fictício`} action={<Link className="quiet-link" to="/pedidos"><Icon name="arrow" /> Voltar aos pedidos</Link>} />
-      <DemoMetrics items={[{ label: 'Total do pedido', value: brl(order.totalCents), note: order.status, icon: 'bag' }, { label: 'Pagamento', value: order.payment.split(' · ')[0], note: order.payment.split(' · ')[1], icon: 'coin' }, { label: 'Entrega', value: order.delivery, note: order.status, icon: 'truck' }]} />
-      <div className="demo-two-column"><DemoPanel title="Itens" subtitle="Composição fictícia"><DemoTable caption={`Itens do pedido ${order.number}`} headings={['Produto', 'Quantidade', 'Total']} rows={order.lines.map((line) => [line.name, line.quantity, brl(line.totalCents)])} /><div className="demo-total-row"><span>Total</span><strong>{brl(order.totalCents)}</strong></div></DemoPanel><DemoPanel title="Resumo do pedido"><dl className="demo-detail-list"><div><dt>Cliente</dt><dd>{customerLink(customer)}</dd></div><div><dt>Situação</dt><dd><DemoBadge tone={statusTone(order.status)}>{order.status}</DemoBadge></dd></div><div><dt>Pagamento informado</dt><dd>{order.payment}</dd></div><div><dt>Endereço</dt><dd>{customer.address}</dd></div></dl><div className="demo-disabled-actions"><ReadOnlyButton>Registrar pagamento</ReadOnlyButton><ReadOnlyButton>Atualizar entrega</ReadOnlyButton></div></DemoPanel></div>
+      <DemoMetrics items={[{ label: 'Total do pedido', value: brl(order.totalCents), note: orderStatusLabel(order.status), icon: 'bag' }, { label: 'Pagamento', value: order.payment.split(' · ')[0], note: order.payment.split(' · ')[1], icon: 'coin' }, { label: 'Entrega', value: order.delivery, note: orderStatusLabel(order.status), icon: 'truck' }]} />
+      <div className="demo-two-column"><DemoPanel title="Itens" subtitle="Composição fictícia"><DemoTable caption={`Itens do pedido ${order.number}`} headings={['Produto', 'Quantidade', 'Total']} rows={order.lines.map((line) => [line.name, line.quantity, brl(line.totalCents)])} /><div className="demo-total-row"><span>Total</span><strong>{brl(order.totalCents)}</strong></div></DemoPanel><DemoPanel title="Resumo do pedido"><dl className="demo-detail-list"><div><dt>Cliente</dt><dd>{customerLink(customer)}</dd></div><div><dt>Situação</dt><dd><DemoBadge tone={statusTone(order.status)}>{orderStatusLabel(order.status)}</DemoBadge></dd></div><div><dt>Pagamento informado</dt><dd>{order.payment}</dd></div><div><dt>Endereço</dt><dd>{customer.address}</dd></div></dl><div className="demo-disabled-actions"><ReadOnlyButton>Registrar pagamento</ReadOnlyButton><ReadOnlyButton>Atualizar entrega</ReadOnlyButton></div></DemoPanel></div>
       <DemoPanel title="Histórico" subtitle="Eventos fictícios"><div className="demo-activity-list"><ActivityItem date={dateLabel(order.createdOn)} title="Pedido criado" detail={`Pedido ${order.number} registrado para ${customer.name}.`} icon="bag" /><ActivityItem date={dateLabel(order.createdOn)} title={order.status} detail={order.delivery === 'Entrega' ? 'Aguardando próxima atualização logística.' : 'Retirada pelo cliente aguardando confirmação.'} icon="truck" /></div></DemoPanel>
     </div>
   }
   return <div className="page-stack demo-preview-page">
-    <DemoHeading eyebrow="VENDAS · PEDIDOS" title="Pedidos" description="Vendas, condições de pagamento e entregas em um só lugar." action={<Link className="button-primary" to="/pedidos/novo"><Icon name="bag" /> Ver novo pedido</Link>} />
-    <DemoMetrics items={[{ label: 'Pedidos no período', value: '24', note: 'Últimos 30 dias', icon: 'bag' }, { label: 'Em andamento', value: '5', note: 'Separação, rota ou retirada', icon: 'clock' }, { label: 'Vendas registradas', value: 'R$ 18.742,50', note: 'Após descontos', icon: 'coin' }, { label: 'A receber', value: 'R$ 1.284,00', note: '3 parcelas abertas', icon: 'chart' }]} />
+    <DemoHeading eyebrow="VENDAS · PEDIDOS" title="Pedidos" description="Vendas, formas de pagamento e entregas em um só lugar." action={<Link className="demo-primary-link" to="/pedidos/novo"><Icon name="bag" /> Novo pedido</Link>} />
+    <DemoMetrics items={[{ label: 'Pedidos no período', value: '24', note: 'Últimos 30 dias', icon: 'bag' }, { label: 'Em andamento', value: '5', note: 'Separação, rota ou retirada', icon: 'clock' }, { label: 'Faturamento líquido', value: 'R$ 18.742,50', note: 'Total após descontos', icon: 'coin' }, { label: 'Falta receber', value: 'R$ 1.284,00', note: '3 parcelas ainda não pagas', icon: 'chart' }]} />
     <div className="demo-filter-row"><DemoBadge tone="accent">Todos · 24</DemoBadge><DemoBadge>Em andamento · 5</DemoBadge><DemoBadge tone="success">Concluídos · 17</DemoBadge><DemoBadge tone="danger">Cancelados · 2</DemoBadge></div>
-    <DemoPanel title="Pedidos recentes" subtitle="Registros de exemplo"><DemoTable caption="Lista de pedidos fictícios" headings={['Pedido', 'Cliente', 'Data', 'Tipo', 'Situação', 'Total']} rows={orders.map((item) => { const customer = customers.find((entry) => entry.id === item.customerId) ?? customers[0]; return [orderLink(item), customerLink(customer), dateLabel(item.createdOn), item.delivery, <DemoBadge tone={statusTone(item.status)}>{item.status}</DemoBadge>, brl(item.totalCents)] })} /></DemoPanel>
+    <DemoPanel title="Pedidos recentes" subtitle="Registros de exemplo"><DemoTable caption="Lista de pedidos fictícios" headings={['Pedido', 'Cliente', 'Data', 'Tipo', 'Situação', 'Total']} rows={orders.map((item) => { const customer = customers.find((entry) => entry.id === item.customerId) ?? customers[0]; return [orderLink(item), customerLink(customer), dateLabel(item.createdOn), item.delivery, <DemoBadge tone={statusTone(item.status)}>{orderStatusLabel(item.status)}</DemoBadge>, brl(item.totalCents)] })} /></DemoPanel>
   </div>
 }
 
 function CatalogPreview({ today }: { today: string }) {
+  const [selectedCategory, setSelectedCategory] = useState('Todos')
+  const categoryNames = ['Limpeza', 'Lavanderia', 'Aromas', 'Combos']
+  const categoryCounts = new Map(categoryNames.map((category) => [category, products.filter((product) => product.category === category).length]))
+  const filteredProducts = products.filter((product) => selectedCategory === 'Todos' || product.category === selectedCategory)
   return <div className="page-stack demo-preview-page">
     <DemoHeading eyebrow="PRODUTOS · CATÁLOGO" title="Catálogo" description="Produtos, preços, unidades e combinações disponíveis para pedidos." action={<ReadOnlyButton><Icon name="box" /> Novo produto</ReadOnlyButton>} />
-    <div className="demo-filter-row"><DemoBadge tone="accent">Todos os produtos · 18</DemoBadge><DemoBadge>Limpeza · 8</DemoBadge><DemoBadge>Lavanderia · 5</DemoBadge><DemoBadge>Aromas · 3</DemoBadge><DemoBadge>Combos · 2</DemoBadge></div>
-    <DemoMetrics items={[{ label: 'Produtos ativos', value: '18', note: 'Em 4 categorias', icon: 'box' }, { label: 'Controlam estoque', value: '12', note: 'Unidade configurada', icon: 'check' }, { label: 'Em atenção', value: '2', note: 'Abaixo do mínimo ou negativo', icon: 'clock' }]} />
-    <DemoPanel title="Produtos e preços" subtitle={`Catálogo fictício · atualizado em ${dateLabel(today)}`}><DemoTable caption="Produtos fictícios" headings={['Produto', 'Código', 'Categoria', 'Preço', 'Custo', 'Estoque']} rows={products.map((product) => [<span className="demo-secondary-copy"><strong>{product.name}</strong><small>{product.unit}</small></span>, product.code, product.category, brl(product.priceCents), brl(product.costCents), <DemoBadge tone={product.stock < 0 ? 'danger' : product.stock < product.minimum ? 'warning' : 'success'}>{product.stock} {product.unit}</DemoBadge>])} /></DemoPanel>
+    <div className="demo-category-filters" role="group" aria-label="Filtrar produtos por categoria">
+      {['Todos', ...categoryNames].map((category) => {
+        const count = category === 'Todos' ? products.length : categoryCounts.get(category) ?? 0
+        return <button aria-pressed={selectedCategory === category} className={`demo-category-filter${selectedCategory === category ? ' is-active' : ''}`} key={category} onClick={() => setSelectedCategory(category)} type="button">{category}<span>{count}</span></button>
+      })}
+    </div>
+    <DemoMetrics className="demo-catalog-metrics" items={[{ label: 'Produtos no catálogo', value: String(products.length), note: 'Exemplos em 4 categorias', icon: 'box' }, { label: 'Produtos com quantidade acompanhada', value: String(products.length), note: 'O sistema atualiza o estoque nas vendas e compras', icon: 'check' }, { label: 'Precisam de reposição', value: '2', note: 'Abaixo da quantidade mínima', icon: 'clock' }]} />
+    <DemoPanel title="Produtos e preços" subtitle={`${filteredProducts.length} exemplos · catálogo atualizado em ${dateLabel(today)}`}><DemoTable caption="Produtos fictícios" headings={['Produto', 'Código', 'Categoria', 'Preço', 'Custo', 'Quantidade']} rows={filteredProducts.map((product) => [<span className="demo-secondary-copy"><strong>{product.name}</strong><small>{product.unit}</small></span>, product.code, product.category, brl(product.priceCents), brl(product.costCents), <DemoBadge tone={product.stock < 0 ? 'danger' : product.stock < product.minimum ? 'warning' : 'success'}>{stockLabel(product)}</DemoBadge>])} /></DemoPanel>
   </div>
 }
 
@@ -222,9 +240,9 @@ function InventoryPreview({ today }: { today: string }) {
     [dateLabel(day(today, -2)), 'Desinfetante floral 2 L', 'Ajuste de retorno conferido', '+1 un.', <DemoBadge tone="neutral">Retorno</DemoBadge>],
   ]
   return <div className="page-stack demo-preview-page">
-    <DemoHeading eyebrow="OPERAÇÃO · ESTOQUE" title="Estoque" description="Saldos de produtos, entradas recebidas e movimentações de exemplo." action={<ReadOnlyButton><Icon name="box" /> Registrar movimentação</ReadOnlyButton>} />
-    <DemoMetrics items={[{ label: 'Produtos controlados', value: '12', note: 'Unidade e contagem inicial definidas', icon: 'box' }, { label: 'Abaixo do mínimo', value: '1', note: 'Reposição recomendada', icon: 'clock' }, { label: 'Saldo negativo', value: '1', note: 'Revisar despacho e retorno', icon: 'chart' }, { label: 'Entradas no mês', value: '8', note: 'Compras conferidas', icon: 'check' }]} />
-    <DemoPanel title="Saldos atuais" subtitle="Exemplos de produtos controlados"><DemoTable caption="Saldos fictícios de estoque" headings={['Produto', 'Saldo', 'Mínimo', 'Situação', 'Última movimentação']} rows={products.slice(0, 4).map((product) => [product.name, `${product.stock} ${product.unit}`, `${product.minimum} ${product.unit}`, <DemoBadge tone={product.stock < 0 ? 'danger' : product.stock < product.minimum ? 'warning' : 'success'}>{product.stock < 0 ? 'Negativo' : product.stock < product.minimum ? 'Abaixo do mínimo' : 'Normal'}</DemoBadge>, dateLabel(day(today, -1))])} /></DemoPanel>
+    <DemoHeading eyebrow="OPERAÇÃO · ESTOQUE" title="Estoque" description="Quantidade atual de cada produto, compras recebidas e alterações registradas." action={<ReadOnlyButton><Icon name="box" /> Registrar movimentação</ReadOnlyButton>} />
+    <DemoMetrics items={[{ label: 'Produtos acompanhados', value: String(products.length), note: 'O sistema atualiza a quantidade nas vendas e compras recebidas', icon: 'box' }, { label: 'Abaixo do mínimo', value: '1', note: 'É hora de repor', icon: 'clock' }, { label: 'Estoque abaixo de zero', value: '1', note: 'Saíram mais unidades do que havia', icon: 'chart' }, { label: 'Compras recebidas este mês', value: '8', note: 'Produtos que chegaram e foram registrados', icon: 'check' }]} />
+    <DemoPanel title="Quantidade atual" subtitle="Quantidade registrada para cada produto"><DemoTable caption="Saldos fictícios de estoque" headings={['Produto', 'Quantidade', 'Mínimo recomendado', 'Situação', 'Última movimentação']} rows={products.slice(0, 4).map((product) => [product.name, stockLabel(product), `${product.minimum} ${product.unit}`, <DemoBadge tone={product.stock < 0 ? 'danger' : product.stock < product.minimum ? 'warning' : 'success'}>{product.stock < 0 ? 'Abaixo de zero' : product.stock < product.minimum ? 'Repor' : 'Normal'}</DemoBadge>, dateLabel(day(today, -1))])} /></DemoPanel>
     <DemoPanel title="Movimentações recentes" subtitle="Rastreabilidade demonstrativa"><DemoTable caption="Movimentações fictícias" headings={['Data', 'Produto', 'Motivo', 'Quantidade', 'Tipo']} rows={movementRows} /></DemoPanel>
   </div>
 }
@@ -234,9 +252,9 @@ function DeliveriesPreview({ today }: { today: string }) {
   const orders = getOrders(today).filter((item) => item.delivery === 'Entrega' && ['Aguardando separação', 'Em rota', 'Tentativa sem sucesso'].includes(item.status))
   return <div className="page-stack demo-preview-page">
     <DemoHeading eyebrow="LOGÍSTICA · ENTREGAS" title="Entregas" description="Fila de separação, despacho e acompanhamento de pedidos." action={<ReadOnlyButton><Icon name="truck" /> Gerenciar entregadores</ReadOnlyButton>} />
-    <DemoMetrics items={[{ label: 'Aguardando separação', value: '1', note: 'Preparar os pedidos da fila', icon: 'box' }, { label: 'Em rota', value: '1', note: 'Entrega em andamento', icon: 'truck' }, { label: 'Tentativa sem sucesso', value: '1', note: 'Retorno a combinar', icon: 'phone' }]} />
+    <DemoMetrics items={[{ label: 'Aguardando separação', value: '1', note: 'Preparar os pedidos da fila', icon: 'box' }, { label: 'Em rota', value: '1', note: 'Entrega em andamento', icon: 'truck' }, { label: 'Entrega não concluída', value: '1', note: 'Combinar um novo horário', icon: 'phone' }]} />
     <div className="demo-callout"><Icon name="truck" /><p><strong>Rastreamento simulado.</strong> Horários, status e entregadores abaixo são fictícios; não há localização ao vivo.</p></div>
-    <DemoPanel title="Fila de entregas" subtitle={`${orders.length} entregas ativas de exemplo`}><DemoTable caption="Entregas fictícias" headings={['Pedido', 'Cliente', 'Janela', 'Entregador', 'Situação', 'Próximo passo']} rows={orders.map((order, index) => { const customer = customers.find((entry) => entry.id === order.customerId) ?? customers[0]; const nextSteps: Record<string, string> = { 'Aguardando separação': 'Separar produtos', 'Em rota': 'Confirmar recebimento', 'Tentativa sem sucesso': 'Agendar nova tentativa' }; return [orderLink(order), customerLink(customer), `${index === 0 ? '10h–12h' : index === 1 ? '13h–15h' : '15h–17h'} · ${dateLabel(index === 2 ? day(today, -1) : today)}`, ['Rafael', 'João', 'Rafael'][index], <DemoBadge tone={statusTone(order.status)}>{order.status}</DemoBadge>, nextSteps[order.status]] })} /></DemoPanel>
+    <DemoPanel title="Fila de entregas" subtitle={`${orders.length} entregas ativas de exemplo`}><DemoTable caption="Entregas fictícias" headings={['Pedido', 'Cliente', 'Janela', 'Entregador', 'Situação', 'Próximo passo']} rows={orders.map((order, index) => { const customer = customers.find((entry) => entry.id === order.customerId) ?? customers[0]; const nextSteps: Record<string, string> = { 'Aguardando separação': 'Separar produtos', 'Em rota': 'Confirmar recebimento', 'Tentativa sem sucesso': 'Combinar novo horário' }; const statusLabel = order.status === 'Tentativa sem sucesso' ? 'Entrega não concluída' : order.status; return [orderLink(order), customerLink(customer), `${index === 0 ? '10h–12h' : index === 1 ? '13h–15h' : '15h–17h'} · ${dateLabel(index === 2 ? day(today, -1) : today)}`, ['Rafael', 'João', 'Rafael'][index], <DemoBadge tone={statusTone(order.status)}>{statusLabel}</DemoBadge>, nextSteps[order.status]] })} /></DemoPanel>
     <DemoPanel title="Entregadores" subtitle="Equipe de demonstração"><div className="demo-driver-grid">{['Rafael · disponível', 'João · em rota', 'Marcos · disponível'].map((person) => <div className="demo-driver" key={person}><span className="demo-driver-avatar">{person[0]}</span><strong>{person.split(' · ')[0]}</strong><DemoBadge tone={person.includes('em rota') ? 'warning' : 'success'}>{person.split(' · ')[1]}</DemoBadge></div>)}</div></DemoPanel>
   </div>
 }
@@ -251,11 +269,11 @@ function ReceivablesPreview({ today }: { today: string }) {
     { orderId: 'demo-order-3', customerId: 'demo-customer-3', installment: '2 de 3', due: day(today, 4), amount: 42_500 },
   ]
   return <div className="page-stack demo-preview-page">
-    <DemoHeading eyebrow="FINANCEIRO · A RECEBER" title="Contas a receber" description="Parcelas, vencimentos e pagamentos informados por pedido." />
+    <DemoHeading eyebrow="FINANCEIRO · CLIENTES" title="Pagamentos pendentes" description="Valores que seus clientes ainda precisam pagar e as datas de vencimento." />
     <FinanceTabs current="receivables" />
-    <DemoMetrics items={[{ label: 'Saldo em aberto', value: 'R$ 83.000,00', note: '18 parcelas futuras', icon: 'coin' }, { label: 'Vencido', value: 'R$ 318,00', note: '2 parcelas', icon: 'clock' }, { label: 'Vence hoje', value: 'R$ 87,00', note: '1 parcela', icon: 'chart' }, { label: 'Recebido no mês', value: 'R$ 12.230,00', note: 'Lançamentos fictícios', icon: 'check' }]} />
-    <DemoPanel title="Parcelas em acompanhamento" subtitle="Vencidas, de hoje e próximas"><DemoTable caption="Contas a receber fictícias" headings={['Vencimento', 'Cliente / pedido', 'Parcela', 'Valor', 'Situação']} rows={rows.map((item) => { const customer = customers.find((entry) => entry.id === item.customerId) ?? customers[0]; const label = item.due < today ? 'Vencido' : item.due === today ? 'Vence hoje' : 'Em aberto'; return [dateLabel(item.due), <span className="demo-secondary-copy">{customerLink(customer)}<small>{orderLink(orders.find((order) => order.id === item.orderId) ?? orders[0])}</small></span>, item.installment, brl(item.amount), <DemoBadge tone={statusTone(label)}>{label}</DemoBadge>] })} /></DemoPanel>
-    <DemoPanel title="Últimos recebimentos" subtitle="Pagamentos informados manualmente"><DemoTable caption="Recebimentos fictícios" headings={['Data', 'Pedido', 'Cliente', 'Forma', 'Valor']} rows={orders.slice(0, 3).map((order, index) => [dateLabel(day(today, -index)), orderLink(order), customers.find((customer) => customer.id === order.customerId)?.name ?? 'Cliente exemplo', ['Pix', 'Boleto', 'Transferência'][index], brl([64_550, 21_600, 48_000][index])])} /></DemoPanel>
+    <DemoMetrics items={[{ label: 'Ainda falta receber', value: 'R$ 83.000,00', note: '18 parcelas não pagas', icon: 'coin' }, { label: 'Pagamentos atrasados', value: 'R$ 318,00', note: '2 parcelas passaram do prazo', icon: 'clock' }, { label: 'Pagamentos para hoje', value: 'R$ 87,00', note: '1 parcela vence hoje', icon: 'chart' }, { label: 'Recebido neste mês', value: 'R$ 12.230,00', note: 'Pagamentos marcados como recebidos', icon: 'check' }]} />
+    <DemoPanel title="Pagamentos que precisam de atenção" subtitle="Atrasados, com prazo para hoje ou próximos"><DemoTable caption="Pagamentos pendentes fictícios" headings={['Data limite', 'Cliente / pedido', 'Parcela', 'Valor', 'Situação']} rows={rows.map((item) => { const customer = customers.find((entry) => entry.id === item.customerId) ?? customers[0]; const label = item.due < today ? 'Atrasado' : item.due === today ? 'Vence hoje' : 'Ainda não pago'; return [dateLabel(item.due), <span className="demo-secondary-copy">{customerLink(customer)}<small>{orderLink(orders.find((order) => order.id === item.orderId) ?? orders[0])}</small></span>, item.installment, brl(item.amount), <DemoBadge tone={statusTone(label)}>{label}</DemoBadge>] })} /></DemoPanel>
+    <DemoPanel title="Pagamentos recebidos" subtitle="Valores já registrados como pagos"><DemoTable caption="Pagamentos recebidos de exemplo" headings={['Data recebida', 'Pedido', 'Cliente', 'Forma de pagamento', 'Valor']} rows={orders.slice(0, 3).map((order, index) => [dateLabel(day(today, -index)), orderLink(order), customers.find((customer) => customer.id === order.customerId)?.name ?? 'Cliente exemplo', ['Pix', 'Boleto', 'Transferência'][index], brl([64_550, 21_600, 48_000][index])])} /></DemoPanel>
   </div>
 }
 
@@ -263,41 +281,41 @@ function OutflowsPreview({ today }: { today: string }) {
   const rows = [
     [dateLabel(day(today, 0)), 'Embalagens para pedidos', 'Materiais', 'Fornecedor Exemplo', 'R$ 486,00', <DemoBadge tone="success">Pago</DemoBadge>],
     [dateLabel(day(today, -1)), 'Combustível de entregas', 'Entrega', 'Posto Niterói (exemplo)', 'R$ 320,00', <DemoBadge tone="success">Pago</DemoBadge>],
-    [dateLabel(day(today, -3)), 'Produtos para reposição', 'Compra de estoque', 'Distribuidora Modelo', 'R$ 1.240,00', <DemoBadge tone="success">Pago</DemoBadge>],
+    [dateLabel(day(today, -3)), 'Produtos para reposição', 'Produtos para revenda', 'Distribuidora Modelo', 'R$ 1.240,00', <DemoBadge tone="success">Pago</DemoBadge>],
     [dateLabel(day(today, -6)), 'Internet e telefone', 'Operação', 'Serviço Exemplo', 'R$ 189,90', <DemoBadge tone="success">Pago</DemoBadge>],
   ]
   return <div className="page-stack demo-preview-page">
-    <DemoHeading eyebrow="FINANCEIRO · PAGAMENTOS" title="Saídas pagas" description="Despesas e compras registradas depois do pagamento." action={<ReadOnlyButton><Icon name="coin" /> Registrar pagamento</ReadOnlyButton>} />
+    <DemoHeading eyebrow="FINANCEIRO · GASTOS" title="Gastos pagos" description="Despesas da empresa e compras de produtos que já foram pagas." action={<ReadOnlyButton><Icon name="coin" /> Registrar gasto</ReadOnlyButton>} />
     <FinanceTabs current="outflows" />
-    <DemoMetrics items={[{ label: 'Pago neste mês', value: 'R$ 8.764,90', note: '11 registros', icon: 'coin' }, { label: 'Despesas operacionais', value: 'R$ 4.126,00', note: 'Já pagas', icon: 'check' }, { label: 'Compras para estoque', value: 'R$ 4.638,90', note: 'Entram no resultado quando vendidas', icon: 'box' }]} />
-    <DemoPanel title="Pagamentos registrados" subtitle="Exemplos de valores pagos"><DemoTable caption="Saídas fictícias pagas" headings={['Data paga', 'Descrição', 'Categoria', 'Recebedor', 'Valor', 'Situação']} rows={rows} /></DemoPanel>
-    <p className="demo-footnote">Este exemplo não cria contas a pagar; mostra apenas pagamentos já registrados.</p>
+    <DemoMetrics items={[{ label: 'Total pago neste mês', value: 'R$ 8.764,90', note: '11 gastos registrados', icon: 'coin' }, { label: 'Gastos da empresa', value: 'R$ 4.126,00', note: 'Contas e serviços já pagos', icon: 'check' }, { label: 'Produtos para revenda', value: 'R$ 4.638,90', note: 'Entram no lucro quando forem vendidos', icon: 'box' }]} />
+    <DemoPanel title="Gastos registrados" subtitle="Exemplos de valores que já foram pagos"><DemoTable caption="Gastos fictícios já pagos" headings={['Data paga', 'O que foi pago', 'Tipo de gasto', 'Pago a', 'Valor', 'Situação']} rows={rows} /></DemoPanel>
+    <p className="demo-footnote">Esta tela mostra somente valores já pagos. Produtos comprados para revenda entram no lucro quando forem vendidos.</p>
   </div>
 }
 
 function BankPreview({ today }: { today: string }) {
   const rows = [
-    [dateLabel(today), 'Pix recebido · Mercado Boa Praça', '+ R$ 645,50', <DemoBadge tone="success">Conciliado</DemoBadge>, 'Pedido SA-1048 · parcela 1'],
-    [dateLabel(day(today, -1)), 'Transferência · Distribuidora Modelo', '− R$ 1.240,00', <DemoBadge tone="warning">Pendente</DemoBadge>, 'Compra de estoque'],
-    [dateLabel(day(today, -1)), 'Pix recebido · Flor & Afeto', '+ R$ 189,90', <DemoBadge tone="success">Conciliado</DemoBadge>, 'Pedido SA-1045'],
-    [dateLabel(day(today, -2)), 'Tarifa bancária', '− R$ 18,90', <DemoBadge tone="neutral">Sem vínculo</DemoBadge>, '—'],
+    [dateLabel(today), 'Pix recebido · Mercado Boa Praça', '+ R$ 645,50', <DemoBadge tone="success">Conferido</DemoBadge>, 'Pedido SA-1048 · parcela 1'],
+    [dateLabel(day(today, -1)), 'Transferência · Distribuidora Modelo', '− R$ 1.240,00', <DemoBadge tone="warning">A conferir</DemoBadge>, 'Compra de estoque'],
+    [dateLabel(day(today, -1)), 'Pix recebido · Flor & Afeto', '+ R$ 189,90', <DemoBadge tone="success">Conferido</DemoBadge>, 'Pedido SA-1045'],
+    [dateLabel(day(today, -2)), 'Tarifa bancária', '− R$ 18,90', <DemoBadge tone="neutral">Sem lançamento ligado</DemoBadge>, '—'],
   ]
   return <div className="page-stack demo-preview-page">
-    <DemoHeading eyebrow="FINANCEIRO · CONCILIAÇÃO" title="Conciliação bancária" description="Exemplo de movimentos e vínculos para visualizar a conferência." />
+    <DemoHeading eyebrow="FINANCEIRO · EXTRATO DO BANCO" title="Conferir extrato do banco" description="Compare os movimentos do banco com os pedidos e gastos registrados no sistema." />
     <FinanceTabs current="banks" />
     <div className="demo-callout"><Icon name="shield" /><p><strong>Banco não conectado.</strong> Os movimentos abaixo são um extrato fictício; Open Finance e importação OFX não foram acionados.</p></div>
-    <DemoMetrics items={[{ label: 'Conta de exemplo', value: 'Banco Modelo', note: 'Conta fictícia · final 0001', icon: 'coin' }, { label: 'Movimentos pendentes', value: '1', note: 'Precisam de conferência', icon: 'clock' }, { label: 'Conciliados neste mês', value: '12', note: 'Grupos demonstrativos', icon: 'check' }]} />
-    <DemoPanel title="Movimentos do extrato" subtitle="Dados simulados para visualizar a conciliação" action={<ReadOnlyButton>Importar OFX</ReadOnlyButton>}><DemoTable caption="Movimentos bancários fictícios" headings={['Data', 'Descrição', 'Valor', 'Vínculo', 'Lançamento']} rows={rows} /></DemoPanel>
+    <DemoMetrics items={[{ label: 'Banco de exemplo', value: 'Banco Modelo', note: 'Conta fictícia · final 0001', icon: 'coin' }, { label: 'Movimentos a conferir', value: '1', note: 'Ainda sem gasto ligado', icon: 'clock' }, { label: 'Movimentos conferidos', value: '12', note: 'Neste mês · exemplos', icon: 'check' }]} />
+    <DemoPanel title="Movimentos do extrato" subtitle="Movimentos fictícios; a conta bancária não está conectada." action={<ReadOnlyButton>Importar extrato</ReadOnlyButton>}><DemoTable caption="Movimentos bancários fictícios" headings={['Data', 'O que apareceu no banco', 'Valor', 'Conferência', 'Relacionado a']} rows={rows} /></DemoPanel>
   </div>
 }
 
 function ReportsPreview({ today }: { today: string }) {
   const months = [{ label: 'Jun', value: 45 }, { label: 'Jul', value: 58 }, { label: 'Ago', value: 52 }, { label: 'Set', value: 69 }, { label: 'Out', value: 78 }, { label: 'Nov', value: 42 }]
   return <div className="page-stack demo-preview-page">
-    <DemoHeading eyebrow="GESTÃO · RESULTADOS" title="Relatórios" description="Vendas, recebimentos, custos e saídas pagas no período demonstrativo." action={<DemoBadge tone="accent">Últimos 30 dias</DemoBadge>} />
-    <DemoMetrics items={[{ label: 'Vendas concluídas', value: 'R$ 115.540,00', note: 'Após descontos', icon: 'coin' }, { label: 'Custo dos itens vendidos', value: 'R$ 63.547,00', note: 'Custo congelado nos pedidos', icon: 'box' }, { label: 'Despesas e entregas pagas', value: 'R$ 20.770,00', note: 'Saídas no período', icon: 'chart' }, { label: 'Resultado gerencial', value: 'R$ 31.223,00', note: 'Exemplo calculado', icon: 'check' }]} />
-    <div className="demo-two-column"><DemoPanel title="Vendas por mês" subtitle="Valores demonstrativos"><div className="demo-chart" role="img" aria-label="Gráfico fictício de vendas mensais">{months.map((month) => <div className="demo-chart-column" key={month.label}><span style={{ height: `${month.value}%` }} /><small>{month.label}</small></div>)}</div></DemoPanel><DemoPanel title="Composição do resultado" subtitle="Fórmula gerencial aprovada"><dl className="demo-detail-list"><div><dt>Vendas após descontos</dt><dd>R$ 115.540,00</dd></div><div><dt>Custo dos itens vendidos</dt><dd>− R$ 63.547,00</dd></div><div><dt>Despesas operacionais pagas</dt><dd>− R$ 16.616,00</dd></div><div><dt>Custos reais de entrega</dt><dd>− R$ 4.154,00</dd></div><div className="demo-total-definition"><dt>Resultado gerencial</dt><dd>R$ 31.223,00</dd></div></dl><p className="demo-footnote">Compras para estoque entram no resultado quando os itens são vendidos. Período de exemplo encerrado em {dateLabel(today)}.</p></DemoPanel></div>
-    <DemoPanel title="Pedidos concluídos" subtitle="Amostra do detalhamento"><DemoTable caption="Pedidos de exemplo no relatório" headings={['Data', 'Pedido / cliente', 'Venda', 'Custo dos itens', 'Cobertura']} rows={getOrders(today).slice(0, 4).map((order) => [dateLabel(order.createdOn), <span>{orderLink(order)}<small className="demo-table-subline">{getCustomers(today).find((customer) => customer.id === order.customerId)?.name}</small></span>, brl(order.totalCents), brl(Math.round(order.totalCents * 0.55)), <DemoBadge tone="success">Completa</DemoBadge>])} /></DemoPanel>
+    <DemoHeading eyebrow="GESTÃO · RESULTADOS" title="Relatórios" description="Veja quanto vendeu, quanto gastou e o lucro estimado no período." action={<DemoBadge tone="accent">Últimos 30 dias</DemoBadge>} />
+    <DemoMetrics className="demo-report-metrics" items={[{ label: 'Faturamento bruto', value: 'R$ 120.000,00', note: 'Soma dos pedidos antes dos descontos', icon: 'coin' }, { label: 'Descontos aplicados', value: 'R$ 4.460,00', note: 'Redução nos preços dos pedidos', icon: 'chart' }, { label: 'Faturamento líquido', value: 'R$ 115.540,00', note: 'Total após os descontos', icon: 'coin' }, { label: 'Custo dos produtos vendidos', value: 'R$ 63.547,00', note: 'Quanto custaram os itens vendidos', icon: 'box' }, { label: 'Gastos da empresa e entregas', value: 'R$ 20.770,00', note: 'Valores já pagos no período', icon: 'chart' }, { label: 'Lucro estimado antes de impostos', value: 'R$ 31.223,00', note: 'Veja como chegamos a esse valor abaixo', icon: 'check' }]} />
+    <div className="demo-two-column"><DemoPanel title="Faturamento por mês" subtitle="Valores de exemplo"><div className="demo-chart" role="img" aria-label="Gráfico fictício do faturamento mensal">{months.map((month) => <div className="demo-chart-column" key={month.label}><span style={{ height: `${month.value}%` }} /><small>{month.label}</small></div>)}</div></DemoPanel><DemoPanel title="Como calculamos o lucro" subtitle="Faturamento líquido menos produtos e gastos pagos"><dl className="demo-detail-list"><div><dt>Faturamento bruto</dt><dd>R$ 120.000,00</dd></div><div><dt>Descontos aplicados</dt><dd>− R$ 4.460,00</dd></div><div><dt>Faturamento líquido</dt><dd>R$ 115.540,00</dd></div><div><dt>Custo dos produtos vendidos</dt><dd>− R$ 63.547,00</dd></div><div><dt>Gastos da empresa pagos</dt><dd>− R$ 16.616,00</dd></div><div><dt>Pagamentos de entrega</dt><dd>− R$ 4.154,00</dd></div><div className="demo-total-definition"><dt>Lucro estimado antes de impostos</dt><dd>R$ 31.223,00</dd></div></dl><p className="demo-footnote">Compras de produtos entram na conta do lucro quando os produtos são vendidos. Período de exemplo encerrado em {dateLabel(today)}.</p></DemoPanel></div>
+    <DemoPanel title="Pedidos concluídos" subtitle="Exemplo do que compõe cada venda"><DemoTable caption="Pedidos de exemplo no relatório" headings={['Data', 'Pedido / cliente', 'Total da venda', 'Custo dos produtos', 'Custo registrado?']} rows={getOrders(today).slice(0, 4).map((order) => [dateLabel(order.createdOn), <span>{orderLink(order)}<small className="demo-table-subline">{getCustomers(today).find((customer) => customer.id === order.customerId)?.name}</small></span>, brl(order.totalCents), brl(Math.round(order.totalCents * 0.55)), <DemoBadge tone="success">Sim</DemoBadge>])} /></DemoPanel>
   </div>
 }
 
@@ -311,7 +329,7 @@ function SettingsPreview({ today }: { today: string }) {
 
 function MorePreview({ today }: { today: string }) {
   const links: Array<{ to: string; title: string; detail: string; icon: IconName }> = [
-    { to: '/clientes', title: 'Clientes', detail: 'Cadastros e histórico', icon: 'people' }, { to: '/atendimento', title: 'Atendimento', detail: 'Retornos e contatos', icon: 'phone' }, { to: '/whatsapp', title: 'WhatsApp', detail: 'Conversas de exemplo', icon: 'message' }, { to: '/pedidos', title: 'Pedidos', detail: 'Vendas e entregas', icon: 'bag' }, { to: '/catalogo', title: 'Catálogo', detail: 'Produtos e combos', icon: 'box' }, { to: '/estoque', title: 'Estoque', detail: 'Saldos e movimentações', icon: 'box' }, { to: '/entregas', title: 'Entregas', detail: 'Fila de despacho', icon: 'truck' }, { to: '/financeiro', title: 'Financeiro', detail: 'A receber e saídas', icon: 'coin' }, { to: '/relatorios', title: 'Relatórios', detail: 'Indicadores da operação', icon: 'chart' }, { to: '/configuracoes', title: 'Configurações', detail: 'Perfil e conexões', icon: 'settings' },
+    { to: '/clientes', title: 'Clientes', detail: 'Cadastros e histórico', icon: 'people' }, { to: '/atendimento', title: 'Atendimento', detail: 'Retornos e contatos', icon: 'phone' }, { to: '/whatsapp', title: 'WhatsApp', detail: 'Conversas de exemplo', icon: 'message' }, { to: '/pedidos', title: 'Pedidos', detail: 'Vendas e entregas', icon: 'bag' }, { to: '/catalogo', title: 'Catálogo', detail: 'Produtos e combos', icon: 'box' }, { to: '/estoque', title: 'Estoque', detail: 'Saldos e movimentações', icon: 'box' }, { to: '/entregas', title: 'Entregas', detail: 'Fila de despacho', icon: 'truck' }, { to: '/financeiro', title: 'Financeiro', detail: 'Pagamentos pendentes e gastos', icon: 'coin' }, { to: '/relatorios', title: 'Relatórios', detail: 'Vendas, gastos e lucro estimado', icon: 'chart' }, { to: '/configuracoes', title: 'Configurações', detail: 'Perfil e conexões', icon: 'settings' },
   ]
   return <div className="page-stack demo-preview-page"><DemoHeading eyebrow="NAVEGAÇÃO · MÓDULOS" title="Mais ferramentas" description={`Acesso a todas as áreas da demonstração · ${dateLabel(today)}.`} /><div className="demo-module-grid">{links.map((item) => <Link className="demo-module-card" key={item.to} to={item.to}><span><Icon name={item.icon} /></span><strong>{item.title}</strong><small>{item.detail}</small><Icon className="demo-module-arrow" name="arrow" /></Link>)}</div></div>
 }

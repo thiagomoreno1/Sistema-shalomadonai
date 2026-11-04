@@ -406,7 +406,7 @@ export function SettingsPage() {
               <div><dt>Conexão Open Finance</dt><dd>Não iniciada</dd></div>
               <div><dt>Teste de conexão</dt><dd>Não realizado</dd></div>
             </dl>
-            <p className="settings-integration-note"><Link to="/financeiro/bancos">Abrir conciliação bancária</Link></p>
+            <p className="settings-integration-note"><Link to="/financeiro/bancos">Conferir extrato bancário</Link></p>
           </article>
 
           <article className="settings-integration-card" aria-labelledby="fiscal-title">

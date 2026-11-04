@@ -61,7 +61,7 @@ const deliveryStatusLabels: Record<DeliveryStatus, string> = {
   ready: 'Pronta para despacho',
   dispatched: 'Em rota',
   delivered: 'Entregue',
-  attempted: 'Tentativa sem sucesso',
+  attempted: 'Entrega não concluída',
   rescheduled: 'Reagendada',
   returned: 'Devolvida',
 }
@@ -439,7 +439,7 @@ export function OrderDetailPage() {
       }
     }
     if (parsedPaymentAmount > outstandingCents) {
-      setPaymentError('O valor recebido não pode exceder o saldo em aberto do pedido.')
+      setPaymentError('O valor pago não pode ser maior do que falta receber neste pedido.')
       return
     }
     const receivedAtIso = receivedAt ? businessLocalDateTimeToIso(receivedAt) : null
@@ -549,7 +549,7 @@ export function OrderDetailPage() {
       <section className="order-balance-grid" aria-label="Resumo financeiro do pedido">
         <article className="surface-panel order-balance-card"><span>Total do pedido</span><strong>{formatBRL(order.total_cents)}</strong><small>Inclui itens, taxa de entrega e desconto informados.</small></article>
         <article className="surface-panel order-balance-card"><span>Recebido</span><strong>{formatBRL(receivedCents)}</strong><small>Registros manuais associados ao pedido.</small></article>
-        <article className="surface-panel order-balance-card"><span>{order.status === 'open' ? 'Saldo em aberto' : 'Saldo após cancelamento'}</span><strong>{formatBRL(outstandingCents)}</strong><small>{order.status === 'open' ? 'Sem juros ou encargos automáticos.' : 'Este pedido está cancelado.'}</small></article>
+        <article className="surface-panel order-balance-card"><span>{order.status === 'open' ? 'Falta receber' : 'Valor após cancelamento'}</span><strong>{formatBRL(outstandingCents)}</strong><small>{order.status === 'open' ? 'Valor ainda não pago pelo cliente.' : 'Este pedido está cancelado.'}</small></article>
       </section>
 
       {showCancelForm && order.status === 'open' && payments.length === 0 && !pickupEvent && (
@@ -600,7 +600,7 @@ export function OrderDetailPage() {
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">RETIRADA PELO CLIENTE</p><h2 id="order-pickup-heading">Entrega ao cliente</h2></div>{pickupEvent && <span className="delivery-status delivery-status-delivered">Retirada registrada</span>}</div>
         {pickupEvent ? <>
           <p className="section-footnote">Registrada em {formatOrderTimestamp(pickupEvent.occurred_at, true)}. Os produtos com estoque configurado foram baixados; o evento não entrou na fila de entregas.</p>
-          {pickupEvent.stock_warnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Saldo negativo após a retirada:</strong><ul>{pickupEvent.stock_warnings.map((warning) => <li key={warning.product_id}>{warning.product_name}: {formatQuantity(warning.quantity_on_hand)} {warning.inventory_unit}.</li>)}</ul></div>}
+          {pickupEvent.stock_warnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Estoque abaixo de zero após a retirada:</strong><ul>{pickupEvent.stock_warnings.map((warning) => <li key={warning.product_id}>{warning.product_name}: {formatQuantity(warning.quantity_on_hand)} {warning.inventory_unit}.</li>)}</ul></div>}
         </> : order.status === 'open' ? <>
           <p className="section-footnote">Este pedido não foi marcado para entrega e não aparece na fila. Registre a retirada quando o cliente receber os produtos; o estoque baixa nesse momento.</p>
           <button className="button button-primary" disabled={pickupPreviewLoading} onClick={() => void startPickup()} type="button"><Icon name="box" /> Registrar retirada pelo cliente</button>
@@ -616,9 +616,9 @@ export function OrderDetailPage() {
           {pickupPreviewItems.map((item) => <li className={item.projected < 0 ? 'pickup-stock-short' : ''} key={item.product_id}><span><strong>{item.product_name}</strong><small>Disponível {formatQuantity(item.available)} {item.inventory_unit} · quantidade do pedido {formatQuantity(item.needed)} {item.inventory_unit}</small></span><span><small>Após a retirada</small><strong>{formatQuantity(item.projected)} {item.inventory_unit}</strong></span></li>)}
         </ul>}
         {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length > 0 && pickupWarnings.length === 0 && <p className="form-message form-message-success" role="status">Os saldos consultados cobrem as quantidades controladas. A operação final será conferida novamente e ficará no histórico.</p>}
-        {!pickupPreviewLoading && pickupPreviewReady && pickupWarnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Saldo insuficiente para esta retirada.</strong><span>A retirada pode continuar; o saldo negativo será permitido e o resultado será registrado. O saldo pode mudar antes da confirmação.</span></div>}
+        {!pickupPreviewLoading && pickupPreviewReady && pickupWarnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Não há estoque suficiente para esta retirada.</strong><span>A retirada pode continuar; a quantidade ficará abaixo de zero e o aviso será registrado. O estoque pode mudar antes da confirmação.</span></div>}
         {pickupError && <p className="form-message form-message-error" role="alert">{pickupError}</p>}
-        <div className="record-form-actions">{!pickupPreviewReady && !pickupPreviewLoading && <button className="button button-secondary" disabled={pickupSaving} onClick={() => void previewPickupStock()} type="button">Conferir saldos novamente</button>}<button className="button button-primary" disabled={pickupSaving || pickupPreviewLoading || !pickupPreviewReady} type="submit">{pickupSaving ? 'Registrando…' : pickupUncertain ? 'Tentar novamente sem alterar a ação' : pickupWarnings.length > 0 ? 'Confirmar retirada com saldo negativo' : 'Confirmar retirada e baixar estoque'}</button><button className="text-button" disabled={pickupSaving || pickupPreviewLoading} onClick={closePickupForm} type="button">Manter pedido</button></div>
+        <div className="record-form-actions">{!pickupPreviewReady && !pickupPreviewLoading && <button className="button button-secondary" disabled={pickupSaving} onClick={() => void previewPickupStock()} type="button">Conferir estoque novamente</button>}<button className="button button-primary" disabled={pickupSaving || pickupPreviewLoading || !pickupPreviewReady} type="submit">{pickupSaving ? 'Registrando…' : pickupUncertain ? 'Tentar novamente sem alterar a ação' : pickupWarnings.length > 0 ? 'Confirmar retirada mesmo sem estoque suficiente' : 'Confirmar retirada e atualizar estoque'}</button><button className="text-button" disabled={pickupSaving || pickupPreviewLoading} onClick={closePickupForm} type="button">Manter pedido</button></div>
       </form>}
 
       {order.requires_delivery && <section className="surface-panel record-panel order-delivery-panel" aria-labelledby="order-delivery-heading">
@@ -626,7 +626,7 @@ export function OrderDetailPage() {
         {!delivery ? <p className="form-message form-message-warning" role="status">Este pedido foi marcado para entrega, mas não há registro de entrega carregado. Atualize o histórico antes de continuar.</p> : <>
           <dl className="customer-facts order-address-facts"><div><dt>Endereço</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div><div><dt>Entregador</dt><dd>{deliveryWorkerName || 'Sem atribuição'}</dd></div><div><dt>Agendamento</dt><dd>{delivery.scheduled_on ? formatBusinessDate(delivery.scheduled_on) + (delivery.time_window ? ' · ' + delivery.time_window : '') : 'Sem data ou horário definido'}</dd></div><div><dt>Observações da entrega</dt><dd>{delivery.notes || 'Nenhuma observação'}</dd></div></dl>
           <div className="record-form-actions"><Link className="button button-secondary" to="/entregas">Abrir fila de entregas</Link>{delivery.dispatched_at && <span className="section-footnote">Despachado em {formatOrderTimestamp(delivery.dispatched_at, true)}</span>}{delivery.delivered_at && <span className="section-footnote">Concluído em {formatOrderTimestamp(delivery.delivered_at, true)}</span>}</div>
-          {deliveryEvents.length > 0 && <ul className="timeline-list order-delivery-history">{deliveryEvents.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Entrega criada' : event.event_type === 'plan_updated' ? 'Planejamento atualizado' : (event.from_status ? deliveryStatusLabels[event.from_status] + ' → ' : '') + deliveryStatusLabels[event.to_status]}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.note && <p>{event.note}</p>}{event.next_step && <p>Próxima ação: {event.next_step}</p>}{event.stock_warnings.length > 0 && <p className="delivery-stock-warning">Saldo negativo após o despacho: {event.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(warning.quantity_on_hand) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}</ul>}
+          {deliveryEvents.length > 0 && <ul className="timeline-list order-delivery-history">{deliveryEvents.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Entrega criada' : event.event_type === 'plan_updated' ? 'Horário ou entregador atualizado' : (event.from_status ? deliveryStatusLabels[event.from_status] + ' → ' : '') + deliveryStatusLabels[event.to_status]}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.note && <p>{event.note}</p>}{event.next_step && <p>Próximo passo: {event.next_step}</p>}{event.stock_warnings.length > 0 && <p className="delivery-stock-warning">Estoque abaixo de zero após o despacho: {event.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(warning.quantity_on_hand) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}</ul>}
         </>}
       </section>}
 
@@ -661,8 +661,8 @@ export function OrderDetailPage() {
               const overdue = order.status === 'open' && balance > 0 && installment.due_on < today
               return <li key={installment.id}>
                 <span className="order-installment-number">{installment.installment_number}</span>
-                <span className="order-installment-copy"><strong>{formatBusinessDate(installment.due_on)}</strong><small>{overdue ? 'Vencido · ' : ''}{installment.payment_method || 'Forma não informada'}</small></span>
-                <span className="order-installment-values"><strong>{formatBRL(installment.amount_cents)}</strong><small>{order.status === 'cancelled' ? 'Cancelado · sem saldo a receber' : `Recebido ${formatBRL(paid)} · saldo ${formatBRL(balance)}`}</small></span>
+                <span className="order-installment-copy"><strong>{formatBusinessDate(installment.due_on)}</strong><small>{overdue ? 'Atrasado · ' : ''}{installment.payment_method || 'Forma não informada'}</small></span>
+                <span className="order-installment-values"><strong>{formatBRL(installment.amount_cents)}</strong><small>{order.status === 'cancelled' ? 'Pedido cancelado · sem pagamento pendente' : `Pago ${formatBRL(paid)} · falta receber ${formatBRL(balance)}`}</small></span>
               </li>
             })}
           </ul>}
@@ -689,7 +689,7 @@ export function OrderDetailPage() {
       <section className="surface-panel record-panel" aria-labelledby="order-events-heading">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">HISTÓRICO</p><h2 id="order-events-heading">Eventos do pedido</h2></div></div>
         {events.length === 0 ? <p className="inline-state">Nenhum evento registrado.</p> : <ul className="timeline-list">
-          {events.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Pedido criado' : event.event_type === 'picked_up' ? 'Retirada pelo cliente registrada' : 'Pedido cancelado'}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.reason && <p>{event.reason}</p>}{event.event_type === 'picked_up' && event.stock_warnings.length > 0 && <p className="delivery-stock-warning">Saldo negativo após a retirada: {event.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(warning.quantity_on_hand) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}
+          {events.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Pedido criado' : event.event_type === 'picked_up' ? 'Retirada pelo cliente registrada' : 'Pedido cancelado'}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.reason && <p>{event.reason}</p>}{event.event_type === 'picked_up' && event.stock_warnings.length > 0 && <p className="delivery-stock-warning">Estoque abaixo de zero após a retirada: {event.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(warning.quantity_on_hand) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}
         </ul>}
       </section>
     </div>

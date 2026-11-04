@@ -121,7 +121,7 @@
 .dashboard-financial-heading h2 { margin: 0; color: var(--ink); font-size: 18px; font-weight: 650; }
 .dashboard-financial-heading .eyebrow { margin-bottom: 4px; }
 .dashboard-financial-period { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
-.dashboard-financial-indicators { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.dashboard-financial-indicators { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .dashboard-financial-indicators .indicator-card { min-width: 0; min-height: 112px; padding: 13px 14px; }
 .dashboard-financial-indicators .indicator-card p { min-height: 32px; line-height: 1.4; }
 .dashboard-financial-indicators .indicator-card strong { margin: 5px 0 3px; color: var(--ink); font-size: clamp(17px, 1.45vw, 23px); overflow-wrap: anywhere; }
@@ -130,7 +130,7 @@
 .dashboard-result-breakdown-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .dashboard-result-breakdown-heading h3 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 650; }
 .dashboard-result-breakdown-heading > span { color: var(--muted); font-size: 11px; }
-.dashboard-result-breakdown dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; margin: 0; }
+.dashboard-result-breakdown dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 0; }
 .dashboard-result-breakdown dl > div { display: grid; align-content: start; gap: 7px; min-width: 0; padding: 10px 11px; border-left: 2px solid var(--line-strong); background: var(--accent-wash); }
 .dashboard-result-breakdown dl > div.is-total { border-left-color: var(--accent); background: var(--accent-soft); }
 .dashboard-result-breakdown dt { color: var(--muted); font-size: 11px; line-height: 1.4; }
@@ -452,6 +452,12 @@
 .search-field svg { width: 17px; height: 17px; flex: 0 0 auto; color: var(--muted); }
 .search-field input { width: 100%; min-width: 0; height: 42px; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 14px; }
 .search-field:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
+.product-category-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 16px; }
+.product-category-filters button { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--paper); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease; }
+.product-category-filters button:hover { border-color: var(--line-strong); color: var(--ink); }
+.product-category-filters button.is-active { border-color: var(--line-strong); color: var(--accent); background: var(--accent-wash); }
+.product-category-filters button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.product-category-filters button span { min-width: 18px; padding: 2px 5px; border-radius: 999px; color: inherit; background: var(--accent-wash); text-align: center; font-size: 10px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 .record-list, .timeline-list, .follow-up-list { margin: 0; padding: 0; list-style: none; }
 .record-list { border-top: 1px solid var(--line); }
@@ -491,9 +497,8 @@
 .order-list-main strong { color: var(--ink); font-size: 13px; }
 .order-list-main small { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .order-status { display: inline-flex; margin-top: 6px; padding: 3px 7px; border-radius: 999px; font-size: 9px; font-weight: 650; }
-.order-status-open { color: var(--success); background: var(--accent-soft); }
-.order-status-received { color: var(--success); background: var(--success-soft); }
-.order-status-cancelled { color: var(--muted); background: var(--accent-soft); }
+.order-status-open, .order-status-received { color: var(--muted); background: var(--accent-wash); }
+.order-status-cancelled { color: var(--danger); background: var(--danger-soft); }
 .order-remove-button { min-height: 44px; }
 .receivable-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .receivable-summary-card { display: grid; gap: 5px; padding: 16px; }
@@ -594,9 +599,8 @@
 .delivery-customer-line > strong { color: var(--ink); font-size: 13px; }
 .delivery-card-main > small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .delivery-card-main > small a, .delivery-facts a { color: var(--accent); }
-.delivery-status { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 7px; border-radius: 999px; color: var(--muted); background: var(--success-soft); font-size: 9px; font-weight: 650; }
-.delivery-status-dispatched, .delivery-status-attempted { color: var(--warning); background: var(--warning-soft); }
-.delivery-status-delivered { color: var(--success); background: var(--success-soft); }
+.delivery-status { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 7px; border-radius: 999px; color: var(--muted); background: var(--accent-wash); font-size: 9px; font-weight: 650; }
+.delivery-status-dispatched, .delivery-status-attempted, .delivery-status-delivered { color: var(--muted); background: var(--accent-wash); }
 .delivery-status-returned { color: var(--danger); background: var(--danger-soft); }
 .delivery-expand-button { min-width: 72px; min-height: 46px; padding-inline: 11px; }
 .delivery-card-summary { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr); gap: 12px; margin: 12px 0 0 49px; }
