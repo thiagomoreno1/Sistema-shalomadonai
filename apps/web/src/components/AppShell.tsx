@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { useBusiness } from '../business/BusinessContext'
 import { supabaseClient } from '../lib/supabase'
+import { clearDemoPreview, isDemoPreviewEnabled } from '../lib/demoPreview'
 import { Icon, type IconName } from './Icon'
 import { ThemeToggle } from './ThemeToggle'
 
@@ -52,10 +54,17 @@ function getRouteLabel(pathname: string) {
 
 export function AppShell() {
   const { session } = useAuth()
+  const { role } = useBusiness()
   const navigate = useNavigate()
   const location = useLocation()
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState<string | null>(null)
+  const demoPreview = role === 'owner' && isDemoPreviewEnabled()
+
+  function exitDemoPreview() {
+    clearDemoPreview()
+    navigate('/', { replace: true })
+  }
 
   async function handleSignOut() {
     if (!supabaseClient) return
@@ -111,6 +120,12 @@ export function AppShell() {
         </header>
 
         {signOutError && <p className="global-message" role="alert">{signOutError}</p>}
+
+        {demoPreview && <div className="demo-mode-banner" role="status">
+          <Icon name="chart" />
+          <p><strong>Modo demonstração.</strong> Dados fictícios, somente visualização; nada será salvo.</p>
+          <button className="demo-mode-exit" onClick={exitDemoPreview} type="button">Sair da prévia</button>
+        </div>}
 
         <main className="main-content" id="main-content" tabIndex={-1}>
           <Outlet />

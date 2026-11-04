@@ -5,6 +5,7 @@ import { Icon } from '../components/Icon'
 import { DashboardTrends, type DashboardTrendDay, type DashboardTrendPeriod } from '../components/DashboardTrends'
 import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
 import { useBusinessToday } from '../lib/useBusinessToday'
+import { isDemoPreviewEnabled } from '../lib/demoPreview'
 import { supabaseClient } from '../lib/supabase'
 import './DashboardDesignReferencesPage.css'
 
@@ -33,7 +34,7 @@ type DashboardPriorities = {
 type RecentOrder = {
   id: string
   customer_name_snapshot: string
-  status: 'open' | 'cancelled'
+  status: 'open' | 'completed' | 'cancelled'
   requires_delivery: boolean
   created_at: string
 }
@@ -95,16 +96,16 @@ function createDemoPriorities(today: string): DashboardPriorities {
       due_today_balance_cents: '8700',
       items: [
         { installment_id: 'demo-installment-1', order_id: 'demo-order-1', installment_number: 2, due_on: twoDaysAgo, customer_name: 'Mercado Boa Praça', balance_cents: '12000', overdue: true },
-        { installment_id: 'demo-installment-4', order_id: 'demo-order-4', installment_number: 1, due_on: yesterday, customer_name: 'Restaurante Sabor Caseiro', balance_cents: '19800', overdue: true },
+        { installment_id: 'demo-installment-4', order_id: 'demo-order-5', installment_number: 1, due_on: yesterday, customer_name: 'Lavanderia Ponto Limpo', balance_cents: '19800', overdue: true },
         { installment_id: 'demo-installment-2', order_id: 'demo-order-2', installment_number: 1, due_on: today, customer_name: 'Condomínio Vila Verde', balance_cents: '8700', overdue: false },
       ],
     },
     deliveries: {
       pending_count: 3,
       items: [
-        { delivery_id: 'demo-delivery-1', order_id: 'demo-order-3', customer_name: 'Mercado Boa Praça', status: 'attempted', scheduled_on: today, time_window: '09:00–12:00', delivery_worker_name: 'Rafael' },
-        { delivery_id: 'demo-delivery-2', order_id: 'demo-order-4', customer_name: 'Condomínio Vila Verde', status: 'awaiting_separation', scheduled_on: today, time_window: '13:00–16:00', delivery_worker_name: 'João' },
-        { delivery_id: 'demo-delivery-3', order_id: 'demo-order-5', customer_name: 'Restaurante Sabor Caseiro', status: 'rescheduled', scheduled_on: today, time_window: '16:00–18:00', delivery_worker_name: 'Rafael' },
+        { delivery_id: 'demo-delivery-1', order_id: 'demo-order-1', customer_name: 'Mercado Boa Praça', status: 'awaiting_separation', scheduled_on: today, time_window: '09:00–12:00', delivery_worker_name: 'Rafael' },
+        { delivery_id: 'demo-delivery-2', order_id: 'demo-order-3', customer_name: 'Restaurante Sabor Caseiro', status: 'dispatched', scheduled_on: today, time_window: '13:00–16:00', delivery_worker_name: 'João' },
+        { delivery_id: 'demo-delivery-3', order_id: 'demo-order-5', customer_name: 'Lavanderia Ponto Limpo', status: 'attempted', scheduled_on: today, time_window: '16:00–18:00', delivery_worker_name: 'Rafael' },
       ],
     },
     inventory: {
@@ -161,7 +162,7 @@ function createDemoRecentOrders(today: string): RecentOrder[] {
     { id: 'demo-order-1', customer_name_snapshot: 'Mercado Boa Praça', status: 'open', requires_delivery: true, created_at: `${today}T13:10:00-03:00` },
     { id: 'demo-order-2', customer_name_snapshot: 'Condomínio Vila Verde', status: 'open', requires_delivery: false, created_at: `${today}T11:45:00-03:00` },
     { id: 'demo-order-3', customer_name_snapshot: 'Restaurante Sabor Caseiro', status: 'open', requires_delivery: true, created_at: `${shiftCalendarDate(today, -1)}T16:20:00-03:00` },
-    { id: 'demo-order-4', customer_name_snapshot: 'Lavanderia Ponto Limpo', status: 'cancelled', requires_delivery: true, created_at: `${shiftCalendarDate(today, -2)}T09:30:00-03:00` },
+    { id: 'demo-order-4', customer_name_snapshot: 'Flor & Afeto', status: 'completed', requires_delivery: true, created_at: `${shiftCalendarDate(today, -2)}T09:30:00-03:00` },
   ]
 }
 
@@ -203,7 +204,7 @@ function readTrendDays(value: unknown, startOn: string, period: DashboardTrendPe
 
 export function DashboardPage() {
   const { id: businessId, role } = useBusiness()
-  const demoPreview = role === 'owner' && import.meta.env.DEV && new URLSearchParams(window.location.search).get('demo') === '1'
+  const demoPreview = role === 'owner' && isDemoPreviewEnabled()
   const today = useBusinessToday()
   const businessDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeZone: 'America/Sao_Paulo' }).format(new Date(`${today}T12:00:00Z`))
   const prioritiesScopeKey = `${businessId}:${role}:${today}`
@@ -370,8 +371,6 @@ export function DashboardPage() {
         {role === 'owner' && <Link className="dashboard-reference-link" to="/referencias-central"><Icon name="chart" /> Comparar visuais</Link>}
       </header>
 
-      {demoPreview && <div className="dashboard-reference-notice" role="status"><Icon name="chart" /><p><strong>Prévia com dados fictícios.</strong> As métricas, os pedidos e os alertas desta Central são exemplos locais. Nada foi gravado no banco; as demais telas continuam com os dados reais.</p></div>}
-
       {role === 'owner' ? <>
       <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
         <Link className="dashboard-summary-link is-followups" to="/atendimento">
@@ -527,7 +526,7 @@ export function DashboardPage() {
                 <Link to={demoPreview ? '/pedidos' : `/pedidos/${order.id}`}>
                   <span className={`dashboard-order-dot${order.status === 'cancelled' ? ' is-cancelled' : ''}`} aria-hidden="true" />
                   <span className="dashboard-recent-order-copy"><strong>{order.customer_name_snapshot}</strong><small>{formatOrderDate(order.created_at)} · {order.requires_delivery ? 'Entrega' : 'Retirada'}</small></span>
-                  <span className={`dashboard-recent-order-status${order.status === 'cancelled' ? ' is-cancelled' : ''}`}>{order.status === 'cancelled' ? 'Cancelado' : 'Pedido ativo'}</span>
+                  <span className={`dashboard-recent-order-status${order.status === 'cancelled' ? ' is-cancelled' : ''}`}>{order.status === 'cancelled' ? 'Cancelado' : order.status === 'completed' ? 'Concluído' : 'Pedido ativo'}</span>
                   <Icon className="dashboard-row-arrow" name="arrow" />
                 </Link>
               </li>)}

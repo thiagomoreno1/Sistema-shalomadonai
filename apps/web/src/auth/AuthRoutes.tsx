@@ -1,8 +1,10 @@
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from './AuthContext'
 import { AppShell } from '../components/AppShell'
 import { BusinessProvider } from '../business/BusinessProvider'
+import { useBusiness } from '../business/BusinessContext'
+import { isDemoPreviewEnabled } from '../lib/demoPreview'
 import { LoadingScreen, SetupPage } from '../pages/SetupPage'
 
 const DashboardPage = lazy(async () => ({ default: (await import('../pages/DashboardPage')).DashboardPage }))
@@ -27,6 +29,14 @@ const SettingsPage = lazy(async () => ({ default: (await import('../pages/Settin
 const SignInPage = lazy(async () => ({ default: (await import('../pages/SignInPage')).SignInPage }))
 const SignUpPage = lazy(async () => ({ default: (await import('../pages/SignUpPage')).SignUpPage }))
 const PasswordRecoveryPage = lazy(async () => ({ default: (await import('../pages/SignInPage')).PasswordRecoveryPage }))
+const DemoPreviewPage = lazy(async () => ({ default: (await import('../pages/DemoPreviewPage')).DemoPreviewPage }))
+
+function DemoPreviewRoute() {
+  const { pathname } = useLocation()
+  const { role } = useBusiness()
+  if (role === 'owner' && isDemoPreviewEnabled() && pathname !== '/') return <DemoPreviewPage />
+  return <Outlet />
+}
 
 export function AuthRoutes() {
   const { configured, loading, session, sessionError } = useAuth()
@@ -44,25 +54,27 @@ export function AuthRoutes() {
           <Route path="/referencias-central" element={<DashboardDesignReferencesPage />} />
           <Route path="/entrar" element={session ? <Navigate replace to="/" /> : <SignInPage />} />
           <Route element={session ? <BusinessProvider><AppShell /></BusinessProvider> : <Navigate replace to="/entrar" />}>
-            <Route index element={<DashboardPage />} />
-            <Route path="clientes" element={<CustomersPage />} />
-            <Route path="clientes/:customerId" element={<CustomerDetailPage />} />
-            <Route path="atendimento" element={<FollowUpsPage />} />
-            <Route path="whatsapp" element={<WhatsAppPanelPage />} />
-            <Route path="whatsapp/caixa-shalom" element={<WhatsAppInboxPage />} />
-            <Route path="pedidos" element={<OrdersPage />} />
-            <Route path="pedidos/novo" element={<NewOrderPage />} />
-            <Route path="pedidos/:orderId" element={<OrderDetailPage />} />
-            <Route path="catalogo" element={<ProductsPage />} />
-            <Route path="estoque" element={<InventoryPage />} />
-            <Route path="entregas" element={<DeliveriesPage />} />
-            <Route path="financeiro" element={<ReceivablesPage />} />
-            <Route path="financeiro/saidas" element={<FinancialOutflowsPage />} />
-            <Route path="financeiro/bancos" element={<BankReconciliationPage />} />
-            <Route path="relatorios" element={<ReportsPage />} />
-            <Route path="mais" element={<MorePage />} />
-            <Route path="configuracoes" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate replace to="/" />} />
+            <Route element={<DemoPreviewRoute />}>
+              <Route index element={<DashboardPage />} />
+              <Route path="clientes" element={<CustomersPage />} />
+              <Route path="clientes/:customerId" element={<CustomerDetailPage />} />
+              <Route path="atendimento" element={<FollowUpsPage />} />
+              <Route path="whatsapp" element={<WhatsAppPanelPage />} />
+              <Route path="whatsapp/caixa-shalom" element={<WhatsAppInboxPage />} />
+              <Route path="pedidos" element={<OrdersPage />} />
+              <Route path="pedidos/novo" element={<NewOrderPage />} />
+              <Route path="pedidos/:orderId" element={<OrderDetailPage />} />
+              <Route path="catalogo" element={<ProductsPage />} />
+              <Route path="estoque" element={<InventoryPage />} />
+              <Route path="entregas" element={<DeliveriesPage />} />
+              <Route path="financeiro" element={<ReceivablesPage />} />
+              <Route path="financeiro/saidas" element={<FinancialOutflowsPage />} />
+              <Route path="financeiro/bancos" element={<BankReconciliationPage />} />
+              <Route path="relatorios" element={<ReportsPage />} />
+              <Route path="mais" element={<MorePage />} />
+              <Route path="configuracoes" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate replace to="/" />} />
+            </Route>
           </Route>
           <Route path="*" element={<Navigate replace to={session ? '/' : '/entrar'} />} />
         </Routes>
