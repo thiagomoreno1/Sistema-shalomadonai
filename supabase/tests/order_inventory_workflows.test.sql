@@ -52,6 +52,7 @@ values (
   pg_temp.uid('workflow-customer'), pg_temp.uid('workflow-business'),
   'Synthetic customer', pg_temp.uid('workflow-owner')
 );
+select set_config('request.jwt.claim.sub', pg_temp.uid('workflow-owner')::text, true);
 insert into public.products (
   id, business_id, name, sale_price_cents, cost_cents, created_by
 ) values (
@@ -62,7 +63,6 @@ insert into public.products (
 create temp table workflow_results (name text primary key, id uuid);
 grant all on workflow_results to authenticated;
 set local role authenticated;
-select set_config('request.jwt.claim.sub', pg_temp.uid('workflow-owner')::text, true);
 
 select has_function('public', 'create_order', array[
   'uuid', 'uuid', 'text', 'bigint', 'bigint', 'text', 'jsonb', 'jsonb', 'boolean', 'uuid'
