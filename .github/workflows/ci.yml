@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check Edge Function types
+        run: npx --yes deno@2.9.6 check supabase/functions/belvo-open-finance/index.ts supabase/functions/belvo-sandbox-webhook/index.ts supabase/functions/chatwoot-inbox/index.ts
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Build production app
+        run: npm run build
+
+  database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.0
+
+      - name: Start local database and apply migrations
+        run: supabase db start
+
+      - name: Lint local database schema
+        run: supabase db lint --schema public,private --level warning
+
+      - name: Run local pgTAP suites
+        run: supabase test db

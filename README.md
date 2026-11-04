@@ -56,6 +56,8 @@ npm run preview
 
 `npm test` runs the web unit tests and the local Belvo webhook contract test. The webhook suite uses a fake token and does not contact Belvo or Supabase; it requires Deno 2.9.6, which the script can fetch temporarily through `npx`.
 
+Pushes to `main` and pull requests targeting `main` run tests, check all Edge Function types, lint, and build through GitHub Actions. A separate job starts the local Supabase database, applies repository migrations, lints the schema, and runs the pgTAP suites; it has no hosted-project credentials.
+
 ## Current setup status — 2026-11-03
 
 The hosted Supabase project is `ACTIVE_HEALTHY`. Hosted Auth currently allows email sign-up and auto-confirms email; new accounts still receive no business data access until the owner approves their request. The owner's confirmed Auth account, Shalom Adonai business, and owner membership are present. The hosted database has 22 recorded migrations; the repository has 34 migration files, with 12 newer migrations in `supabase/migrations/` not applied yet, so some screens that call their database functions currently return setup errors. Customer interaction entry falls back to its prior RPC until the pending idempotency migration is applied; retry protection is not active on that legacy path. Multiple named customer addresses are implemented in the repository, but the hosted address table is pending; the legacy principal address remains editable. `supabase/config.toml` describes the local CLI stack; it does not configure the hosted project's Auth or database.
