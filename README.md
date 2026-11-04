@@ -62,6 +62,8 @@ The repository already includes customer and product records, named customer del
 
 Stable production hosting and domain, hosted Auth redirects and recovery email delivery, end-to-end verification of the hosted schema and permissions, and the WhatsApp, banking, and fiscal provider integrations remain to be completed. WhatsApp number onboarding is intentionally deferred; fiscal details require the accountant's guidance. The temporary preview is for review, not production.
 
+See the [rollout readiness checklist](docs/rollout-readiness-2026-11-04.md) for the latest read-only migration audit, deployment order, local verification limits, and owner/third-party setup steps.
+
 ## Manual grouped bank reconciliation — 2026-11-03 (local; hosted rollout pending)
 
 The repository supports manually linking one bank movement to 1–50 full financial records with an exact sum in cents: credits use receipts and debits use paid outflows. No partial allocation, source splitting, fee adjustment, or automatic match is supported. The selection shows the total and difference and requires explicit confirmation. Reversing a group requires a reason and atomically reverses every link while retaining history. Existing one-to-one records remain compatible and reverse individually. Reconciliation does not create receipts/outflows or change cash and managerial totals.
