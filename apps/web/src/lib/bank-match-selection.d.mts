@@ -5,3 +5,4 @@ export function matchSelectionSummary(movementAmount: string | number, items: (M
 export function updateMatchSelection(previous: MatchSelection, items: MatchItem[], newRequestId: () => string): MatchSelection
 export function isMissingGroupingSchema(error: unknown): boolean
 export function loadVoidedOutflows(ids: string[], loadChunk: (ids: string[]) => PromiseLike<{ data: { outflow_id: string }[] | null; error: unknown }>): Promise<{ data: { outflow_id: string }[] | null; error: unknown }>
+export function loadIdBatches<T>(ids: string[], loadChunk: (ids: string[]) => PromiseLike<{ data: T[] | null; error: unknown }>): Promise<{ data: T[] | null; error: unknown }>

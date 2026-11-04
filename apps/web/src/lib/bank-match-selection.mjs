@@ -36,3 +36,14 @@ export async function loadVoidedOutflows(ids, loadChunk) {
   }
   return { data: rows, error: null }
 }
+
+export async function loadIdBatches(ids, loadChunk) {
+  const uniqueIds = [...new Set(ids)]
+  const rows = []
+  for (let offset = 0; offset < uniqueIds.length; offset += 100) {
+    const { data, error } = await loadChunk(uniqueIds.slice(offset, offset + 100))
+    if (error) return { data: null, error }
+    rows.push(...(data ?? []))
+  }
+  return { data: rows, error: null }
+}

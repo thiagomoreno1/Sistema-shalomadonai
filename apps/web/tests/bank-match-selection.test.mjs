@@ -89,6 +89,36 @@ test('failed void exclusion batch rejects the incomplete set and stops loading',
   assert.equal(queries, 2)
 })
 
+test('chunks ID filters beyond the API row cap and merges every batch', async () => {
+  const { loadIdBatches } = await import('../src/lib/bank-match-selection.mjs')
+  const ids = Array.from({ length: 2105 }, (_, i) => `id-${i}`)
+  const batchSizes = []
+  const result = await loadIdBatches(ids, async (batch) => {
+    batchSizes.push(batch.length)
+    return { data: batch.map((id) => ({ id })), error: null }
+  })
+
+  assert.equal(result.error, null)
+  assert.equal(result.data.length, 2105)
+  assert.equal(result.data[2104].id, 'id-2104')
+  assert.ok(batchSizes.every((size) => size <= 100))
+  assert.deepEqual(batchSizes.slice(0, -1), Array.from({ length: 21 }, () => 100))
+  assert.equal(batchSizes.at(-1), 5)
+})
+
+test('failed ID filter batch returns the original error without partial data', async () => {
+  const { loadIdBatches } = await import('../src/lib/bank-match-selection.mjs')
+  const failure = { code: 'XX000', message: 'match lookup failed' }
+  let queries = 0
+  const result = await loadIdBatches(Array.from({ length: 250 }, (_, i) => `id-${i}`), async (batch) => {
+    queries += 1
+    return queries === 2 ? { data: null, error: failure } : { data: batch.map((id) => ({ id })), error: null }
+  })
+
+  assert.deepEqual(result, { data: null, error: failure })
+  assert.equal(queries, 2)
+})
+
 test('no candidate outflows requires no void lookup', async () => {
   const result = await loadVoidedOutflows([], async () => { throw new Error('empty filter must not be queried') })
   assert.deepEqual(result, { data: [], error: null })

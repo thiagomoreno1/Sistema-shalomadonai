@@ -6,7 +6,7 @@ import { Icon } from '../components/Icon'
 import { businessToday, formatBRLExact, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { useBusiness } from '../business/BusinessContext'
 import { supabaseClient } from '../lib/supabase'
-import { isMissingGroupingSchema, loadVoidedOutflows, matchSelectionSummary, updateMatchSelection, type MatchSelection } from '../lib/bank-match-selection.mjs'
+import { isMissingGroupingSchema, loadIdBatches, loadVoidedOutflows, matchSelectionSummary, updateMatchSelection, type MatchSelection } from '../lib/bank-match-selection.mjs'
 
 const PAGE_SIZE = 25
 
@@ -114,6 +114,13 @@ async function loadAllPages<T>(
     if (expectedCount !== null && rows.length >= expectedCount) return { data: rows, error: null }
     if (expectedCount === null && pageRows.length < 1000) return { data: rows, error: null }
   }
+}
+
+async function loadBatchedPages<T>(
+  ids: string[],
+  loadPage: (ids: string[], from: number, to: number) => PromiseLike<QueryResponse>,
+): Promise<{ data: T[] | null; error: unknown }> {
+  return loadIdBatches(ids, (batch) => loadAllPages<T>((from, to) => loadPage(batch, from, to)))
 }
 
 function businessDateWindow(day: string, days: number) {
@@ -328,10 +335,10 @@ export function BankReconciliationPage() {
         const duplicateIds = duplicateRows.map((row) => row.id)
         const [reversalResult, clearResult] = await Promise.all([
           matchIds.length
-            ? loadAllPages<MatchReversal>((from, to) => client.from('bank_reconciliation_match_reversals').select('match_id, reason, created_at', { count: 'exact' }).eq('business_id', businessId).in('match_id', matchIds).order('match_id', { ascending: true }).range(from, to))
+            ? loadBatchedPages<MatchReversal>(matchIds, (batch, from, to) => client.from('bank_reconciliation_match_reversals').select('match_id, reason, created_at', { count: 'exact' }).eq('business_id', businessId).in('match_id', batch).order('match_id', { ascending: true }).range(from, to))
             : Promise.resolve({ data: [], error: null }),
           duplicateIds.length
-            ? loadAllPages<DuplicateClear>((from, to) => client.from('bank_transaction_duplicate_clears').select('duplicate_id, reason, created_at', { count: 'exact' }).eq('business_id', businessId).in('duplicate_id', duplicateIds).order('duplicate_id', { ascending: true }).range(from, to))
+            ? loadBatchedPages<DuplicateClear>(duplicateIds, (batch, from, to) => client.from('bank_transaction_duplicate_clears').select('duplicate_id, reason, created_at', { count: 'exact' }).eq('business_id', businessId).in('duplicate_id', batch).order('duplicate_id', { ascending: true }).range(from, to))
             : Promise.resolve({ data: [], error: null }),
         ])
         if (reversalResult.error) throw reversalResult.error
@@ -341,9 +348,9 @@ export function BankReconciliationPage() {
 
         const groupIds = Array.from(new Set(matchRows.flatMap((row) => row.match_group_id ? [row.match_group_id] : [])))
         if (nextGroupingAvailable && groupIds.length) {
-          const groupReversalResult = await loadAllPages<GroupReversal>((from, to) => client.from('bank_reconciliation_match_group_reversals')
+          const groupReversalResult = await loadBatchedPages<GroupReversal>(groupIds, (batch, from, to) => client.from('bank_reconciliation_match_group_reversals')
             .select('match_group_id, reason, created_at', { count: 'exact' }).eq('business_id', businessId)
-            .in('match_group_id', groupIds).order('match_group_id', { ascending: true }).range(from, to))
+            .in('match_group_id', batch).order('match_group_id', { ascending: true }).range(from, to))
           if (groupReversalResult.error && !isMissingGroupingSchema(groupReversalResult.error)) throw groupReversalResult.error
           if (groupReversalResult.error) nextGroupingAvailable = false
           groupReversalRows = groupReversalResult.data ?? []
@@ -352,12 +359,12 @@ export function BankReconciliationPage() {
         const paymentIds = matchRows.flatMap((row) => row.order_payment_id ? [row.order_payment_id] : [])
         const outflowIds = matchRows.flatMap((row) => row.financial_outflow_id ? [row.financial_outflow_id] : [])
         if (paymentIds.length > 0) {
-          const paymentResult = await client.from('order_payments').select('id, order_id, received_at').eq('business_id', businessId).in('id', paymentIds)
+          const paymentResult = await loadIdBatches(paymentIds, (batch) => client.from('order_payments').select('id, order_id, received_at').eq('business_id', businessId).in('id', batch))
           if (paymentResult.error) throw paymentResult.error
           const paymentRows = (paymentResult.data ?? []) as { id: string; order_id: string; received_at: string }[]
           const orderIds = Array.from(new Set(paymentRows.map((row) => row.order_id)))
           const orderResult = orderIds.length
-            ? await client.from('orders').select('id, customer_name_snapshot').eq('business_id', businessId).in('id', orderIds)
+            ? await loadIdBatches(orderIds, (batch) => client.from('orders').select('id, customer_name_snapshot').eq('business_id', businessId).in('id', batch))
             : { data: [], error: null }
           if (orderResult.error) throw orderResult.error
           const orderById = new Map(((orderResult.data ?? []) as { id: string; customer_name_snapshot: string }[]).map((row) => [row.id, row.customer_name_snapshot]))
@@ -366,7 +373,7 @@ export function BankReconciliationPage() {
           }
         }
         if (outflowIds.length > 0) {
-          const outflowResult = await client.from('financial_outflows').select('id, description, paid_on').eq('business_id', businessId).in('id', outflowIds)
+          const outflowResult = await loadIdBatches(outflowIds, (batch) => client.from('financial_outflows').select('id, description, paid_on').eq('business_id', businessId).in('id', batch))
           if (outflowResult.error) throw outflowResult.error
           for (const outflow of (outflowResult.data ?? []) as { id: string; description: string; paid_on: string }[]) {
             nextMatchLabels[outflow.id] = `Saída paga · ${outflow.description} · ${formatBusinessDate(outflow.paid_on)}`
@@ -591,10 +598,10 @@ export function BankReconciliationPage() {
       const paymentIds = payments.map((row) => row.id)
       const outflowIds = outflows.map((row) => row.id)
       const [orderResult, voidResult, paymentMatchResult, outflowMatchResult] = await Promise.all([
-        orderIds.length ? client.from('orders').select('id, customer_name_snapshot').eq('business_id', businessId).in('id', orderIds) : Promise.resolve({ data: [], error: null }),
+        orderIds.length ? loadIdBatches(orderIds, (batch) => client.from('orders').select('id, customer_name_snapshot').eq('business_id', businessId).in('id', batch)) : Promise.resolve({ data: [], error: null }),
         loadVoidedOutflows(outflowIds, (ids) => client.from('financial_outflow_voids').select('outflow_id').eq('business_id', businessId).in('outflow_id', ids)),
-        paymentIds.length ? loadAllPages<{ id: string; order_payment_id: string | null; financial_outflow_id: string | null; created_at: string }>((from, to) => client.from('bank_reconciliation_matches').select('id, order_payment_id, financial_outflow_id, created_at', { count: 'exact' }).eq('business_id', businessId).in('order_payment_id', paymentIds).order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, to)) : Promise.resolve({ data: [], error: null }),
-        outflowIds.length ? loadAllPages<{ id: string; order_payment_id: string | null; financial_outflow_id: string | null; created_at: string }>((from, to) => client.from('bank_reconciliation_matches').select('id, order_payment_id, financial_outflow_id, created_at', { count: 'exact' }).eq('business_id', businessId).in('financial_outflow_id', outflowIds).order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, to)) : Promise.resolve({ data: [], error: null }),
+        paymentIds.length ? loadBatchedPages<{ id: string; order_payment_id: string | null; financial_outflow_id: string | null; created_at: string }>(paymentIds, (batch, from, to) => client.from('bank_reconciliation_matches').select('id, order_payment_id, financial_outflow_id, created_at', { count: 'exact' }).eq('business_id', businessId).in('order_payment_id', batch).order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, to)) : Promise.resolve({ data: [], error: null }),
+        outflowIds.length ? loadBatchedPages<{ id: string; order_payment_id: string | null; financial_outflow_id: string | null; created_at: string }>(outflowIds, (batch, from, to) => client.from('bank_reconciliation_matches').select('id, order_payment_id, financial_outflow_id, created_at', { count: 'exact' }).eq('business_id', businessId).in('financial_outflow_id', batch).order('created_at', { ascending: true }).order('id', { ascending: true }).range(from, to)) : Promise.resolve({ data: [], error: null }),
       ])
       if (orderResult.error) throw orderResult.error
       if (voidResult.error) throw voidResult.error
@@ -605,7 +612,7 @@ export function BankReconciliationPage() {
       const allMatchRows = [...(paymentMatchResult.data ?? []), ...(outflowMatchResult.data ?? [])]
       const matchIds = allMatchRows.map((row) => row.id)
       const reversalResult = matchIds.length
-        ? await loadAllPages<{ match_id: string }>((from, to) => client.from('bank_reconciliation_match_reversals').select('match_id', { count: 'exact' }).eq('business_id', businessId).in('match_id', matchIds).order('match_id', { ascending: true }).range(from, to))
+        ? await loadBatchedPages<{ match_id: string }>(matchIds, (batch, from, to) => client.from('bank_reconciliation_match_reversals').select('match_id', { count: 'exact' }).eq('business_id', businessId).in('match_id', batch).order('match_id', { ascending: true }).range(from, to))
         : { data: [], error: null }
       if (reversalResult.error) throw reversalResult.error
       const reversedIds = new Set((reversalResult.data ?? []).map((row) => row.match_id))
