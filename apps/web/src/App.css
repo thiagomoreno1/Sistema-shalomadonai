@@ -445,6 +445,8 @@
 .receivable-groups { gap: 14px; }
 .receivable-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .receivable-list li + li { border-top: 1px solid var(--line); }
+.receivable-item { display: grid; gap: 8px; padding-block: 8px; }
+.receivable-item-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .receivable-link { display: flex; align-items: center; gap: 14px; min-height: 72px; padding: 12px 4px; color: inherit; text-decoration: none; }
 .receivable-link:hover { background: var(--accent-wash); }
 .receivable-date { width: 116px; flex: 0 0 auto; }
@@ -455,6 +457,16 @@
 .receivable-customer { min-width: 100px; flex: 1; }
 .receivable-balance { text-align: right; }
 .receivable-balance strong { color: var(--ink); font-size: 13px; }
+.receivable-actions { display: flex; justify-content: flex-end; }
+.receivable-follow-up-toggle { min-height: 44px; padding-inline: 10px; border: 1px solid var(--line); border-radius: 8px; white-space: nowrap; }
+.receivable-follow-up-toggle:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }
+.receivable-action-note { color: var(--muted); font-size: 10px; }
+.receivable-follow-up-form { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.receivable-follow-up-form .section-heading { margin: 0; }
+.receivable-follow-up-form .section-footnote { margin: 0; }
+.receivable-follow-up-form .record-form-grid { margin: 0; }
+.receivable-follow-up-form .record-field { margin-block: 0; }
+.receivable-follow-up-form .record-form-actions { margin-top: 0; }
 .order-financials { display: grid; grid-template-columns: repeat(3, minmax(84px, 1fr)); gap: 9px; }
 .order-financials span { display: block; min-width: 0; }
 .order-financials small, .order-financials strong { display: block; }
@@ -798,10 +810,13 @@
   .receivable-summary-card { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 3px 12px; padding: 13px 15px; }
   .receivable-summary-card > strong { grid-column: 2; grid-row: 1 / span 2; font-size: 20px; }
   .receivable-summary-card small { grid-column: 1; }
+  .receivable-item-entry { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .receivable-link { align-items: flex-start; flex-wrap: wrap; gap: 6px 10px; }
   .receivable-date { width: auto; min-width: 105px; }
   .receivable-customer { flex-basis: calc(100% - 120px); }
   .receivable-balance { margin-left: auto; }
+  .receivable-actions { justify-content: flex-start; padding-left: 2px; }
+  .receivable-follow-up-form { padding: 12px; }
   .order-balance-grid { grid-template-columns: 1fr; gap: 8px; }
   .order-balance-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 4px 12px; padding: 13px 15px; }
   .order-balance-card > strong { grid-column: 2; grid-row: 1 / span 2; margin: 0; font-size: 21px; }

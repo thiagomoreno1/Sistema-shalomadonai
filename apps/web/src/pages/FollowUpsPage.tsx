@@ -8,6 +8,8 @@ import { supabaseClient } from '../lib/supabase'
 type FollowUp = {
   id: string
   customer_id: string | null
+  interaction_id: string | null
+  relatedOrderId: string | null
   title: string
   due_on: string
   priority: 'low' | 'normal' | 'high'
@@ -39,6 +41,8 @@ export function FollowUpsPage() {
   const [callHistoryError, setCallHistoryError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [taskLinksError, setTaskLinksError] = useState(false)
+  const [retryingTaskLinks, setRetryingTaskLinks] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [showCallForm, setShowCallForm] = useState(false)
@@ -54,7 +58,7 @@ export function FollowUpsPage() {
     try {
       const [taskResult, customerResult, callsResult] = await Promise.all([
         supabaseClient.from('follow_up_tasks')
-          .select('id, customer_id, title, due_on, priority')
+          .select('id, customer_id, interaction_id, title, due_on, priority')
           .eq('business_id', businessId).eq('status', 'pending')
           .order('due_on', { ascending: true }).order('created_at', { ascending: true }),
         supabaseClient.from('customers').select('id, name, is_active')
@@ -67,14 +71,37 @@ export function FollowUpsPage() {
       ])
 
       if (taskResult.error || customerResult.error) {
+        setTaskLinksError(false)
         setError('Não foi possível carregar os retornos. Tente novamente.')
         return
       }
+      const taskRows = (taskResult.data ?? []) as Omit<FollowUp, 'customerName' | 'relatedOrderId'>[]
+      const interactionIds = [...new Set(taskRows.flatMap((task) => task.interaction_id ? [task.interaction_id] : []))]
+      const relatedOrderByInteraction = new Map<string, string>()
+      let relatedOrderLoadFailed = false
+      for (let start = 0; start < interactionIds.length; start += 100) {
+        try {
+          const { data, error: interactionError } = await supabaseClient.from('customer_interactions')
+            .select('id, related_order_id')
+            .eq('business_id', businessId)
+            .in('id', interactionIds.slice(start, start + 100))
+          if (!interactionError) {
+            for (const interaction of (data ?? []) as { id: string; related_order_id: string | null }[]) {
+              if (interaction.related_order_id) relatedOrderByInteraction.set(interaction.id, interaction.related_order_id)
+            }
+          } else relatedOrderLoadFailed = true
+        } catch {
+          // Keep the follow-up queue available if optional order-link metadata cannot be loaded.
+          relatedOrderLoadFailed = true
+        }
+      }
+      setTaskLinksError(relatedOrderLoadFailed)
       const customerOptions = (customerResult.data ?? []) as CustomerOption[]
       const names = new Map(customerOptions.map((customer) => [customer.id, customer.name]))
       setCustomers(customerOptions)
-      setTasks(((taskResult.data ?? []) as Omit<FollowUp, 'customerName'>[]).map((task) => ({
+      setTasks(taskRows.map((task) => ({
         ...task,
+        relatedOrderId: task.interaction_id ? relatedOrderByInteraction.get(task.interaction_id) ?? null : null,
         customerName: task.customer_id ? names.get(task.customer_id) ?? null : null,
       })))
       setError(null)
@@ -89,6 +116,7 @@ export function FollowUpsPage() {
         setCallHistoryError(null)
       }
     } catch {
+      setTaskLinksError(false)
       setError('Não foi possível carregar os retornos. Tente novamente.')
     } finally {
       setLoading(false)
@@ -97,6 +125,43 @@ export function FollowUpsPage() {
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadTasks() }, [loadTasks])
+
+  async function retryTaskLinks() {
+    if (!supabaseClient || retryingTaskLinks) return
+    setRetryingTaskLinks(true)
+    let relatedOrderLoadFailed = false
+    const interactionIds = [...new Set(tasks.flatMap((task) => task.interaction_id ? [task.interaction_id] : []))]
+    const relatedOrderByInteraction = new Map<string, string>()
+    try {
+      for (let start = 0; start < interactionIds.length; start += 100) {
+        const { data, error: interactionError } = await supabaseClient.from('customer_interactions')
+          .select('id, related_order_id')
+          .eq('business_id', businessId)
+          .in('id', interactionIds.slice(start, start + 100))
+        if (interactionError) {
+          relatedOrderLoadFailed = true
+          break
+        }
+        for (const interaction of (data ?? []) as { id: string; related_order_id: string | null }[]) {
+          if (interaction.related_order_id) relatedOrderByInteraction.set(interaction.id, interaction.related_order_id)
+        }
+      }
+      if (relatedOrderLoadFailed) {
+        setTaskLinksError(true)
+        return
+      }
+      setTasks((current) => current.map((task) => ({
+        ...task,
+        relatedOrderId: task.interaction_id ? relatedOrderByInteraction.get(task.interaction_id) ?? null : null,
+      })))
+      setTaskLinksError(false)
+    } catch {
+      relatedOrderLoadFailed = true
+      setTaskLinksError(true)
+    } finally {
+      setRetryingTaskLinks(false)
+    }
+  }
 
   async function loadMoreCalls() {
     if (!supabaseClient || loadingMoreCalls) return
@@ -272,6 +337,7 @@ export function FollowUpsPage() {
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">FILA DE ATENDIMENTO</p><h2 id="follow-up-list-title">Pendentes</h2></div><span className="neutral-status">{tasks.length} {tasks.length === 1 ? 'retorno' : 'retornos'}</span></div>
         {overdueCount > 0 && <p className="form-message form-message-warning" role="status">{overdueCount} {overdueCount === 1 ? 'retorno está' : 'retornos estão'} atrasado(s).</p>}
         {actionError && <p className="form-message form-message-error" role="alert">{actionError}</p>}
+        {taskLinksError && <div className="inline-state inline-state-error" role="alert"><p>A fila foi carregada, mas alguns links de pedido não puderam ser carregados. Os retornos continuam disponíveis; tente atualizar os vínculos.</p><button className="text-button" disabled={retryingTaskLinks} onClick={() => void retryTaskLinks()} type="button">{retryingTaskLinks ? 'Atualizando vínculos…' : 'Tentar carregar links de pedido'}</button></div>}
         {loading && <p className="inline-state" aria-live="polite">Carregando retornos…</p>}
         {!loading && error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadTasks() }} type="button">Tentar novamente</button></div>}
         {!loading && !error && tasks.length === 0 && (
@@ -284,7 +350,7 @@ export function FollowUpsPage() {
               return (
                 <li className={overdue ? 'follow-up-item is-overdue' : 'follow-up-item'} key={task.id}>
                   <span className="follow-up-date"><Icon name="clock" /><strong>{formatBusinessDate(task.due_on)}</strong><small>{overdue ? 'Atrasado' : task.due_on === today ? 'Hoje' : 'Agendado'}</small></span>
-                  <span className="follow-up-copy"><strong>{task.title}</strong><small>{task.customerName ? <Link to={`/clientes/${task.customer_id}`}>{task.customerName}</Link> : 'Sem cliente vinculado'} · Prioridade {task.priority === 'high' ? 'alta' : task.priority === 'low' ? 'baixa' : 'normal'}</small></span>
+                  <span className="follow-up-copy"><strong>{task.title}</strong><small>{task.customerName ? <Link to={`/clientes/${task.customer_id}`}>{task.customerName}</Link> : 'Sem cliente vinculado'} · Prioridade {task.priority === 'high' ? 'alta' : task.priority === 'low' ? 'baixa' : 'normal'}{task.relatedOrderId && <> · <Link to={`/pedidos/${task.relatedOrderId}`}>Abrir pedido</Link></>}</small></span>
                   <span className="follow-up-actions"><button className="text-button" onClick={() => void closeTask(task.id, 'completed')} type="button">Concluir</button><button className="text-button follow-up-cancel" onClick={() => void closeTask(task.id, 'cancelled')} type="button">Cancelar</button></span>
                 </li>
               )
