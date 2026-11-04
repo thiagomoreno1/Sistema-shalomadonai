@@ -135,8 +135,9 @@ begin
 
   for v_item in
     select item.product_id, item.quantity, item.components, item.ordinality
-      from pg_catalog.jsonb_to_recordset(p_items) with ordinality
-        as item(product_id uuid, quantity numeric, components jsonb, ordinality bigint)
+      from rows from (
+        pg_catalog.jsonb_to_recordset(p_items) as (product_id uuid, quantity numeric, components jsonb)
+      ) with ordinality as item(product_id, quantity, components, ordinality)
      order by item.product_id
   loop
     select product.name, product.inventory_unit, product.sale_price_cents,
@@ -309,8 +310,9 @@ begin
 
   for v_schedule in
     select schedule.amount_cents, schedule.due_on, schedule.payment_method
-      from pg_catalog.jsonb_to_recordset(p_installments) with ordinality
-        as schedule(amount_cents bigint, due_on date, payment_method text, ordinal bigint)
+      from rows from (
+        pg_catalog.jsonb_to_recordset(p_installments) as (amount_cents bigint, due_on date, payment_method text)
+      ) with ordinality as schedule(amount_cents, due_on, payment_method, ordinal)
      order by schedule.ordinal
   loop
     v_installments := v_installments || pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
