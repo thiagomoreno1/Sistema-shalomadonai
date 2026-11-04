@@ -122,19 +122,21 @@ export function SignInPage() {
             </button>
           </form>
 
-          <button
-            className="text-button auth-mode-toggle"
-            onClick={() => {
-              setMode(isRecovery ? 'signin' : 'recovery')
-              setError(null)
-              setMessage(null)
-            }}
-            type="button"
-          >
-            {isRecovery ? 'Voltar para entrar' : 'Esqueci minha senha'}
-          </button>
+          <div className="auth-mode-actions">
+            <button
+              className="text-button auth-mode-toggle"
+              onClick={() => {
+                setMode(isRecovery ? 'signin' : 'recovery')
+                setError(null)
+                setMessage(null)
+              }}
+              type="button"
+            >
+              {isRecovery ? 'Voltar para entrar' : 'Esqueci minha senha'}
+            </button>
 
-          {!isRecovery && <Link className="auth-mode-toggle" to="/criar-conta">Criar conta e pedir acesso</Link>}
+            {!isRecovery && <Link className="auth-mode-toggle" to="/criar-conta">Criar conta e pedir acesso</Link>}
+          </div>
           <p className="auth-support">A gestão aprova novos pedidos antes de liberar os dados da empresa.</p>
         </div>
       </section>

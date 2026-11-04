@@ -360,7 +360,8 @@
 .auth-submit { width: 100%; margin-top: 4px; }
 .text-button { min-height: 44px; padding: 0; border: 0; color: var(--accent); background: transparent; font-size: 12px; font-weight: 620; text-align: left; text-decoration: none; cursor: pointer; }
 .text-button:hover { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 3px; }
-.auth-mode-toggle { margin-top: 12px; }
+.auth-mode-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 12px; }
+.auth-mode-actions .auth-mode-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; min-height: 44px; margin-top: 0; }
 .auth-support { margin: 25px 0 0; padding-top: 17px; border-top: 1px solid var(--line); color: var(--quiet); font-size: 11px; }
 .form-message { margin: 0 0 13px; padding: 10px 12px; border-radius: 7px; font-size: 12px; }
 .form-message-error { color: var(--danger); background: var(--danger-soft); }
