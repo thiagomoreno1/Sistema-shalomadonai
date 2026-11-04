@@ -57,11 +57,34 @@ insert into results values ('credit',pg_temp.match_group('credit','receipt',arra
 select is(pg_temp.match_group('credit','receipt',array['r2','r1'],'credit-request'),(select id from results where name='credit'),'Reordered retry is idempotent');
 select throws_ok($$select pg_temp.match_group('credit','receipt',array['r3'],'credit-request')$$,'22023',null,'Request reuse with different items rejected');
 select is((select count(*) from public.bank_reconciliation_matches where match_group_id=(select id from results where name='credit')),2::bigint,'One child per full receipt');
+-- loadCandidates excludes each source with a match whose ID has no child reversal.
+select is((
+  select count(*) from public.order_payments p
+   where p.business_id=pg_temp.uid('business') and p.id in (pg_temp.uid('r1'),pg_temp.uid('r2'))
+     and not exists (
+       select 1 from public.bank_reconciliation_matches m
+        where m.business_id=p.business_id and m.order_payment_id=p.id
+          and not exists (select 1 from public.bank_reconciliation_match_reversals r
+                           where r.business_id=m.business_id and r.match_id=m.id)
+     )
+),0::bigint,'Candidate reader excludes every actively grouped receipt');
 select is((select movement_count from public.bank_reconciliation_global_summary(pg_temp.uid('business')) where status='reconciled'),'1','Summary counts movement once');
 select throws_ok($$select pg_temp.match_group('credit','receipt',array['r3'],'active-bank')$$,'23505',null,'Active movement cannot be matched again');
 select throws_ok($$select pg_temp.match_group('other-credit','receipt',array['r1','r2'],'active-source')$$,'23505',null,'Active receipts cannot be reused');
 insert into results values ('debit',pg_temp.match_group('debit','outflow',array['o2','o1'],'debit-request'));
 select is((select count(*) from public.bank_reconciliation_matches where match_group_id=(select id from results where name='debit')),2::bigint,'Exact outflow group writes both children');
+-- Outflow candidates additionally exclude voided records, as in loadCandidates.
+select is((
+  select count(*) from public.financial_outflows o
+   where o.business_id=pg_temp.uid('business') and o.id in (pg_temp.uid('o1'),pg_temp.uid('o2'))
+     and not exists (select 1 from public.financial_outflow_voids v where v.business_id=o.business_id and v.outflow_id=o.id)
+     and not exists (
+       select 1 from public.bank_reconciliation_matches m
+        where m.business_id=o.business_id and m.financial_outflow_id=o.id
+          and not exists (select 1 from public.bank_reconciliation_match_reversals r
+                           where r.business_id=m.business_id and r.match_id=m.id)
+     )
+),0::bigint,'Candidate reader excludes every actively grouped outflow');
 select throws_ok($$select public.void_financial_outflow(pg_temp.uid('business'),pg_temp.uid('o1'),'Blocked',gen_random_uuid())$$,'23514',null,'Active group prevents outflow void');
 select throws_ok($$select public.mark_bank_transaction_duplicate(pg_temp.uid('business'),pg_temp.uid('credit'),pg_temp.uid('duplicate'),'Blocked',gen_random_uuid())$$,'23514',null,'Active group prevents duplicate classification');
 
@@ -80,10 +103,35 @@ select is(public.unmatch_bank_transaction_group(pg_temp.uid('business'),(select 
 select throws_ok($$select public.unmatch_bank_transaction_group(pg_temp.uid('business'),(select id from results where name='credit'),'Other',pg_temp.uid('reverse-request'))$$,'22023',null,'Reversal request mismatch rejected');
 select throws_ok($$select public.unmatch_bank_transaction_group(pg_temp.uid('business'),(select id from results where name='credit'),'Again',gen_random_uuid())$$,'23514',null,'Group cannot reverse twice');
 select is((select count(*) from public.bank_reconciliation_match_reversals r join public.bank_reconciliation_matches m on m.id=r.match_id where m.match_group_id=(select id from results where name='credit')),2::bigint,'Group reversal appends every compatible child reversal');
+select results_eq($$
+  select p.id from public.order_payments p
+   where p.business_id=pg_temp.uid('business') and p.id in (pg_temp.uid('r1'),pg_temp.uid('r2'))
+     and not exists (
+       select 1 from public.bank_reconciliation_matches m
+        where m.business_id=p.business_id and m.order_payment_id=p.id
+          and not exists (select 1 from public.bank_reconciliation_match_reversals r
+                           where r.business_id=m.business_id and r.match_id=m.id)
+     )
+   order by p.id
+$$,$$select unnest(array[pg_temp.uid('r1'),pg_temp.uid('r2')]) order by 1$$,
+'Candidate reader restores every receipt after whole-group reversal');
 select lives_ok($$select pg_temp.match_group('other-credit','receipt',array['r2','r1'],'released-receipts')$$,'Released receipts can be reconciled again');
 insert into results values ('child-reversal',public.unmatch_bank_transaction(pg_temp.uid('business'),(select id from public.bank_reconciliation_matches where match_group_id=(select id from results where name='debit') order by id limit 1),'Legacy client',pg_temp.uid('child-reverse')));
 select is(public.unmatch_bank_transaction(pg_temp.uid('business'),(select id from public.bank_reconciliation_matches where match_group_id=(select id from results where name='debit') order by id limit 1),'Legacy client',pg_temp.uid('child-reverse')),(select id from results where name='child-reversal'),'Legacy child reversal retry returns child reversal ID');
 select is((select count(*) from public.bank_reconciliation_match_reversals r join public.bank_reconciliation_matches m on m.id=r.match_id where m.match_group_id=(select id from results where name='debit')),2::bigint,'Legacy child reversal reverses entire group');
+select results_eq($$
+  select o.id from public.financial_outflows o
+   where o.business_id=pg_temp.uid('business') and o.id in (pg_temp.uid('o1'),pg_temp.uid('o2'))
+     and not exists (select 1 from public.financial_outflow_voids v where v.business_id=o.business_id and v.outflow_id=o.id)
+     and not exists (
+       select 1 from public.bank_reconciliation_matches m
+        where m.business_id=o.business_id and m.financial_outflow_id=o.id
+          and not exists (select 1 from public.bank_reconciliation_match_reversals r
+                           where r.business_id=m.business_id and r.match_id=m.id)
+     )
+   order by o.id
+$$,$$select unnest(array[pg_temp.uid('o1'),pg_temp.uid('o2')]) order by 1$$,
+'Candidate reader restores every outflow after legacy child reverses the group');
 select lives_ok($$select public.void_financial_outflow(pg_temp.uid('business'),pg_temp.uid('o1'),'Released',gen_random_uuid())$$,'Group reversal releases outflow void guard');
 select lives_ok($$select public.mark_bank_transaction_duplicate(pg_temp.uid('business'),pg_temp.uid('credit'),pg_temp.uid('duplicate'),'Released',gen_random_uuid())$$,'Group reversal releases duplicate guard');
 select throws_ok($$select pg_temp.match_group('credit','receipt',array['r3'],'duplicate-match')$$,'23514',null,'Duplicate movement cannot be grouped');
