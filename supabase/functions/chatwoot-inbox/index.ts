@@ -454,7 +454,8 @@ async function attachmentResponse(providerResponse: Response, attachmentId: stri
     reader.releaseLock()
   }
 
-  return new Response(new Blob(chunks, { type: originalContentType ?? 'application/octet-stream' }), {
+  const blobParts = chunks.map((chunk) => chunk.slice().buffer)
+  return new Response(new Blob(blobParts, { type: originalContentType ?? 'application/octet-stream' }), {
     status: 200,
     headers: {
       ...corsHeaders,
