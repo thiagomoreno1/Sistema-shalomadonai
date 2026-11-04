@@ -120,6 +120,10 @@ The model must not infer a universal payment term, inventory rule, late fee, tax
 | 5 — Integration proofs | Supported WhatsApp inbox, bank statement or connection, fiscal provider workflow, approved message rules | Test with the client’s actual or approved non-production account/file; obtain provider, accountant, consent, and policy details |
 | 6 — Migration and handoff | Existing records imported/entered, reconciliation summaries, usage and recovery guidance | Inspect source formats and volume first; report successes, duplicates, and errors; reconcile counts/totals |
 
+### Milestone 6 handoff status — 2026-11-04
+
+The owner-facing [guide](guia-do-proprietario.md) now documents existing workflows, limits, and backup/recovery precautions. It does not claim a tested restore: the hosted organization is on the Free plan, the repository has no versioned offsite backup routine or recorded restore drill, and the CLI's default logical dump excludes Supabase-managed `auth` and `storage` schemas and omits data and custom roles unless requested. Historical record entry remains manual and has not started because product/stock source details are still being supplied gradually. Before operational rollout, confirm whether a manual copy exists, choose and test backup coverage for the database, Storage objects, Auth/configuration, and provider secrets; inventory the source records; then reconcile entered counts and totals.
+
 ## Dependencies, risks, and discovery backlog
 
 **External dependencies:** email delivery for account recovery; a selected hosting account/domain; WhatsApp Business Platform/provider and approved number; bank/provider sandbox credentials and consent; fiscal provider plus CNPJ/state/tax details from the accountant; source records for migration. The hosted Supabase project and owner identity are provisioned.

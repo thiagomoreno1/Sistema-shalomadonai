@@ -20,8 +20,18 @@ Este roteiro registra o que foi conferido e organiza o próximo rollout. A audit
   12. `20261104013512_bank_reconciliation_grouping`
 - Nenhuma Edge Function estava publicada. Há três pastas de função no repositório: Belvo Open Finance, webhook sandbox da Belvo e inbox Chatwoot.
 - A hospedagem de produção e o domínio HTTPS do aplicativo ainda não estão escolhidos.
+- A organização está no plano Supabase Free. A documentação oficial informa que esse plano não recebe backups diários automáticos; o repositório não tem uma rotina externa de backup versionada nem evidência de restauração testada. Confirme com o responsável se existe cópia manual fora do repositório.
 
 Confirme novamente a contagem de migrations e o estado dos dados imediatamente antes de qualquer mudança remota.
+
+## Backup antes do rollout
+
+- Defina com o responsável um backup manual seguro ou um plano com backups diários automáticos antes de aplicar migrations ou inserir um volume relevante de dados.
+- Não salve dumps no repositório: arquivos de dump podem conter dados pessoais e financeiros. Mantenha o destino criptografado e com acesso restrito.
+- A exportação lógica via `supabase db dump` não é recuperação completa deste app: o CLI exclui os schemas gerenciados `auth` e `storage`; por padrão, o dump contém esquema, não dados ou papéis personalizados; e os arquivos binários do Supabase Storage precisam de cópia separada. Auth, configurações e segredos de provedores também precisam de tratamento próprio.
+- Backups diários não são cópias sob demanda para cada migration. Verifique a data do ponto de recuperação e, se a possível perda desde ele não for aceitável, faça e teste uma exportação manual antes da janela.
+- Teste a restauração em ambiente isolado; não restaure sobre o projeto em uso sem janela, cópia preservada e verificação técnica. A restauração do painel pode deixar o projeto indisponível.
+- Referências: [backups](https://supabase.com/docs/guides/platform/backups), [backup manual no plano Free](https://supabase.com/kb/faqs/platform/free-plan-backups), [backup/restauração pelo CLI](https://supabase.com/docs/guides/platform/migrating-within-supabase/backup-restore), [referência de `db dump`](https://supabase.com/docs/reference/cli/supabase-db-dump).
 
 ## Pontos de atenção nas migrations
 
