@@ -6,6 +6,7 @@ import { Icon } from '../components/Icon'
 import { businessToday, formatBRLExact, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { useBusiness } from '../business/BusinessContext'
 import { supabaseClient } from '../lib/supabase'
+import { isMissingGroupingSchema, matchSelectionSummary, updateMatchSelection, type MatchSelection } from '../lib/bank-match-selection.mjs'
 
 const PAGE_SIZE = 25
 
@@ -36,10 +37,12 @@ type BankMatch = {
   bank_transaction_id: string
   order_payment_id: string | null
   financial_outflow_id: string | null
+  match_group_id?: string | null
   created_at: string
 }
 
 type MatchReversal = { match_id: string; reason: string; created_at: string }
+type GroupReversal = { match_group_id: string; reason: string; created_at: string }
 type DuplicateLink = { id: string; duplicate_transaction_id: string; original_transaction_id: string; reason: string; created_at: string }
 type DuplicateClear = { duplicate_id: string; reason: string; created_at: string }
 type ReconciliationStatusTotal = { count: string; gross_cents: string }
@@ -125,6 +128,8 @@ export function BankReconciliationPage() {
   const [transactions, setTransactions] = useState<BankTransaction[]>([])
   const [matches, setMatches] = useState<BankMatch[]>([])
   const [matchReversals, setMatchReversals] = useState<MatchReversal[]>([])
+  const [groupReversals, setGroupReversals] = useState<GroupReversal[]>([])
+  const [groupingAvailable, setGroupingAvailable] = useState(true)
   const [duplicates, setDuplicates] = useState<DuplicateLink[]>([])
   const [duplicateClears, setDuplicateClears] = useState<DuplicateClear[]>([])
   const [reconciliationSummary, setReconciliationSummary] = useState<BankReconciliationSummary | null>(null)
@@ -161,7 +166,7 @@ export function BankReconciliationPage() {
   const [candidateError, setCandidateError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionSaving, setActionSaving] = useState(false)
-  const [matchRequestId, setMatchRequestId] = useState(newRequestId)
+  const [matchSelection, setMatchSelection] = useState<MatchSelection>(() => ({ items: [], requestId: newRequestId() }))
   const [unmatchTarget, setUnmatchTarget] = useState<BankMatch | null>(null)
   const [unmatchReason, setUnmatchReason] = useState('')
   const [duplicateTarget, setDuplicateTarget] = useState<BankTransaction | null>(null)
@@ -185,11 +190,21 @@ export function BankReconciliationPage() {
   const actionRequestRef = useRef(newRequestId())
   const loadRequestRef = useRef(0)
   const summaryRequestRef = useRef(0)
+  const candidateRequestRef = useRef(0)
 
   const activeMatchByTransaction = useMemo(() => {
     const reversedMatchIds = new Set(matchReversals.map((row) => row.match_id))
-    return new Map(matches.filter((row) => !reversedMatchIds.has(row.id)).map((row) => [row.bank_transaction_id, row]))
-  }, [matches, matchReversals])
+    const reversedGroupIds = new Set(groupReversals.map((row) => row.match_group_id))
+    const byTransaction = new Map<string, BankMatch[]>()
+    for (const match of matches) {
+      if (reversedMatchIds.has(match.id) || (match.match_group_id && reversedGroupIds.has(match.match_group_id))) continue
+      byTransaction.set(match.bank_transaction_id, [...(byTransaction.get(match.bank_transaction_id) ?? []), match])
+    }
+    return byTransaction
+  }, [matches, matchReversals, groupReversals])
+
+  const selectedCandidates = candidates.filter((candidate) => matchSelection.items.some((item) => item.kind === candidate.kind && item.id === candidate.id))
+  const selectionSummary = matchSelectionSummary(candidateTarget?.amount_cents ?? '0', selectedCandidates)
 
   const activeDuplicateByTransaction = useMemo(() => {
     const clearedIds = new Set(duplicateClears.map((row) => row.duplicate_id))
@@ -204,9 +219,11 @@ export function BankReconciliationPage() {
   const accountById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts])
 
   const clearActionForms = () => {
+    candidateRequestRef.current += 1
     setCandidateTarget(null)
     setCandidates([])
     setCandidateError(null)
+    setMatchSelection({ items: [], requestId: newRequestId() })
     setUnmatchTarget(null)
     setUnmatchReason('')
     setDuplicateTarget(null)
@@ -238,7 +255,7 @@ export function BankReconciliationPage() {
     setLoading(true)
     setLoadError(null)
     try {
-      const [accountResult, transactionResult] = await Promise.all([
+      const [accountResult, transactionResult, groupingResult] = await Promise.all([
         loadAllPages<BankAccount>((from, to) => client.from('bank_accounts')
           .select('id, business_id, institution_name, account_label, account_last_four, is_active, created_at', { count: 'exact' })
           .eq('business_id', businessId)
@@ -253,27 +270,32 @@ export function BankReconciliationPage() {
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(nextPage * PAGE_SIZE, (nextPage + 1) * PAGE_SIZE - 1),
+        client.from('bank_reconciliation_match_groups').select('id').eq('business_id', businessId).limit(1),
       ])
       if (accountResult.error) throw accountResult.error
       if (transactionResult.error) throw transactionResult.error
+      if (groupingResult.error && !isMissingGroupingSchema(groupingResult.error)) throw groupingResult.error
+      let nextGroupingAvailable = !groupingResult.error
       const accountRows = accountResult.data ?? []
       const transactionRows = (transactionResult.data ?? []) as BankTransaction[]
       const ids = transactionRows.map((row) => row.id)
       let matchRows: BankMatch[] = []
       let reversalRows: MatchReversal[] = []
+      let groupReversalRows: GroupReversal[] = []
       let duplicateRows: DuplicateLink[] = []
       let clearRows: DuplicateClear[] = []
       const nextMatchLabels: Record<string, string> = {}
 
       if (ids.length > 0) {
-        const [matchResult, duplicateRowsByTransactionResult, duplicateRowsByOriginalResult] = await Promise.all([
-          loadAllPages<BankMatch>((from, to) => client.from('bank_reconciliation_matches')
-            .select('id, bank_transaction_id, order_payment_id, financial_outflow_id, created_at', { count: 'exact' })
+        const loadMatches = (withGroups: boolean) => loadAllPages<BankMatch>((from, to) => client.from('bank_reconciliation_matches')
+            .select(`id, bank_transaction_id, order_payment_id, financial_outflow_id, created_at${withGroups ? ', match_group_id' : ''}`, { count: 'exact' })
             .eq('business_id', businessId)
             .in('bank_transaction_id', ids)
             .order('created_at', { ascending: true })
             .order('id', { ascending: true })
-            .range(from, to)),
+            .range(from, to))
+        const [initialMatchResult, duplicateRowsByTransactionResult, duplicateRowsByOriginalResult] = await Promise.all([
+          loadMatches(nextGroupingAvailable),
           loadAllPages<DuplicateLink>((from, to) => client.from('bank_transaction_duplicates')
             .select('id, duplicate_transaction_id, original_transaction_id, reason, created_at', { count: 'exact' })
             .eq('business_id', businessId)
@@ -289,6 +311,11 @@ export function BankReconciliationPage() {
             .order('id', { ascending: true })
             .range(from, to)),
         ])
+        let matchResult = initialMatchResult
+        if (matchResult.error && nextGroupingAvailable && isMissingGroupingSchema(matchResult.error)) {
+          nextGroupingAvailable = false
+          matchResult = await loadMatches(false)
+        }
         if (matchResult.error) throw matchResult.error
         if (duplicateRowsByTransactionResult.error) throw duplicateRowsByTransactionResult.error
         if (duplicateRowsByOriginalResult.error) throw duplicateRowsByOriginalResult.error
@@ -312,9 +339,18 @@ export function BankReconciliationPage() {
         reversalRows = reversalResult.data ?? []
         clearRows = clearResult.data ?? []
 
-        const activeMatchRows = matchRows.filter((row) => !reversalRows.some((reversal) => reversal.match_id === row.id))
-        const paymentIds = activeMatchRows.flatMap((row) => row.order_payment_id ? [row.order_payment_id] : [])
-        const outflowIds = activeMatchRows.flatMap((row) => row.financial_outflow_id ? [row.financial_outflow_id] : [])
+        const groupIds = Array.from(new Set(matchRows.flatMap((row) => row.match_group_id ? [row.match_group_id] : [])))
+        if (nextGroupingAvailable && groupIds.length) {
+          const groupReversalResult = await loadAllPages<GroupReversal>((from, to) => client.from('bank_reconciliation_match_group_reversals')
+            .select('match_group_id, reason, created_at', { count: 'exact' }).eq('business_id', businessId)
+            .in('match_group_id', groupIds).order('match_group_id', { ascending: true }).range(from, to))
+          if (groupReversalResult.error && !isMissingGroupingSchema(groupReversalResult.error)) throw groupReversalResult.error
+          if (groupReversalResult.error) nextGroupingAvailable = false
+          groupReversalRows = groupReversalResult.data ?? []
+        }
+
+        const paymentIds = matchRows.flatMap((row) => row.order_payment_id ? [row.order_payment_id] : [])
+        const outflowIds = matchRows.flatMap((row) => row.financial_outflow_id ? [row.financial_outflow_id] : [])
         if (paymentIds.length > 0) {
           const paymentResult = await client.from('order_payments').select('id, order_id, received_at').eq('business_id', businessId).in('id', paymentIds)
           if (paymentResult.error) throw paymentResult.error
@@ -343,6 +379,8 @@ export function BankReconciliationPage() {
       setTransactions(transactionRows)
       setMatches(matchRows)
       setMatchReversals(reversalRows)
+      setGroupReversals(groupReversalRows)
+      setGroupingAvailable(nextGroupingAvailable)
       setDuplicates(duplicateRows)
       setDuplicateClears(clearRows)
       setMatchLabels(nextMatchLabels)
@@ -528,13 +566,13 @@ export function BankReconciliationPage() {
     const client = supabaseClient
     if (!client) return
     clearActionForms()
+    const request = ++candidateRequestRef.current
     returnFocusIdRef.current = `bank-movement-title-${movement.id}`
     setCandidateTarget(movement)
     setCandidates([])
     setCandidateLimit(20)
     setCandidateError(null)
     setActionError(null)
-    setMatchRequestId(newRequestId())
     setCandidatesLoading(true)
     const signedCents = signedAmount(movement.amount_cents)
     const absoluteAmount = (signedCents > 0n ? signedCents : -signedCents).toString()
@@ -542,8 +580,8 @@ export function BankReconciliationPage() {
     const until = `${businessDateWindow(movement.transaction_date, -45)}T23:59:59-03:00`
     try {
       const [paymentResult, outflowResult] = await Promise.all([
-        loadAllPages<{ id: string; order_id: string; received_at: string; amount_cents: number | string }>((from, to) => client.from('order_payments').select('id, order_id, received_at, amount_cents', { count: 'exact' }).eq('business_id', businessId).eq('amount_cents', absoluteAmount).gte('received_at', `${since}T00:00:00-03:00`).lte('received_at', until).order('received_at', { ascending: false }).order('id', { ascending: true }).range(from, to)),
-        loadAllPages<{ id: string; description: string; paid_on: string; amount_cents: number | string }>((from, to) => client.from('financial_outflows').select('id, description, paid_on, amount_cents', { count: 'exact' }).eq('business_id', businessId).eq('amount_cents', absoluteAmount).gte('paid_on', since).lte('paid_on', until.slice(0, 10)).order('paid_on', { ascending: false }).order('id', { ascending: true }).range(from, to)),
+        signedCents > 0n ? loadAllPages<{ id: string; order_id: string; received_at: string; amount_cents: number | string }>((from, to) => client.from('order_payments').select('id, order_id, received_at, amount_cents', { count: 'exact' }).eq('business_id', businessId).gt('amount_cents', 0).lte('amount_cents', absoluteAmount).gte('received_at', `${since}T00:00:00-03:00`).lte('received_at', until).order('received_at', { ascending: false }).order('id', { ascending: true }).range(from, to)) : Promise.resolve({ data: [], error: null }),
+        signedCents < 0n ? loadAllPages<{ id: string; description: string; paid_on: string; amount_cents: number | string }>((from, to) => client.from('financial_outflows').select('id, description, paid_on, amount_cents', { count: 'exact' }).eq('business_id', businessId).gt('amount_cents', 0).lte('amount_cents', absoluteAmount).gte('paid_on', since).lte('paid_on', until.slice(0, 10)).order('paid_on', { ascending: false }).order('id', { ascending: true }).range(from, to)) : Promise.resolve({ data: [], error: null }),
       ])
       if (paymentResult.error) throw paymentResult.error
       if (outflowResult.error) throw outflowResult.error
@@ -601,32 +639,51 @@ export function BankReconciliationPage() {
         }
       }
       possibleCandidates.sort((left, right) => Math.abs(Date.parse(`${left.date}T12:00:00-03:00`) - Date.parse(`${movement.transaction_date}T12:00:00-03:00`)) - Math.abs(Date.parse(`${right.date}T12:00:00-03:00`) - Date.parse(`${movement.transaction_date}T12:00:00-03:00`)))
-      setCandidates(possibleCandidates)
+      if (request === candidateRequestRef.current) setCandidates(possibleCandidates)
     } catch {
-      setCandidateError('Não foi possível carregar registros do mesmo valor. A conciliação não foi gravada.')
+      if (request === candidateRequestRef.current) setCandidateError('Não foi possível carregar os lançamentos elegíveis. A conciliação não foi gravada.')
     } finally {
-      setCandidatesLoading(false)
+      if (request === candidateRequestRef.current) setCandidatesLoading(false)
     }
   }
 
-  async function confirmMatch(candidate: MatchCandidate) {
-    if (!supabaseClient || !candidateTarget) return
+  function toggleCandidate(candidate: MatchCandidate) {
+    const selected = matchSelection.items.some((item) => item.kind === candidate.kind && item.id === candidate.id)
+    if (!selected && matchSelection.items.length >= 50) return
+    const nextItems = selected ? matchSelection.items.filter((item) => item.kind !== candidate.kind || item.id !== candidate.id) : [...matchSelection.items, candidate]
+    setMatchSelection((previous) => updateMatchSelection(previous, nextItems, newRequestId))
+    setActionError(null)
+  }
+
+  async function confirmMatch() {
+    if (!supabaseClient || !candidateTarget || !selectionSummary.canConfirm || (!groupingAvailable && selectedCandidates.length !== 1) || actionSaving) return
     setActionSaving(true)
     setActionError(null)
     try {
-      const { error } = await supabaseClient.rpc('match_bank_transaction', {
+      let { error } = groupingAvailable ? await supabaseClient.rpc('match_bank_transaction_group', {
         p_business_id: businessId,
         p_bank_transaction_id: candidateTarget.id,
-        p_order_payment_id: candidate.kind === 'receipt' ? candidate.id : null,
-        p_financial_outflow_id: candidate.kind === 'outflow' ? candidate.id : null,
-        p_request_id: matchRequestId,
-      })
+        p_items: matchSelection.items,
+        p_request_id: matchSelection.requestId,
+      }) : { error: null }
+      if (error && isMissingGroupingSchema(error)) setGroupingAvailable(false)
+      if ((!groupingAvailable || (error && isMissingGroupingSchema(error))) && selectedCandidates.length === 1) {
+        const candidate = selectedCandidates[0]
+        const result = await supabaseClient.rpc('match_bank_transaction', {
+          p_business_id: businessId,
+          p_bank_transaction_id: candidateTarget.id,
+          p_order_payment_id: candidate.kind === 'receipt' ? candidate.id : null,
+          p_financial_outflow_id: candidate.kind === 'outflow' ? candidate.id : null,
+          p_request_id: matchSelection.requestId,
+        })
+        error = result.error
+      }
       if (error) throw error
       setNotice('Conciliação registrada e vinculada ao lançamento financeiro.')
       closeActionForms()
       await refreshBankData(page)
     } catch {
-      setActionError('Não foi possível conciliar. O lançamento pode ter sido usado em outra conciliação ou alterado; atualize a lista e tente novamente.')
+      setActionError('Não foi possível confirmar a conciliação. Tente novamente com a mesma seleção para reutilizar o identificador do envio. Se um lançamento foi alterado ou conciliado por outra pessoa, feche e atualize a lista.')
     } finally {
       setActionSaving(false)
     }
@@ -641,7 +698,12 @@ export function BankReconciliationPage() {
     setActionSaving(true)
     setActionError(null)
     try {
-      const { error } = await supabaseClient.rpc('unmatch_bank_transaction', {
+      const { error } = unmatchTarget.match_group_id ? await supabaseClient.rpc('unmatch_bank_transaction_group', {
+        p_business_id: businessId,
+        p_group_id: unmatchTarget.match_group_id,
+        p_reason: unmatchReason.trim(),
+        p_request_id: actionRequestRef.current,
+      }) : await supabaseClient.rpc('unmatch_bank_transaction', {
         p_business_id: businessId,
         p_match_id: unmatchTarget.id,
         p_reason: unmatchReason.trim(),
@@ -771,7 +833,7 @@ export function BankReconciliationPage() {
           <div><p className="eyebrow">MOVIMENTOS</p><h2 id="bank-movements-heading">Movimentos do extrato</h2></div>
           <button className="button button-primary" disabled={activeAccounts.length === 0 || loading || Boolean(loadError)} onClick={() => { setAccountId(activeAccounts[0]?.id ?? ''); setMovementFormOpen((value) => !value); setFormError(null) }} ref={movementTriggerRef} type="button">{movementFormOpen ? 'Fechar' : 'Registrar movimento'}</button>
         </div>
-        <p className="section-footnote">A conciliação é manual e exige confirmação. Cada movimento bancário pode ser ligado a um único recebimento ou saída, pelo valor exato; divisão e agrupamento ainda não estão disponíveis.</p>
+        <p className="section-footnote">A conciliação é manual e exige confirmação. Vincule cada movimento a um ou mais recebimentos ou saídas da mesma direção, com soma exata. Cada lançamento é vinculado por inteiro.</p>
 
         {(summaryBusinessId !== businessId || summaryLoading) && <p className="inline-state bank-summary-loading" aria-live="polite">Carregando resumo de todos os movimentos…</p>}
         {summaryBusinessId === businessId && !summaryLoading && summaryError && <div className="bank-summary-error" role="alert"><p>{summaryError}</p><button className="text-button" onClick={() => void loadReconciliationSummary()} type="button">Tentar novamente</button></div>}
@@ -811,9 +873,11 @@ export function BankReconciliationPage() {
         {transactions.length > 0 && !loadError && <>
           <ul className="bank-movement-list" aria-label="Movimentos bancários">
             {transactions.map((movement) => {
-              const match = activeMatchByTransaction.get(movement.id)
+              const activeLinks = activeMatchByTransaction.get(movement.id) ?? []
+              const match = activeLinks[0]
               const duplicate = activeDuplicateByTransaction.get(movement.id)
               const previousMatches = matches.filter((row) => row.bank_transaction_id === movement.id && matchReversals.some((reversal) => reversal.match_id === row.id))
+              const previousGroups = Array.from(new Set(previousMatches.flatMap((row) => row.match_group_id ? [row.match_group_id] : [])))
               const previousDuplicates = duplicates.filter((row) => row.duplicate_transaction_id === movement.id && duplicateClears.some((clear) => clear.duplicate_id === row.id))
               const duplicateOriginals = transactions.filter((candidate) => candidate.id !== movement.id && candidate.bank_account_id === movement.bank_account_id && candidate.transaction_date === movement.transaction_date && String(candidate.amount_cents) === String(movement.amount_cents) && !activeDuplicateByTransaction.has(candidate.id) && !activeDuplicateOriginalIds.has(candidate.id))
               const account = accountById.get(movement.bank_account_id)
@@ -826,40 +890,58 @@ export function BankReconciliationPage() {
                     <div className="bank-movement-title"><strong id={`bank-movement-title-${movement.id}`} tabIndex={-1}>{movement.description}</strong><span className={duplicate ? 'bank-status bank-status-duplicate' : match ? 'bank-status bank-status-matched' : 'bank-status'}>{duplicate ? 'Duplicado' : match ? 'Conciliado' : 'Pendente'}</span></div>
                     <small>{account ? `${account.institution_name} · ${account.account_label}` : 'Conta sem identificação'} · {formatBusinessDate(movement.transaction_date)} · {sourceLabel(movement.source)}</small>
                     {movement.counterparty_name && <small>Contraparte: {movement.counterparty_name}</small>}
-                    {linkedLabel && <p className="bank-match-summary">Vinculado a {linkedLabel}</p>}
+                    {match?.match_group_id ? <div className="bank-match-summary"><p>Conciliação agrupada · {activeLinks.length} {activeLinks.length === 1 ? 'lançamento' : 'lançamentos'}</p><ul>{activeLinks.map((link) => {
+                      const id = link.order_payment_id ?? link.financial_outflow_id ?? ''
+                      return <li key={link.id}>{matchLabels[id] ?? `Lançamento ${shortId(id)}`}</li>
+                    })}</ul></div> : linkedLabel && <p className="bank-match-summary">Vinculado a {linkedLabel}</p>}
                     {duplicate && <p className="bank-match-summary">Duplicado do movimento “{original?.description ?? `#${shortId(duplicate.original_transaction_id)}`}” · {duplicate.reason}</p>}
-                    {previousMatches.map((previous) => <p className="bank-history-note" key={previous.id}>Conciliação desfeita: {matchReversals.find((row) => row.match_id === previous.id)?.reason}</p>)}
+                    {previousMatches.filter((row) => !row.match_group_id).map((previous) => <p className="bank-history-note" key={previous.id}>Conciliação desfeita: {matchReversals.find((row) => row.match_id === previous.id)?.reason}</p>)}
+                    {previousGroups.map((groupId) => {
+                      const links = previousMatches.filter((row) => row.match_group_id === groupId)
+                      const reversal = groupReversals.find((row) => row.match_group_id === groupId) ?? matchReversals.find((row) => row.match_id === links[0].id)
+                      return <div className="bank-history-note" key={groupId}><p>Conciliação agrupada desfeita · {links.length} lançamentos · {reversal && formatBusinessDate(reversal.created_at.slice(0, 10))}: {reversal?.reason}</p><ul>{links.map((link) => {
+                        const id = link.order_payment_id ?? link.financial_outflow_id ?? ''
+                        return <li key={link.id}>{matchLabels[id] ?? `Lançamento ${shortId(id)}`}</li>
+                      })}</ul></div>
+                    })}
                     {previousDuplicates.map((previous) => <p className="bank-history-note" key={previous.id}>Sinalização de duplicidade removida: {duplicateClears.find((row) => row.duplicate_id === previous.id)?.reason}</p>)}
                   </div>
                   <div className="bank-movement-value"><strong>{formatAmount(movement.amount_cents)}</strong><small>{movementDirectionLabel(movement.amount_cents)}</small></div>
                 </div>
                 {!loading && !loadError && <div className="bank-row-actions">
-                  {!match && !duplicate && <button className="button button-secondary" onClick={() => void loadCandidates(movement)} type="button">Conciliar</button>}
-                  {match && <button className="button button-secondary" onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setUnmatchTarget(match); setUnmatchReason(''); actionRequestRef.current = newRequestId() }} type="button">Desfazer conciliação</button>}
-                  {!match && duplicate && <button className="button button-secondary" onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setClearDuplicateTarget(duplicate); setClearDuplicateReason(''); setClearDuplicateRequestId(newRequestId()) }} type="button">Restaurar movimento</button>}
-                  {!match && !duplicate && duplicateOriginals.length > 0 && <button className="text-button" onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setDuplicateTarget(movement); setDuplicateOriginalId(duplicateOriginals[0].id); setDuplicateReason(''); setDuplicateRequestId(newRequestId()) }} type="button">Sinalizar duplicado</button>}
+                  {!match && !duplicate && <button className="button button-secondary" disabled={actionSaving} onClick={() => void loadCandidates(movement)} type="button">Conciliar</button>}
+                  {match && <button className="button button-secondary" disabled={actionSaving} onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setUnmatchTarget(match); setUnmatchReason(''); actionRequestRef.current = newRequestId() }} type="button">Desfazer conciliação</button>}
+                  {!match && duplicate && <button className="button button-secondary" disabled={actionSaving} onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setClearDuplicateTarget(duplicate); setClearDuplicateReason(''); setClearDuplicateRequestId(newRequestId()) }} type="button">Restaurar movimento</button>}
+                  {!match && !duplicate && duplicateOriginals.length > 0 && <button className="text-button" disabled={actionSaving} onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setDuplicateTarget(movement); setDuplicateOriginalId(duplicateOriginals[0].id); setDuplicateReason(''); setDuplicateRequestId(newRequestId()) }} type="button">Sinalizar duplicado</button>}
                 </div>}
 
                 {candidateTarget?.id === movement.id && <section className="bank-action-panel" aria-labelledby={`candidate-title-${movement.id}`}>
-                  <div className="section-heading"><div><p className="eyebrow">CONFERÊNCIA MANUAL</p><h3 id={`candidate-title-${movement.id}`} ref={candidateHeadingRef} tabIndex={-1}>Escolha o lançamento correspondente</h3></div><button className="text-button" onClick={closeActionForms} type="button">Fechar</button></div>
-                  <p className="section-footnote">Sugestões com o mesmo valor, até 45 dias antes ou depois da data bancária. Confira os detalhes; nenhuma conciliação ocorre sem sua confirmação.</p>
-                  {candidatesLoading && <p className="inline-state" aria-live="polite">Buscando recebimentos e saídas do mesmo valor…</p>}
+                  <div className="section-heading"><div><p className="eyebrow">CONFERÊNCIA MANUAL</p><h3 id={`candidate-title-${movement.id}`} ref={candidateHeadingRef} tabIndex={-1}>Selecione os lançamentos correspondentes</h3></div><button className="text-button" disabled={actionSaving} onClick={closeActionForms} type="button">Fechar</button></div>
+                  <p className="section-footnote">Lançamentos da mesma direção, de valor igual ou menor, até 45 dias antes ou depois da data bancária. Selecione até 50 itens; a soma precisa ser igual ao movimento.</p>
+                  {!groupingAvailable && <p className="form-message" role="status">A conciliação com vários lançamentos precisa da atualização do banco de dados. Você ainda pode confirmar um único lançamento de valor igual ao movimento.</p>}
+                  {candidatesLoading && <p className="inline-state" aria-live="polite">Buscando lançamentos elegíveis…</p>}
                   {candidateError && <p className="form-message form-message-error" role="alert">{candidateError}</p>}
                   {candidateError && <button className="button button-secondary" onClick={() => void loadCandidates(movement)} type="button">Tentar novamente</button>}
-                  {!candidatesLoading && !candidateError && candidates.length === 0 && <p className="inline-state">Nenhum lançamento aberto de mesmo valor foi encontrado nesta janela de datas.</p>}
+                  {!candidatesLoading && !candidateError && candidates.length === 0 && <p className="inline-state">Nenhum lançamento elegível foi encontrado nesta janela de datas.</p>}
                   {!candidatesLoading && candidates.length > 0 && <>
-                    <p className="section-footnote" role="status">Exibindo {Math.min(candidateLimit, candidates.length)} de {candidates.length} sugestões com o mesmo valor.</p>
-                    <ul className="bank-candidate-list">{candidates.slice(0, candidateLimit).map((candidate) => <li key={`${candidate.kind}-${candidate.id}`}><div><strong>{candidate.title}</strong><small>{candidate.detail} · {formatBusinessDate(candidate.date)} · {candidate.kind === 'receipt' ? 'Recebimento' : 'Saída paga'}</small></div><strong>{formatAmount(candidate.amount_cents)}</strong><button className="button button-primary" disabled={actionSaving || loading || Boolean(loadError)} onClick={() => void confirmMatch(candidate)} type="button">{actionSaving ? 'Salvando…' : 'Confirmar'}</button></li>)}</ul>
+                    <p className="section-footnote" role="status">Exibindo {Math.min(candidateLimit, candidates.length)} de {candidates.length} sugestões.</p>
+                    <fieldset className="bank-candidate-fieldset" disabled={actionSaving || loading || Boolean(loadError)} aria-describedby={`bank-selection-total-${movement.id}`}><legend>Selecionar lançamentos</legend>
+                    <ul className="bank-candidate-list">{candidates.slice(0, candidateLimit).map((candidate) => {
+                      const selected = matchSelection.items.some((item) => item.kind === candidate.kind && item.id === candidate.id)
+                      return <li key={`${candidate.kind}-${candidate.id}`}><label className="bank-candidate-option"><input type="checkbox" checked={selected} disabled={!selected && matchSelection.items.length >= 50} onChange={() => toggleCandidate(candidate)} /><span><strong>{candidate.title}</strong><small>{candidate.detail} · {formatBusinessDate(candidate.date)} · {candidate.kind === 'receipt' ? 'Recebimento' : 'Saída paga'}</small></span><strong className="bank-candidate-value">{formatAmount(candidate.amount_cents)}</strong></label></li>
+                    })}</ul></fieldset>
                     {candidates.length > candidateLimit && <button className="button button-secondary" disabled={actionSaving || loading || Boolean(loadError)} onClick={() => setCandidateLimit((limit) => limit + 20)} type="button">Mostrar mais sugestões</button>}
+                    <div className="bank-selection-total" id={`bank-selection-total-${movement.id}`} role="status" aria-live="polite" aria-atomic="true"><p>{selectedCandidates.length} de 50 selecionados · Movimento: {formatAmount((signedAmount(movement.amount_cents) < 0n ? -signedAmount(movement.amount_cents) : signedAmount(movement.amount_cents)).toString())}</p><p><strong>Selecionado: {formatAmount(selectionSummary.total.toString())}</strong> · {selectionSummary.difference === 0n ? 'Soma exata' : selectionSummary.difference > 0n ? `Faltam ${formatAmount(selectionSummary.difference.toString())}` : `Excede em ${formatAmount((-selectionSummary.difference).toString())}`}</p>{selectedCandidates.length === 50 && <p>Limite de 50 itens atingido. Desmarque um item para selecionar outro.</p>}</div>
+                    <div className="record-form-actions"><button className="button button-primary" disabled={actionSaving || loading || Boolean(loadError) || !selectionSummary.canConfirm || (!groupingAvailable && selectedCandidates.length !== 1)} onClick={() => void confirmMatch()} type="button">{actionSaving ? 'Salvando…' : actionError ? 'Tentar confirmar novamente' : 'Confirmar conciliação'}</button></div>
                   </>}
                   {actionError && <p className="form-message form-message-error" role="alert">{actionError}</p>}
                 </section>}
 
-                {unmatchTarget?.id === match?.id && <form className="bank-action-panel bank-reason-form" onSubmit={(event) => void confirmUnmatch(event)}>
-                  <h3 ref={unmatchHeadingRef} tabIndex={-1}>Desfazer conciliação</h3><p className="section-footnote">O vínculo será encerrado e o motivo ficará no histórico.</p>
-                  <label className="record-field"><span className="field-label">Motivo</span><textarea className="text-input record-textarea" maxLength={500} onChange={(event) => setUnmatchReason(event.target.value)} required value={unmatchReason} /></label>
+                {unmatchTarget && unmatchTarget.id === match?.id && <form className="bank-action-panel bank-reason-form" onSubmit={(event) => void confirmUnmatch(event)}>
+                  <h3 ref={unmatchHeadingRef} tabIndex={-1}>Desfazer conciliação</h3><p className="section-footnote">{match?.match_group_id ? `Todos os ${activeLinks.length} vínculos do grupo serão encerrados` : 'O vínculo será encerrado'} e o motivo ficará no histórico.</p>
+                  <label className="record-field"><span className="field-label">Motivo</span><textarea className="text-input record-textarea" disabled={actionSaving} maxLength={500} onChange={(event) => { setUnmatchReason(event.target.value); actionRequestRef.current = newRequestId() }} required value={unmatchReason} /></label>
                   {actionError && <p className="form-message form-message-error" role="alert">{actionError}</p>}
-                  <div className="record-form-actions"><button className="button button-primary" disabled={actionSaving || loading || Boolean(loadError)} type="submit">{actionSaving ? 'Salvando…' : 'Confirmar e desfazer'}</button><button className="text-button" onClick={closeActionForms} type="button">Cancelar</button></div>
+                  <div className="record-form-actions"><button className="button button-primary" disabled={actionSaving || loading || Boolean(loadError)} type="submit">{actionSaving ? 'Salvando…' : 'Confirmar e desfazer'}</button><button className="text-button" disabled={actionSaving} onClick={closeActionForms} type="button">Cancelar</button></div>
                 </form>}
 
                 {duplicateTarget?.id === movement.id && <form className="bank-action-panel bank-reason-form" onSubmit={(event) => void confirmDuplicate(event)}>
@@ -881,7 +963,7 @@ export function BankReconciliationPage() {
           </ul>
           <div className="bank-history-pagination" aria-label="Paginação de movimentos">
             <span>{firstRecord}–{lastRecord} de {total} movimentos</span>
-            <div><button className="button button-secondary" disabled={loading || page === 0} onClick={() => void loadData(page - 1)} type="button">Anterior</button><button className="button button-secondary" disabled={loading || !hasMore} onClick={() => void loadData(page + 1)} type="button">Próxima</button></div>
+            <div><button className="button button-secondary" disabled={actionSaving || loading || page === 0} onClick={() => { clearActionForms(); void loadData(page - 1) }} type="button">Anterior</button><button className="button button-secondary" disabled={actionSaving || loading || !hasMore} onClick={() => { clearActionForms(); void loadData(page + 1) }} type="button">Próxima</button></div>
           </div>
         </>}
 

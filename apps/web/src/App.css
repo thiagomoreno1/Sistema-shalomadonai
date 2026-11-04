@@ -282,6 +282,8 @@
 .bank-status-duplicate { border-color: var(--line-strong); color: var(--warning); background: var(--warning-soft); }
 .bank-match-summary, .bank-history-note { margin: 6px 0 0; color: var(--success); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .bank-history-note { color: var(--muted); }
+.bank-match-summary p, .bank-history-note p { margin: 0; }
+.bank-match-summary ul, .bank-history-note ul { margin: 4px 0 0; padding-left: 18px; }
 .bank-movement-value { flex: 0 0 auto; text-align: right; }
 .bank-movement-value strong, .bank-movement-value small { display: block; }
 .bank-movement-value strong { color: var(--ink); font-size: 14px; }
@@ -294,8 +296,18 @@
 .bank-action-panel > .section-footnote { margin: 0; }
 .bank-action-panel .record-field .text-input { margin-bottom: 0; }
 .bank-candidate-list { margin-top: 0; border-top: 1px solid var(--line); }
-.bank-candidate-list > li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 63px; padding: 9px 2px; border-bottom: 1px solid var(--line); }
-.bank-candidate-list > li > div { min-width: 0; }
+.bank-candidate-list > li { border-bottom: 1px solid var(--line); }
+.bank-candidate-fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.bank-candidate-fieldset legend { padding: 0 0 8px; color: var(--ink); font-size: 11px; font-weight: 620; }
+.bank-candidate-option { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 63px; padding: 9px 4px; cursor: pointer; }
+.bank-candidate-option > span { min-width: 0; overflow-wrap: anywhere; }
+.bank-candidate-option input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
+.bank-candidate-option:has(input:checked) { background: var(--accent-wash); }
+.bank-candidate-option:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bank-candidate-option:has(input:disabled) { cursor: default; }
+.bank-candidate-value { text-align: right; overflow-wrap: anywhere; }
+.bank-selection-total { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.bank-selection-total p { margin: 0; }
 .bank-candidate-list strong { color: var(--ink); font-size: 11px; }
 .bank-candidate-list small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }
 .bank-candidate-list .button { min-height: 44px; }
@@ -775,9 +787,9 @@
   .bank-import-preview-heading { align-items: flex-start; flex-direction: column; }
   .bank-import-preview-heading span { text-align: left; }
   .bank-statement-import > .section-heading { align-items: flex-start; flex-direction: column; }
-  .bank-candidate-list > li { grid-template-columns: minmax(0, 1fr) auto; gap: 7px 10px; }
-  .bank-candidate-list > li > strong { grid-column: 2; grid-row: 1; }
-  .bank-candidate-list > li .button { grid-column: 1 / -1; justify-self: stretch; }
+  .bank-candidate-option { grid-template-columns: 22px minmax(0, 1fr); gap: 7px 10px; }
+  .bank-candidate-value { grid-column: 2; text-align: left; }
+  .bank-action-panel .record-form-actions .button { width: 100%; }
   .bank-history-pagination { align-items: flex-start; flex-direction: column; }
   .bank-history-pagination > div { width: 100%; }
   .bank-history-pagination .button { flex: 1; }
