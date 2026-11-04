@@ -6,6 +6,7 @@ import { DashboardTrends, type DashboardTrendDay, type DashboardTrendPeriod } fr
 import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
 import { useBusinessToday } from '../lib/useBusinessToday'
 import { supabaseClient } from '../lib/supabase'
+import './DashboardDesignReferencesPage.css'
 
 type DashboardPriorities = {
   as_of_on: string
@@ -207,6 +208,7 @@ export function DashboardPage() {
           <h1>Central do dia</h1>
           <p className="page-description">O que precisa de ação hoje?</p>
         </div>
+        {role === 'owner' && <Link className="dashboard-reference-link" to="/referencias-central"><Icon name="chart" /> Comparar visuais</Link>}
       </header>
 
       <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
