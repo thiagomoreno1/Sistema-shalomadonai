@@ -18,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -47,18 +47,20 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
-      - name: Set up Supabase CLI
-        uses: supabase/setup-cli@v1
+      - name: Set up Node.js for the pinned Supabase CLI
+        uses: actions/setup-node@v7.1.0
         with:
-          version: 2.122.0
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Start local database and apply migrations
-        run: supabase db start
+        run: npx --yes supabase@2.122.0 db start
 
       - name: Lint local database schema
-        run: supabase db lint --schema public,private --level warning
+        run: npx --yes supabase@2.122.0 db lint --schema public,private --level warning
 
       - name: Run local pgTAP suites
-        run: supabase test db
+        run: npx --yes supabase@2.122.0 test db

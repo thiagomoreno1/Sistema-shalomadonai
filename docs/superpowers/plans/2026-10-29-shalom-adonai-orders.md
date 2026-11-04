@@ -47,7 +47,7 @@
 
 - [x] Add business-scoped tables for orders, order lines, installments, payments, payment allocations, and order events, with owner-only RLS, composite tenant foreign keys, idempotency keys, append-only payment history, and integer-cent constraints.
 - [x] Implement the three transactional RPCs with a pinned empty `search_path`, owner checks before reads/writes, locks around installment balances, exact allocation validation, and safe cancellation rules.
-- [x] Review the migration statically for privilege boundaries and SQL invariants. Replay and exercise it with two identities if a local Supabase/PostgreSQL engine is available; otherwise record the precise runtime blocker. Static reviews completed; runtime replay is blocked because the Docker Desktop Linux engine is unavailable.
+- [x] Review the migration statically for privilege boundaries and SQL invariants. The GitHub CI run on `f2a8799` replayed all 34 migrations in an isolated local Supabase database and passed both pgTAP files (99 assertions), including owner/staff/other-business checks. This does not verify hosted Auth or HTTP behavior.
 
 ## Task 2: Order creation, list, and detail
 
@@ -74,7 +74,7 @@
 ## Task 3: Checks and handoff
 
 - [x] Run `npm run lint`, `npm run build`, and `git diff --check` after the final review corrections; all pass.
-- [ ] Verify migration and RPC behavior against a local database when available; never present frontend compilation as proof that SQL or RLS works. Blocked by the unavailable Docker Desktop Linux engine and missing local Supabase CLI/PostgreSQL service.
+- [x] Verify migration and RPC behavior against a fresh local database in GitHub CI; all 34 migrations replay and both SQL suites pass (99 assertions). Hosted deployment and HTTP authentication remain unverified.
 - [x] Request read-only software/RLS and product-design reviews of the coherent order/receivable diff; address material findings and request follow-up reviews for the corrections.
 - [x] Update the technical plan with completed code, verified runtime behavior, and still-open decisions.
 

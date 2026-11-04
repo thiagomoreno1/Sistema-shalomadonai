@@ -66,7 +66,7 @@
 
 - [x] Add business and membership tables with foreign keys, unique owner membership, explicit authenticated grants, RLS enabled, and policies that scope access to a member's business.
 - [x] Allow only an authenticated creator to create a business and its initial owner membership; permit the owner policy needed for future staff membership records, without adding staff UI.
-- [ ] Replay the migration against a local Supabase database; check anonymous denial and separation between two authenticated identities. Blocked because the local Docker Desktop Linux engine is unavailable.
+- [x] Replay all migrations in an isolated local Supabase database through GitHub CI; pgTAP verifies anonymous users cannot execute `create_order` and that owner/staff/other-business contexts are isolated in the order workflow. This is database-role/claim verification, not a real Auth sign-in or recovery-email test.
 
 ## Task 3: Documentation, review, and handoff
 
@@ -92,6 +92,6 @@ This milestone does not enable business sign-up, create delivery-worker accounts
 - [x] Structure call outcomes, require same-day follow-up for missed calls, preserve paginated call history, and keep archived customer history readable/restorable.
 - [x] Detect multiple owner-business memberships rather than silently selecting one; ensure catalog copy and mutation feedback match implemented behavior.
 - [x] Add dashboard follow-up visibility and clear empty/error/loading states.
-- [ ] Replay the new migration and verify CRUD, RPC, anonymous denial, and business isolation against local Supabase. Blocked by unavailable Docker Desktop Linux engine.
+- [ ] Add direct customer/product CRUD tests across authenticated and anonymous API contexts. CI now replays migrations and covers order-level RPC/RLS paths, but it does not yet prove every customer/product CRUD policy.
 - [ ] Inspect the authenticated screens at desktop and phone sizes against a connected test project; no real Supabase owner account/project is configured.
 - [ ] Inventory and import existing customer/product records after their source files and duplicate-resolution rules are provided.
