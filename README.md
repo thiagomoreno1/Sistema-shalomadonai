@@ -29,7 +29,7 @@ These commands start and reset only the local database. `db reset` reapplies the
 
 ```bash
 npx supabase start
-npx supabase db reset
+npx supabase db reset --no-seed
 npx supabase status
 ```
 
@@ -48,6 +48,7 @@ The migration creates the matching owner membership automatically. Use a UUID fr
 ## Commands
 
 ```bash
+npm test
 npm run lint
 npm run build
 npm run preview
@@ -55,8 +56,16 @@ npm run preview
 
 ## Current setup status — 2026-11-03
 
-The hosted Supabase project is `ACTIVE_HEALTHY`. Hosted Auth currently allows email sign-up and auto-confirms email; new accounts still receive no business data access until the owner approves their request. The owner's confirmed Auth account, Shalom Adonai business, and owner membership are present. The hosted database has 22 recorded migrations; 10 newer migrations in `supabase/migrations/` are not applied yet, so some screens that call their database functions currently return setup errors. Customer interaction entry falls back to its prior RPC until the pending idempotency migration is applied; retry protection is not active on that legacy path. Multiple named customer addresses are implemented in the repository, but the hosted address table is pending; the legacy principal address remains editable. `supabase/config.toml` describes the local CLI stack; it does not configure the hosted project's Auth or database.
+The hosted Supabase project is `ACTIVE_HEALTHY`. Hosted Auth currently allows email sign-up and auto-confirms email; new accounts still receive no business data access until the owner approves their request. The owner's confirmed Auth account, Shalom Adonai business, and owner membership are present. The hosted database has 22 recorded migrations; the repository has 34 migration files, with 12 newer migrations in `supabase/migrations/` not applied yet, so some screens that call their database functions currently return setup errors. Customer interaction entry falls back to its prior RPC until the pending idempotency migration is applied; retry protection is not active on that legacy path. Multiple named customer addresses are implemented in the repository, but the hosted address table is pending; the legacy principal address remains editable. `supabase/config.toml` describes the local CLI stack; it does not configure the hosted project's Auth or database.
 
 The repository already includes customer and product records, named customer delivery addresses with order-specific snapshots, optional private product photos, manual call history and follow-ups, orders and receivables, stock tracking and physical purchase receipts, combo component snapshots, delivery assignments and explicit customer pickup, paid outflows, managerial reports, and manual bank-movement reconciliation. No demonstration customer, stock, order, or financial records are seeded; the owner will provide and enter operational data progressively using the existing forms. The OFX/QFX importer is implemented in the repository, but its migration is pending on the hosted Supabase project. Open Finance Sandbox functions are also not deployed there, and provider credentials and consent setup remain pending.
 
 Stable production hosting and domain, hosted Auth redirects and recovery email delivery, end-to-end verification of the hosted schema and permissions, and the WhatsApp, banking, and fiscal provider integrations remain to be completed. WhatsApp number onboarding is intentionally deferred; fiscal details require the accountant's guidance. The temporary preview is for review, not production.
+
+## Manual grouped bank reconciliation — 2026-11-03 (local; hosted rollout pending)
+
+The repository supports manually linking one bank movement to 1–50 full financial records with an exact sum in cents: credits use receipts and debits use paid outflows. No partial allocation, source splitting, fee adjustment, or automatic match is supported. The selection shows the total and difference and requires explicit confirmation. Reversing a group requires a reason and atomically reverses every link while retaining history. Existing one-to-one records remain compatible and reverse individually. Reconciliation does not create receipts/outflows or change cash and managerial totals.
+
+The two newest migrations, `20261104005707_business_member_management.sql` and `20261104013512_bank_reconciliation_grouping.sql`, are applied only to the local stack alongside the other repository migrations. **Grouped reconciliation is not enabled on the hosted database yet:** hosted reconciliation remains one-to-one until a separate rollout, and the local page retains an exact-value single-record fallback for that schema. Open Finance is not connected.
+
+The final local verification passed 19 Node tests, the production build, and 51 pgTAP assertions. Frontend lint exited zero with 22 existing warnings; database lint exited zero with two existing unused-variable warnings. See [the technical plan](docs/technical-plan.md#manual-grouped-bank-reconciliation--2026-11-03-local-verification) for the commands, local reset target, and limitations. No hosted migration, function deployment, or configuration change was performed for this milestone.
