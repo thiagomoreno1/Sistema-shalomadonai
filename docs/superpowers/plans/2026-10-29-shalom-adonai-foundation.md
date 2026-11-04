@@ -92,6 +92,6 @@ This milestone does not enable business sign-up, create delivery-worker accounts
 - [x] Structure call outcomes, require same-day follow-up for missed calls, preserve paginated call history, and keep archived customer history readable/restorable.
 - [x] Detect multiple owner-business memberships rather than silently selecting one; ensure catalog copy and mutation feedback match implemented behavior.
 - [x] Add dashboard follow-up visibility and clear empty/error/loading states.
-- [ ] Add direct customer/product CRUD tests across authenticated and anonymous API contexts. CI now replays migrations and covers order-level RPC/RLS paths, but it does not yet prove every customer/product CRUD policy.
-- [ ] Inspect the authenticated screens at desktop and phone sizes against a connected test project; no real Supabase owner account/project is configured.
+- [x] Add direct customer/product and catalog RLS tests: owner create/read/update and archive/restore, staff and cross-business denials, anonymous table grants, and address update/delete/default-promotion paths. CI replays migrations and runs these pgTAP checks against an isolated local database; hosted HTTP authentication still requires separate acceptance.
+- [ ] Inspect the authenticated screens at desktop and phone sizes. The hosted project exists, but its schema currently lacks 12 repository migrations; complete this acceptance after the compatible schema is rolled out and a dedicated test session is available.
 - [ ] Inventory and import existing customer/product records after their source files and duplicate-resolution rules are provided.
