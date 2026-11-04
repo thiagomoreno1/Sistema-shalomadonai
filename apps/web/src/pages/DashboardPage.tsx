@@ -75,6 +75,96 @@ const deliveryStatusLabels: Record<DashboardPriorities['deliveries']['items'][nu
   rescheduled: 'Reagendada',
 }
 
+function createDemoPriorities(today: string): DashboardPriorities {
+  const yesterday = shiftCalendarDate(today, -1)
+  const twoDaysAgo = shiftCalendarDate(today, -2)
+  return {
+    as_of_on: today,
+    follow_ups: {
+      pending_count: 3,
+      items: [
+        { id: 'demo-follow-up-1', title: 'Confirmar reposição do sabão neutro', due_on: yesterday, priority: 'high', customer_id: null, customer_name: 'Mercado Boa Praça' },
+        { id: 'demo-follow-up-2', title: 'Retornar sobre orçamento de novembro', due_on: today, priority: 'normal', customer_id: null, customer_name: 'Condomínio Vila Verde' },
+        { id: 'demo-follow-up-3', title: 'Confirmar quantidade para sexta-feira', due_on: today, priority: 'normal', customer_id: null, customer_name: 'Restaurante Sabor Caseiro' },
+      ],
+    },
+    receivables: {
+      overdue_count: 2,
+      overdue_balance_cents: '31800',
+      due_today_count: 1,
+      due_today_balance_cents: '8700',
+      items: [
+        { installment_id: 'demo-installment-1', order_id: 'demo-order-1', installment_number: 2, due_on: twoDaysAgo, customer_name: 'Mercado Boa Praça', balance_cents: '12000', overdue: true },
+        { installment_id: 'demo-installment-4', order_id: 'demo-order-4', installment_number: 1, due_on: yesterday, customer_name: 'Restaurante Sabor Caseiro', balance_cents: '19800', overdue: true },
+        { installment_id: 'demo-installment-2', order_id: 'demo-order-2', installment_number: 1, due_on: today, customer_name: 'Condomínio Vila Verde', balance_cents: '8700', overdue: false },
+      ],
+    },
+    deliveries: {
+      pending_count: 3,
+      items: [
+        { delivery_id: 'demo-delivery-1', order_id: 'demo-order-3', customer_name: 'Mercado Boa Praça', status: 'attempted', scheduled_on: today, time_window: '09:00–12:00', delivery_worker_name: 'Rafael' },
+        { delivery_id: 'demo-delivery-2', order_id: 'demo-order-4', customer_name: 'Condomínio Vila Verde', status: 'awaiting_separation', scheduled_on: today, time_window: '13:00–16:00', delivery_worker_name: 'João' },
+        { delivery_id: 'demo-delivery-3', order_id: 'demo-order-5', customer_name: 'Restaurante Sabor Caseiro', status: 'rescheduled', scheduled_on: today, time_window: '16:00–18:00', delivery_worker_name: 'Rafael' },
+      ],
+    },
+    inventory: {
+      tracked_product_count: 12,
+      without_minimum_count: 2,
+      attention_count: 2,
+      items: [
+        { product_id: 'demo-product-1', product_name: 'Detergente neutro 5 L', inventory_unit: 'un.', minimum_stock: 8, quantity_on_hand: 3 },
+        { product_id: 'demo-product-2', product_name: 'Desinfetante floral 2 L', inventory_unit: 'un.', minimum_stock: null, quantity_on_hand: -1 },
+      ],
+    },
+  }
+}
+
+function createDemoTrends(startOn: string, period: DashboardTrendPeriod): DashboardTrendDay[] {
+  const orders = [0, 1, 2, 1, 3, 2, 4]
+  const receipts = [0, 125000, 86000, 250000, 0, 340000, 422000]
+  const outflows = [45000, 0, 95000, 145000, 62000, 88000, 73000]
+  return Array.from({ length: period }, (_, index) => {
+    const patternIndex = index % orders.length
+    return {
+      business_date: shiftCalendarDate(startOn, index),
+      order_count: BigInt(orders[patternIndex]),
+      receipts_cents: BigInt(receipts[patternIndex]),
+      paid_outflows_cents: BigInt(outflows[patternIndex]),
+    }
+  })
+}
+
+function createDemoFinancialSummary(days: DashboardTrendDay[]): DashboardFinancialSummary {
+  const orders = days.reduce((total, day) => total + day.order_count, 0n)
+  const sales = orders * 218000n
+  const paidOutflows = days.reduce((total, day) => total + day.paid_outflows_cents, 0n)
+  const itemCost = sales * 55n / 100n
+  const operatingExpenses = paidOutflows * 80n / 100n
+  const deliveryCost = paidOutflows - operatingExpenses
+  return {
+    receipts: { amount_cents: days.reduce((total, day) => total + day.receipts_cents, 0n).toString() },
+    managerial_result: {
+      sales_cents: sales.toString(),
+      item_cost_cents: itemCost.toString(),
+      missing_cost_line_count: 0,
+      returned_order_count: 0,
+      operating_expense_cents: operatingExpenses.toString(),
+      delivery_cost_cents: deliveryCost.toString(),
+      available: true,
+      result_cents: (sales - itemCost - operatingExpenses - deliveryCost).toString(),
+    },
+  }
+}
+
+function createDemoRecentOrders(today: string): RecentOrder[] {
+  return [
+    { id: 'demo-order-1', customer_name_snapshot: 'Mercado Boa Praça', status: 'open', requires_delivery: true, created_at: `${today}T13:10:00-03:00` },
+    { id: 'demo-order-2', customer_name_snapshot: 'Condomínio Vila Verde', status: 'open', requires_delivery: false, created_at: `${today}T11:45:00-03:00` },
+    { id: 'demo-order-3', customer_name_snapshot: 'Restaurante Sabor Caseiro', status: 'open', requires_delivery: true, created_at: `${shiftCalendarDate(today, -1)}T16:20:00-03:00` },
+    { id: 'demo-order-4', customer_name_snapshot: 'Lavanderia Ponto Limpo', status: 'cancelled', requires_delivery: true, created_at: `${shiftCalendarDate(today, -2)}T09:30:00-03:00` },
+  ]
+}
+
 function formatQuantity(value: number) {
   return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(value)
 }
@@ -113,6 +203,7 @@ function readTrendDays(value: unknown, startOn: string, period: DashboardTrendPe
 
 export function DashboardPage() {
   const { id: businessId, role } = useBusiness()
+  const demoPreview = role === 'owner' && import.meta.env.DEV && new URLSearchParams(window.location.search).get('demo') === '1'
   const today = useBusinessToday()
   const businessDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeZone: 'America/Sao_Paulo' }).format(new Date(`${today}T12:00:00Z`))
   const prioritiesScopeKey = `${businessId}:${role}:${today}`
@@ -156,6 +247,10 @@ export function DashboardPage() {
     }
     setTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
     try {
+      if (demoPreview) {
+        setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: createDemoTrends(trendStartOn, trendPeriod) })
+        return
+      }
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
       const { data, error } = await supabaseClient.rpc('get_dashboard_daily_trends', {
         p_business_id: businessId,
@@ -168,13 +263,17 @@ export function DashboardPage() {
     } catch {
       if (requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
     }
-  }, [businessId, role, today, trendPeriod, trendScopeKey, trendStartOn])
+  }, [businessId, demoPreview, role, today, trendPeriod, trendScopeKey, trendStartOn])
 
   const loadFinancialSummary = useCallback(async () => {
     const requestId = ++financialSummaryRequestId.current
     if (role !== 'owner') return
     setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: true, error: false, data: null })
     try {
+      if (demoPreview) {
+        setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: createDemoFinancialSummary(createDemoTrends(trendStartOn, trendPeriod)) })
+        return
+      }
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
       const { data, error } = await supabaseClient.rpc('get_financial_report_summary', {
         p_business_id: businessId,
@@ -187,7 +286,7 @@ export function DashboardPage() {
     } catch {
       if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: true, data: null })
     }
-  }, [businessId, financialSummaryScopeKey, role, today, trendStartOn])
+  }, [businessId, demoPreview, financialSummaryScopeKey, role, today, trendPeriod, trendStartOn])
 
   const loadPriorities = useCallback(async () => {
     const requestId = ++prioritiesRequestId.current
@@ -197,6 +296,10 @@ export function DashboardPage() {
     }
     setPriorityState({ scopeKey: prioritiesScopeKey, loading: true, error: false, data: null })
     try {
+      if (demoPreview) {
+        setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data: createDemoPriorities(today) })
+        return
+      }
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
       const { data, error } = await supabaseClient.rpc('get_dashboard_priorities', {
         p_business_id: businessId,
@@ -207,7 +310,7 @@ export function DashboardPage() {
     } catch {
       if (requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: true, data: null })
     }
-  }, [businessId, role, today, prioritiesScopeKey])
+  }, [businessId, demoPreview, role, today, prioritiesScopeKey])
 
   const loadRecentOrders = useCallback(async () => {
     const requestId = ++recentOrdersRequestId.current
@@ -217,6 +320,10 @@ export function DashboardPage() {
     }
     setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: true, error: false, orders: [] })
     try {
+      if (demoPreview) {
+        setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: false, orders: createDemoRecentOrders(today) })
+        return
+      }
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
       const { data, error } = await supabaseClient.from('orders')
         .select('id, customer_name_snapshot, status, requires_delivery, created_at')
@@ -229,7 +336,7 @@ export function DashboardPage() {
     } catch {
       if (requestId === recentOrdersRequestId.current) setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: true, orders: [] })
     }
-  }, [businessId, role, recentOrdersScopeKey])
+  }, [businessId, demoPreview, role, recentOrdersScopeKey, today])
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
@@ -262,6 +369,8 @@ export function DashboardPage() {
         </div>
         {role === 'owner' && <Link className="dashboard-reference-link" to="/referencias-central"><Icon name="chart" /> Comparar visuais</Link>}
       </header>
+
+      {demoPreview && <div className="dashboard-reference-notice" role="status"><Icon name="chart" /><p><strong>Prévia com dados fictícios.</strong> As métricas, os pedidos e os alertas desta Central são exemplos locais. Nada foi gravado no banco; as demais telas continuam com os dados reais.</p></div>}
 
       {role === 'owner' ? <>
       <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
@@ -330,7 +439,7 @@ export function DashboardPage() {
                 <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Recebimentos a acompanhar</h3><Link className="quiet-link" to="/financeiro">Ver contas <Icon name="arrow" /></Link></div>
                 {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma conta vencida ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
                   {priorities.receivables.items.map((item) => <li key={item.installment_id}>
-                    <Link to={`/pedidos/${item.order_id}`}>
+                    <Link to={demoPreview ? '/financeiro' : `/pedidos/${item.order_id}`}>
                       <span className={`dashboard-action-symbol${item.overdue ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
                       <span className="dashboard-action-copy"><strong>{item.customer_name}</strong><small>Parcela {item.installment_number} · {formatBusinessDate(item.due_on)}</small></span>
                       <span className="dashboard-action-meta"><strong>{formatBRLExact(item.balance_cents)}</strong><span className={`dashboard-row-state${item.overdue ? ' is-overdue' : ' is-today'}`}>{item.overdue ? 'Vencido' : 'Vence hoje'}</span></span>
@@ -345,7 +454,7 @@ export function DashboardPage() {
                 <div className="dashboard-action-group-heading"><h3 id="dashboard-deliveries-title">Entregas</h3><Link className="quiet-link" to="/entregas">Ver fila <Icon name="arrow" /></Link></div>
                 {priorities.deliveries.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma entrega precisa de atualização.</p> : <ul className="dashboard-action-list">
                   {priorities.deliveries.items.map((delivery) => <li key={delivery.delivery_id}>
-                    <Link to={`/pedidos/${delivery.order_id}`}>
+                    <Link to={demoPreview ? '/entregas' : `/pedidos/${delivery.order_id}`}>
                       <span className={`dashboard-action-symbol${delivery.status === 'attempted' ? ' is-overdue' : ' is-delivery'}`}><Icon name="truck" /></span>
                       <span className="dashboard-action-copy"><strong>{delivery.customer_name}</strong><small>{delivery.delivery_worker_name ?? 'Entrega a acompanhar'}</small></span>
                       <span className="dashboard-action-meta"><span className={`dashboard-row-state${delivery.status === 'attempted' ? ' is-overdue' : ' is-delivery'}`}>{deliveryStatusLabels[delivery.status]}</span><small>{delivery.scheduled_on === null ? 'Sem data' : delivery.scheduled_on < today ? 'Data vencida' : delivery.scheduled_on === today ? 'Hoje' : formatBusinessDate(delivery.scheduled_on)}</small></span>
@@ -415,7 +524,7 @@ export function DashboardPage() {
             {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length === 0 && <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="bag" /></span><h3>Ainda não há pedidos registrados</h3><p>Os últimos quatro pedidos aparecerão aqui.</p><Link className="quiet-link" to="/pedidos/novo">Criar primeiro pedido <Icon name="arrow" /></Link></div>}
             {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length > 0 && <ul className="dashboard-recent-order-list">
               {currentRecentOrders.orders.map((order) => <li key={order.id}>
-                <Link to={`/pedidos/${order.id}`}>
+                <Link to={demoPreview ? '/pedidos' : `/pedidos/${order.id}`}>
                   <span className={`dashboard-order-dot${order.status === 'cancelled' ? ' is-cancelled' : ''}`} aria-hidden="true" />
                   <span className="dashboard-recent-order-copy"><strong>{order.customer_name_snapshot}</strong><small>{formatOrderDate(order.created_at)} · {order.requires_delivery ? 'Entrega' : 'Retirada'}</small></span>
                   <span className={`dashboard-recent-order-status${order.status === 'cancelled' ? ' is-cancelled' : ''}`}>{order.status === 'cancelled' ? 'Cancelado' : 'Pedido ativo'}</span>
