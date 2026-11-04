@@ -6,7 +6,7 @@
 .dashboard-reference-notice > svg { flex: 0 0 auto; width: 20px; height: 20px; margin-top: 1px; color: var(--accent); }
 .dashboard-reference-notice p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .dashboard-reference-notice strong { color: var(--ink); }
-.dashboard-reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px; }
+.dashboard-reference-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
 .dashboard-reference-card { display: flex; min-width: 0; flex-direction: column; gap: 14px; padding: 17px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); box-shadow: var(--shadow); transition: border-color 150ms ease, background-color 150ms ease; }
 .dashboard-reference-card.is-preferred { border-color: var(--accent); background: var(--accent-wash); }
 .dashboard-reference-card-heading { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: start; gap: 11px; }
@@ -75,6 +75,7 @@
 
 @media (max-width: 900px) {
   .dashboard-reference-grid { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-reference-desktop-split { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 680px) {
@@ -136,7 +137,28 @@
 .dashboard-reference-balanced-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: start; }
 .dashboard-reference-balanced-top > .dashboard-reference-section { height: 100%; }
 .dashboard-reference-balanced-top .dashboard-reference-attention-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.dashboard-reference-full-screen .dashboard-reference-metric-grid.is-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dashboard-reference-desktop-split { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.dashboard-reference-desktop-split.is-chart-focus { grid-template-columns: minmax(0, 1.75fr) minmax(360px, 1fr); }
+.dashboard-reference-desktop-split.is-operations-first { grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); }
+.dashboard-reference-desktop-split .dashboard-reference-attention-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dashboard-reference-finance-stack { display: grid; gap: 14px; min-width: 0; }
+.dashboard-reference-full-screen .dashboard-reference-metric-grid.is-three { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.dashboard-reference-full-screen .dashboard-reference-preview-heading strong { font-size: 14px; }
+.dashboard-reference-full-screen .dashboard-reference-preview-heading span { font-size: 12px; }
+.dashboard-reference-full-screen .dashboard-reference-metric { min-height: 82px; padding: 12px 14px; }
+.dashboard-reference-full-screen .dashboard-reference-metric > span { font-size: 12px; }
+.dashboard-reference-full-screen .dashboard-reference-metric > strong { font-size: 22px; }
+.dashboard-reference-full-screen .dashboard-reference-section-heading > strong { font-size: 14px; }
+.dashboard-reference-full-screen .dashboard-reference-section-heading > span { font-size: 12px; }
+.dashboard-reference-full-screen .dashboard-reference-attention-grid > div { min-height: 86px; padding: 12px; }
+.dashboard-reference-full-screen .dashboard-reference-attention-grid span { font-size: 12px; }
+.dashboard-reference-full-screen .dashboard-reference-attention-grid strong { font-size: 20px; }
+.dashboard-reference-full-screen .dashboard-reference-attention-grid small { font-size: 11px; }
+.dashboard-reference-full-screen .dashboard-reference-action-list li strong, .dashboard-reference-full-screen .dashboard-reference-plain-list li strong { font-size: 13px; }
+.dashboard-reference-full-screen .dashboard-reference-action-list li small, .dashboard-reference-full-screen .dashboard-reference-plain-list li small { font-size: 12px; }
+.dashboard-reference-full-screen .dashboard-reference-action-list li > span:first-child, .dashboard-reference-full-screen .dashboard-reference-action-list li > b, .dashboard-reference-full-screen .dashboard-reference-plain-list li > b { font-size: 11px; }
+.dashboard-reference-finance-stack .dashboard-reference-metric-grid.is-three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dashboard-reference-finance-stack .dashboard-reference-metric-grid.is-three > :last-child:nth-child(odd) { grid-column: 1 / -1; }
 
 @media (max-width: 680px) {
   .dashboard-reference-full-screen { min-height: 0; padding: 11px; }

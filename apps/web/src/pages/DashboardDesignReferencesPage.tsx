@@ -159,15 +159,19 @@ function ReferenceMockup({ id }: { id: ReferenceId }) {
       <div className="dashboard-reference-full-heading"><PreviewHeader title="Central do dia" period="Hoje · período —" /><span>PRÉVIA COMPLETA ↓</span></div>
       {id === 'indicators' && <>
         <MetricsOverview />
-        <div className="dashboard-reference-graph-block"><PreviewHeader title="Vendas ao longo do período" period="Gráfico" /><ChartPlaceholder kind="line" title="Gráfico completo de vendas ao longo do período" large /></div>
-        <AttentionOverview />
+        <div className="dashboard-reference-desktop-split">
+          <div className="dashboard-reference-graph-block"><PreviewHeader title="Vendas ao longo do período" period="Gráfico" /><ChartPlaceholder kind="line" title="Gráfico completo de vendas ao longo do período" large /></div>
+          <AttentionOverview />
+        </div>
         <ActionQueuePreview />
         <OperationalDetails />
         <ShortcutStrip />
       </>}
       {id === 'trend' && <>
-        <AttentionOverview prominent />
-        <div className="dashboard-reference-graph-block"><PreviewHeader title="Ritmo de vendas" period="Gráfico em destaque" /><ChartPlaceholder kind="bars" title="Gráfico completo para acompanhar o ritmo de vendas" large /><div className="dashboard-reference-legend"><span>Vendas</span><span>Recebimentos</span><span>Saídas pagas</span></div></div>
+        <div className="dashboard-reference-desktop-split is-chart-focus">
+          <div className="dashboard-reference-graph-block"><PreviewHeader title="Ritmo de vendas" period="Gráfico em destaque" /><ChartPlaceholder kind="bars" title="Gráfico completo para acompanhar o ritmo de vendas" large /><div className="dashboard-reference-legend"><span>Vendas</span><span>Recebimentos</span><span>Saídas pagas</span></div></div>
+          <AttentionOverview prominent />
+        </div>
         <MetricsOverview compact />
         <ActionQueuePreview />
         <OperationalDetails />
@@ -175,16 +179,20 @@ function ReferenceMockup({ id }: { id: ReferenceId }) {
       </>}
       {id === 'result' && <>
         <AttentionOverview prominent />
-        <ActionQueuePreview />
-        <MetricsOverview compact />
-        <ResultComposition />
+        <div className="dashboard-reference-desktop-split is-operations-first">
+          <ActionQueuePreview />
+          <div className="dashboard-reference-finance-stack"><MetricsOverview compact /><ResultComposition /></div>
+        </div>
         <div className="dashboard-reference-graph-block"><PreviewHeader title="Tendência do período" period="Gráfico" /><ChartPlaceholder kind="line" title="Gráfico completo de tendência do período" large /></div>
         <OperationalDetails />
         <ShortcutStrip />
       </>}
       {id === 'hybrid' && <>
-        <div className="dashboard-reference-balanced-top"><MetricsOverview compact /><AttentionOverview /></div>
-        <div className="dashboard-reference-graph-block"><PreviewHeader title="Evolução do negócio" period="Gráfico" /><ChartPlaceholder kind="spark" title="Gráfico completo com evolução do negócio" large /></div>
+        <MetricsOverview compact />
+        <div className="dashboard-reference-desktop-split is-chart-focus">
+          <div className="dashboard-reference-graph-block"><PreviewHeader title="Evolução do negócio" period="Gráfico" /><ChartPlaceholder kind="spark" title="Gráfico completo com evolução do negócio" large /></div>
+          <AttentionOverview />
+        </div>
         <ActionQueuePreview />
         <OperationalDetails />
         <ResultComposition />
