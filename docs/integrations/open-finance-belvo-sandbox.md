@@ -12,6 +12,10 @@ O ID do vínculo de sandbox não é salvo no banco do Shalom. A validação, o r
 
 O endpoint `belvo-sandbox-webhook` apenas autentica e confirma o recebimento dos eventos com HTTP 202. Ele não armazena eventos, busca recursos adicionais ou importa movimentos.
 
+## Verificação local do webhook
+
+`npm test` inclui uma suíte Deno local para o contrato do webhook: pré-voo, método, segredo ausente, Bearer inválido, JSON e envelope inválidos, corpo acima do limite e evento válido. A suíte usa um token fictício e verifica que o endpoint não faz chamadas externas nem devolve o conteúdo do evento. Ela não chama a Belvo, o Supabase ou a função publicada e não substitui o consentimento de sandbox.
+
 ## Pré-requisitos para abrir o widget
 
 Configure os itens abaixo como secrets do projeto Supabase `mnsfdcqcsluhqtzqiiun`. Não coloque valores em arquivos `.env` do frontend, no GitHub ou nesta documentação.

@@ -80,7 +80,7 @@ async function readBoundedBody(request: Request): Promise<string | null> {
   return new TextDecoder('utf-8', { fatal: true }).decode(body)
 }
 
-Deno.serve(async (request: Request) => {
+export async function handler(request: Request): Promise<Response> {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
 
@@ -108,4 +108,6 @@ Deno.serve(async (request: Request) => {
   if (!isEventEnvelope(payload)) return json({ error: 'invalid_event' }, 400)
 
   return json({ received: true }, 202)
-})
+}
+
+if (import.meta.main) Deno.serve(handler)

@@ -9,7 +9,9 @@
     "dev": "npm run dev --workspace=web",
     "build": "npm run build --workspace=web",
     "lint": "npm run lint --workspace=web",
-    "test": "npm run test --workspace=web",
+    "test": "npm run test:web && npm run test:edge",
+    "test:web": "npm run test --workspace=web",
+    "test:edge": "npx --yes deno@2.9.6 test --allow-env supabase/functions/belvo-sandbox-webhook/index_test.ts",
     "preview": "npm run preview --workspace=web"
   }
 }
