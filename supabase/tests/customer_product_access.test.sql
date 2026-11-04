@@ -161,14 +161,10 @@ select throws_ok($$insert into public.products (business_id, name, sale_price_ce
 select throws_ok($$insert into public.customer_addresses (business_id, customer_id, label, address)
   values (pg_temp.uid('catalog-business'), (select id from catalog_records where name = 'customer'), 'Staff', 'Blocked')$$,
   '42501', null, 'Staff cannot add a customer address');
-select is((with changed as (
-  update public.customers set name = 'Unauthorized staff update'
-   where id = (select id from catalog_records where name = 'customer') returning 1
-) select count(*) from changed), 0::bigint, 'Staff cannot update an owner customer');
-select is((with changed as (
-  update public.products set sale_price_cents = 1
-   where id = (select id from catalog_records where name = 'product') returning 1
-) select count(*) from changed), 0::bigint, 'Staff cannot update an owner product');
+update public.customers set name = 'Unauthorized staff update'
+ where id = (select id from catalog_records where name = 'customer');
+update public.products set sale_price_cents = 1
+ where id = (select id from catalog_records where name = 'product');
 
 select set_config('request.jwt.claim.sub', pg_temp.uid('catalog-outsider')::text, true);
 select is((select count(*) from public.customers where business_id = pg_temp.uid('catalog-business')),
@@ -185,6 +181,8 @@ select throws_ok($$insert into public.products (business_id, name, sale_price_ce
   '42501', null, 'Owner cannot create a product in another business');
 
 select set_config('request.jwt.claim.sub', pg_temp.uid('catalog-owner')::text, true);
+select is((select name from public.customers where id = (select id from catalog_records where name = 'customer')),
+  'Synthetic customer', 'Staff update attempt leaves the owner customer unchanged');
 select is((select notes from public.customers where id = (select id from catalog_records where name = 'customer')),
   'Updated test note', 'Rejected writes leave the owner customer unchanged');
 select is((select sale_price_cents from public.products where id = (select id from catalog_records where name = 'product')),
