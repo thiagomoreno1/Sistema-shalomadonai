@@ -38,6 +38,20 @@ type RecentOrder = {
   created_at: string
 }
 
+type DashboardFinancialSummary = {
+  receipts: { amount_cents: string }
+  managerial_result: {
+    sales_cents: string
+    item_cost_cents: string | null
+    missing_cost_line_count: number
+    returned_order_count: number
+    operating_expense_cents: string
+    delivery_cost_cents: string
+    available: boolean
+    result_cents: string | null
+  }
+}
+
 type ActionFilter = 'all' | 'followups' | 'receivables' | 'deliveries'
 
 const actionFilters: Array<{ value: ActionFilter; label: string }> = [
@@ -127,9 +141,19 @@ export function DashboardPage() {
   const trendRequestId = useRef(0)
   const [trendState, setTrendState] = useState<{ scopeKey: string; loading: boolean; error: boolean; days: DashboardTrendDay[] }>({ scopeKey: '', loading: true, error: false, days: [] })
   const currentTrends = trendState.scopeKey === trendScopeKey ? trendState : { loading: true, error: false, days: [] }
+  const financialSummaryScopeKey = `${businessId}:${role}:${trendStartOn}:${today}`
+  const financialSummaryRequestId = useRef(0)
+  const [financialSummaryState, setFinancialSummaryState] = useState<{ scopeKey: string; loading: boolean; error: boolean; data: DashboardFinancialSummary | null }>({ scopeKey: '', loading: true, error: false, data: null })
+  const currentFinancialSummary = financialSummaryState.scopeKey === financialSummaryScopeKey
+    ? financialSummaryState
+    : { loading: true, error: false, data: null }
 
   const loadTrends = useCallback(async () => {
     const requestId = ++trendRequestId.current
+    if (role !== 'owner') {
+      setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: [] })
+      return
+    }
     setTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
     try {
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
@@ -144,10 +168,33 @@ export function DashboardPage() {
     } catch {
       if (requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
     }
-  }, [businessId, today, trendPeriod, trendScopeKey, trendStartOn])
+  }, [businessId, role, today, trendPeriod, trendScopeKey, trendStartOn])
+
+  const loadFinancialSummary = useCallback(async () => {
+    const requestId = ++financialSummaryRequestId.current
+    if (role !== 'owner') return
+    setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: true, error: false, data: null })
+    try {
+      if (!supabaseClient) throw new Error('Authentication service unavailable.')
+      const { data, error } = await supabaseClient.rpc('get_financial_report_summary', {
+        p_business_id: businessId,
+        p_start_on: trendStartOn,
+        p_end_on: today,
+      })
+      if (error || !data) throw error
+      const summary = data as DashboardFinancialSummary
+      if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: summary })
+    } catch {
+      if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: true, data: null })
+    }
+  }, [businessId, financialSummaryScopeKey, role, today, trendStartOn])
 
   const loadPriorities = useCallback(async () => {
     const requestId = ++prioritiesRequestId.current
+    if (role !== 'owner') {
+      setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data: null })
+      return
+    }
     setPriorityState({ scopeKey: prioritiesScopeKey, loading: true, error: false, data: null })
     try {
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
@@ -160,7 +207,7 @@ export function DashboardPage() {
     } catch {
       if (requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: true, data: null })
     }
-  }, [businessId, today, prioritiesScopeKey])
+  }, [businessId, role, today, prioritiesScopeKey])
 
   const loadRecentOrders = useCallback(async () => {
     const requestId = ++recentOrdersRequestId.current
@@ -199,6 +246,11 @@ export function DashboardPage() {
     void loadTrends()
     return () => { trendRequestId.current += 1 }
   }, [loadTrends])
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => {
+    void loadFinancialSummary()
+    return () => { financialSummaryRequestId.current += 1 }
+  }, [loadFinancialSummary])
 
   return (
     <div className="page-stack dashboard-page">
@@ -211,6 +263,7 @@ export function DashboardPage() {
         {role === 'owner' && <Link className="dashboard-reference-link" to="/referencias-central"><Icon name="chart" /> Comparar visuais</Link>}
       </header>
 
+      {role === 'owner' ? <>
       <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
         <Link className="dashboard-summary-link is-followups" to="/atendimento">
           <span className="dashboard-summary-icon"><Icon name="phone" /></span>
@@ -236,9 +289,15 @@ export function DashboardPage() {
           <span className="dashboard-summary-count">{priorities ? priorities.deliveries.pending_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
+        <Link className="dashboard-summary-link is-stock" to="/estoque">
+          <span className="dashboard-summary-icon"><Icon name="box" /></span>
+          <span className="dashboard-summary-copy"><strong>Estoque em atenção</strong><small>Abaixo do mínimo ou negativo</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.inventory.attention_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
       </nav>
 
-      <div className="dashboard-command-grid">
+      <div className="dashboard-command-grid dashboard-command-priorities">
         <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
           <div className="section-heading">
             <h2 id="attention-title">Fila de ações do dia</h2>
@@ -300,6 +359,51 @@ export function DashboardPage() {
           </div>}
         </section>
 
+      </div>
+      {role === 'owner' && <section className="dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
+        <div className="section-heading dashboard-financial-heading">
+          <div>
+            <p className="eyebrow">ÚLTIMOS {trendPeriod} DIAS</p>
+            <h2 id="dashboard-financial-title">Indicadores e resultado</h2>
+            <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)} · vendas, recebimentos e resultado seguem o período; vencimentos refletem hoje</p>
+          </div>
+          <Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link>
+        </div>
+        {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando indicadores financeiros…</p>}
+        {!currentFinancialSummary.loading && currentFinancialSummary.error && <div className="dashboard-panel-state" role="alert"><p>Não foi possível carregar os indicadores financeiros.</p><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
+        {!currentFinancialSummary.loading && !currentFinancialSummary.error && currentFinancialSummary.data && <>
+          <div className="indicator-grid dashboard-financial-indicators">
+            <article className="indicator-card"><p>Vendas concluídas</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</strong><span>Por entrega ou retirada no período</span></article>
+            <article className="indicator-card"><p>Resultado gerencial</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>{currentFinancialSummary.data.managerial_result.available ? 'Após custos e despesas pagas' : 'Há custo pendente ou devolução sem ajuste'}</span></article>
+            <article className="indicator-card"><p>Recebimentos informados</p><strong>{formatBRLExact(currentFinancialSummary.data.receipts.amount_cents)}</strong><span>Por data de recebimento</span></article>
+            <article className="indicator-card"><p>Saldo vencido hoje</p><strong>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.overdue_count} em aberto` : 'Saldo indisponível'}</span></article>
+            <article className="indicator-card"><p>Vencem hoje</p><strong>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.due_today_count} para acompanhar` : 'Saldo de hoje'}</span></article>
+          </div>
+          <section className="surface-panel dashboard-result-breakdown" aria-labelledby="dashboard-result-breakdown-title">
+            <div className="dashboard-result-breakdown-heading"><h3 id="dashboard-result-breakdown-title">Como o resultado é formado</h3><span>Compras para estoque entram quando o item é vendido</span></div>
+            <dl>
+              <div><dt>Vendas concluídas após descontos</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</dd></div>
+              <div><dt>Custo dos itens vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}</dd></div>
+              <div><dt>Despesas operacionais pagas</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
+              <div><dt>Custos reais de entrega pagos</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
+              <div className="is-total"><dt>Resultado gerencial</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
+            </dl>
+            {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">{currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `${currentFinancialSummary.data.managerial_result.missing_cost_line_count} item(ns) sem custo congelado. ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) com devolução sem regra de ajuste financeiro. ` : ''}O resultado fica oculto até os componentes permitirem um cálculo confiável.</p>}
+          </section>
+        </>}
+      </section>}
+      <DashboardTrends
+        days={currentTrends.days}
+        endOn={today}
+        error={currentTrends.error}
+        loading={currentTrends.loading}
+        onPeriodChange={setTrendPeriod}
+        onRetry={() => void loadTrends()}
+        period={trendPeriod}
+        startOn={trendStartOn}
+      />
+
+      <div className="dashboard-columns dashboard-operations-grid">
         <section className="surface-panel dashboard-recent-panel" aria-labelledby="dashboard-recent-orders-title">
           <div className="section-heading">
             <h2 id="dashboard-recent-orders-title">Pedidos recentes</h2>
@@ -321,38 +425,6 @@ export function DashboardPage() {
             </ul>}
           </>}
         </section>
-      </div>
-      <DashboardTrends
-        days={currentTrends.days}
-        endOn={today}
-        error={currentTrends.error}
-        loading={currentTrends.loading}
-        onPeriodChange={setTrendPeriod}
-        onRetry={() => void loadTrends()}
-        period={trendPeriod}
-        startOn={trendStartOn}
-      />
-
-      <div className="dashboard-columns">
-        <section className="surface-panel" aria-labelledby="integrations-title">
-          <div className="section-heading section-heading-compact">
-            <div>
-              <p className="eyebrow">CONFIGURAÇÃO</p>
-              <h2 id="integrations-title">Conexões</h2>
-            </div>
-            <Link className="quiet-link" to="/configuracoes">Ver status <Icon name="arrow" /></Link>
-          </div>
-          <ul className="status-list">
-            {integrations.map((item) => (
-              <li key={item.label}>
-                <span className="status-indicator" aria-hidden="true" />
-                <span className="status-name">{item.label}</span>
-                <span className="status-copy">{item.state}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
         <section className="surface-panel stock-panel" aria-labelledby="stock-title">
           <div className="section-heading section-heading-compact">
             <div>
@@ -373,6 +445,29 @@ export function DashboardPage() {
           </>}
         </section>
       </div>
+      </> : <section className="surface-panel dashboard-role-note" aria-label="Resumo do dia">
+        <h2>Resumo de gestão</h2>
+        <p>Indicadores financeiros, vencimentos, entregas e alertas de estoque ficam disponíveis para o perfil proprietário.</p>
+      </section>}
+
+      <section className="surface-panel dashboard-connections-panel" aria-labelledby="integrations-title">
+        <div className="section-heading section-heading-compact">
+          <div>
+            <p className="eyebrow">CONFIGURAÇÃO</p>
+            <h2 id="integrations-title">Conexões</h2>
+          </div>
+          <Link className="quiet-link" to="/configuracoes">Ver status <Icon name="arrow" /></Link>
+        </div>
+        <ul className="status-list">
+          {integrations.map((item) => (
+            <li key={item.label}>
+              <span className="status-indicator" aria-hidden="true" />
+              <span className="status-name">{item.label}</span>
+              <span className="status-copy">{item.state}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
 
       <section className="quick-links" aria-label="Atalhos">
         <Link className="quick-link" to="/atendimento"><Icon name="phone" /><span><strong>Atendimento</strong><small>Chamadas e retornos</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>

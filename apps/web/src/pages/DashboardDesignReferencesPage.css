@@ -170,3 +170,9 @@
   .dashboard-reference-balanced-top > .dashboard-reference-section { height: auto; }
   .dashboard-reference-action-list li { grid-template-columns: 70px minmax(0, 1fr) auto; gap: 6px; }
 }
+
+@media (max-width: 900px) {
+  .dashboard-reference-desktop-split,
+  .dashboard-reference-desktop-split.is-chart-focus,
+  .dashboard-reference-desktop-split.is-operations-first { grid-template-columns: minmax(0, 1fr); }
+}
