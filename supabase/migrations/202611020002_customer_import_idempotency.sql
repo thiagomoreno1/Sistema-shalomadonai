@@ -1,10 +1,23 @@
 -- Import a bounded customer batch atomically. Idempotency metadata stores only
--- the request UUID and row count; it does not persist customer data or a hash
--- that could be used to guess personal information in a small batch.
+-- the request UUID, row count, and an HMAC fingerprint. The private key prevents
+-- offline guessing of customer data from the fingerprint.
+create extension if not exists pgcrypto with schema extensions;
+
+create table private.customer_import_request_hmac_keys (
+  id boolean primary key default true check (id),
+  secret bytea not null check (pg_catalog.octet_length(secret) = 32)
+);
+
+revoke all on table private.customer_import_request_hmac_keys from public, anon, authenticated;
+
+insert into private.customer_import_request_hmac_keys (id, secret)
+values (true, extensions.gen_random_bytes(32));
+
 create table private.customer_import_requests (
   business_id uuid not null references public.businesses (id) on delete restrict,
   request_id uuid not null,
   imported_count integer not null check (imported_count between 1 and 2000),
+  request_fingerprint text not null check (request_fingerprint ~ '^[0-9a-f]{64}$'),
   created_by uuid not null references auth.users (id) on delete restrict,
   created_at timestamptz not null default now(),
   primary key (business_id, request_id)
@@ -26,6 +39,8 @@ declare
   v_business_id uuid;
   v_membership_count integer;
   v_existing_count integer;
+  v_existing_fingerprint text;
+  v_fingerprint text;
   v_customer_count integer;
 begin
   if v_user_id is null then
@@ -101,17 +116,37 @@ begin
     raise exception using errcode = '22023', message = 'The customer import contains invalid names, phones, or oversized fields.';
   end if;
 
+  select pg_catalog.encode(
+           extensions.hmac(
+             pg_catalog.convert_to(pg_catalog.jsonb_build_object(
+               'operation', 'customer-import-v1',
+               'business_id', v_business_id,
+               'customers', p_customers
+             )::text, 'UTF8'),
+             key.secret,
+             'sha256'
+           ),
+           'hex'
+         )
+    into v_fingerprint
+    from private.customer_import_request_hmac_keys as key
+   where key.id;
+  if v_fingerprint is null then
+    raise exception using errcode = '55000', message = 'Customer import idempotency is not configured.';
+  end if;
+
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtext(v_business_id::text), pg_catalog.hashtext(p_request_id::text)
   );
-  select request.imported_count
-    into v_existing_count
+  select request.imported_count, request.request_fingerprint
+    into v_existing_count, v_existing_fingerprint
     from private.customer_import_requests as request
    where request.business_id = v_business_id
      and request.request_id = p_request_id;
   if found then
-    if v_existing_count <> pg_catalog.jsonb_array_length(p_customers) then
-      raise exception using errcode = '22023', message = 'This import request id was already used with a different number of rows.';
+    if v_existing_count <> pg_catalog.jsonb_array_length(p_customers)
+       or v_existing_fingerprint is distinct from v_fingerprint then
+      raise exception using errcode = '22023', message = 'This import request id was already used for a different customer batch.';
     end if;
     return v_existing_count;
   end if;
@@ -134,9 +169,9 @@ begin
     );
 
   insert into private.customer_import_requests (
-    business_id, request_id, imported_count, created_by
+    business_id, request_id, imported_count, request_fingerprint, created_by
   ) values (
-    v_business_id, p_request_id, v_customer_count, v_user_id
+    v_business_id, p_request_id, v_customer_count, v_fingerprint, v_user_id
   );
 
   return v_customer_count;

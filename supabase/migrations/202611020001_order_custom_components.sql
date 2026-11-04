@@ -295,7 +295,7 @@ begin
        select 1 from pg_catalog.jsonb_to_recordset(p_installments)
          as schedule(amount_cents bigint, due_on date, payment_method text)
         where schedule.amount_cents is null or schedule.amount_cents <= 0
-           or schedule.due_on is null
+           or schedule.due_on is null or not pg_catalog.isfinite(schedule.due_on)
            or (schedule.payment_method is not null and char_length(btrim(schedule.payment_method)) > 64)
      ) then
     raise exception using errcode = '22023', message = 'Each installment needs a positive whole-cent amount and a due date.';
