@@ -469,58 +469,6 @@ export function DashboardPage() {
         </Link>
       </nav>
 
-      {role === 'owner' && <section className="dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
-          <div className="section-heading dashboard-financial-heading">
-          <div>
-            <p className="eyebrow">{trendPeriodLabel.toUpperCase()}</p>
-            <h2 id="dashboard-financial-title">Resumo de vendas e pagamentos</h2>
-            <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)} · vendas contam na entrega ou retirada; pagamentos na data registrada; atrasos consideram hoje</p>
-          </div>
-          <Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link>
-        </div>
-        {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando indicadores financeiros…</p>}
-        {!currentFinancialSummary.loading && currentFinancialSummary.error && <div className="dashboard-panel-state" role="alert"><p>Não foi possível carregar os indicadores financeiros.</p><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
-        {!currentFinancialSummary.loading && !currentFinancialSummary.error && currentFinancialSummary.data && <>
-          <div className="indicator-grid dashboard-financial-indicators">
-            <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossSalesCents === null ? '—' : formatBRLExact(grossSalesCents)}</strong><span>Produtos + entrega, antes dos descontos</span></article>
-            <article className="indicator-card"><p>Faturamento líquido</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</strong><span>Total dos pedidos após descontos</span></article>
-            <article className="indicator-card"><p>Pagamentos recebidos</p><strong>{formatBRLExact(currentFinancialSummary.data.receipts.amount_cents)}</strong><span>Valores que você marcou como recebidos</span></article>
-            <article className="indicator-card"><p>Pagamentos atrasados</p><strong>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.overdue_count} parcelas não pagas após a data` : 'Indisponível'}</span></article>
-            <article className="indicator-card"><p>Parcelas que vencem hoje</p><strong>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.due_today_count} ainda não pagas` : 'Indisponível'}</span></article>
-            <article className="indicator-card"><p>Lucro estimado</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>Após produtos e gastos pagos · antes de impostos</span></article>
-          </div>
-          <section className="surface-panel dashboard-result-breakdown" aria-labelledby="dashboard-result-breakdown-title">
-            <div className="dashboard-result-breakdown-heading"><h3 id="dashboard-result-breakdown-title">Como calculamos o lucro estimado</h3><span>Compra para estoque entra na conta quando o produto é vendido</span></div>
-            <dl>
-              <div><dt>Faturamento bruto · antes de descontos</dt><dd>{grossSalesCents === null ? 'Indisponível' : formatBRLExact(grossSalesCents)}</dd></div>
-              <div><dt>Descontos nos pedidos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
-              <div><dt>Faturamento líquido · após descontos</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</dd></div>
-              <div><dt>Custo dos produtos vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
-              <div><dt>Gastos da empresa já pagos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
-              <div><dt>Pagamentos de entrega</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
-              <div className="is-total"><dt>Lucro estimado · antes de impostos</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
-            </dl>
-            {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">Não foi possível calcular o lucro: {currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `faltam os custos de ${currentFinancialSummary.data.managerial_result.missing_cost_line_count} item(ns) vendido(s). ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) têm devolução sem ajuste financeiro. ` : ''}</p>}
-          </section>
-        </>}
-      </section>}
-      <DashboardTrends
-        days={currentTrends.days}
-        endOn={today}
-        error={currentTrends.error}
-        grossSalesCents={grossSalesCents}
-        loading={currentTrends.loading}
-        netSalesCents={netSalesCents}
-        onRetry={() => void loadTrends()}
-        onRetrySales={() => void loadFinancialSummary()}
-        period={trendPeriod}
-        periodLabel={trendPeriodLabel}
-        salesError={currentFinancialSummary.error}
-        salesLoading={currentFinancialSummary.loading}
-        startOn={trendStartOn}
-      />
-
-
       <div className="dashboard-command-grid dashboard-command-priorities">
         <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
           <div className="section-heading">
@@ -649,6 +597,60 @@ export function DashboardPage() {
           ))}
         </ul>
       </section>
+
+      {role === 'owner' && <>
+        <section className="dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
+          <div className="section-heading dashboard-financial-heading">
+            <div>
+              <p className="eyebrow">{trendPeriodLabel.toUpperCase()}</p>
+              <h2 id="dashboard-financial-title">Resumo de vendas e pagamentos</h2>
+              <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)}</p>
+            </div>
+            <Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link>
+          </div>
+          {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando indicadores financeiros…</p>}
+          {!currentFinancialSummary.loading && currentFinancialSummary.error && <div className="dashboard-panel-state" role="alert"><p>Não foi possível carregar os indicadores financeiros.</p><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
+          {!currentFinancialSummary.loading && !currentFinancialSummary.error && currentFinancialSummary.data && <>
+            <div className="indicator-grid dashboard-financial-indicators">
+              <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossSalesCents === null ? '—' : formatBRLExact(grossSalesCents)}</strong><span>Antes dos descontos</span></article>
+              <article className="indicator-card"><p>Faturamento líquido</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</strong><span>Após os descontos</span></article>
+              <article className="indicator-card"><p>Pagamentos recebidos</p><strong>{formatBRLExact(currentFinancialSummary.data.receipts.amount_cents)}</strong><span>Valores registrados</span></article>
+              <article className="indicator-card"><p>Pagamentos atrasados</p><strong>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.overdue_count} parcelas` : 'Indisponível'}</span></article>
+              <article className="indicator-card"><p>Parcelas que vencem hoje</p><strong>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.due_today_count} parcelas` : 'Indisponível'}</span></article>
+              <article className="indicator-card"><p>Lucro estimado</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>Antes de impostos</span></article>
+            </div>
+            <details className="surface-panel dashboard-result-breakdown">
+              <summary>Ver como calculamos o lucro</summary>
+              <div className="dashboard-result-breakdown-heading"><h3>Composição do período</h3><span>Compra para revenda conta quando o item é vendido</span></div>
+              <dl>
+                <div><dt>Faturamento bruto</dt><dd>{grossSalesCents === null ? 'Indisponível' : formatBRLExact(grossSalesCents)}</dd></div>
+                <div><dt>Descontos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
+                <div><dt>Faturamento líquido</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</dd></div>
+                <div><dt>Custo dos produtos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
+                <div><dt>Gastos pagos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
+                <div><dt>Entregas pagas</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
+                <div className="is-total"><dt>Lucro estimado</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
+              </dl>
+              {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">{currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `Faltam custos de ${currentFinancialSummary.data.managerial_result.missing_cost_line_count} produto(s). ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) têm devolução sem ajuste financeiro.` : ''}</p>}
+            </details>
+          </>}
+        </section>
+        <DashboardTrends
+          days={currentTrends.days}
+          endOn={today}
+          error={currentTrends.error}
+          grossSalesCents={grossSalesCents}
+          loading={currentTrends.loading}
+          netSalesCents={netSalesCents}
+          onRetry={() => void loadTrends()}
+          onRetrySales={() => void loadFinancialSummary()}
+          period={trendPeriod}
+          periodLabel={trendPeriodLabel}
+          salesError={currentFinancialSummary.error}
+          salesLoading={currentFinancialSummary.loading}
+          startOn={trendStartOn}
+        />
+      </>}
 
       <section className="quick-links" aria-label="Atalhos">
         <Link className="quick-link" to="/atendimento"><Icon name="phone" /><span><strong>Atendimento</strong><small>Chamadas e retornos</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>

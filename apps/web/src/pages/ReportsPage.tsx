@@ -611,7 +611,7 @@ export function ReportsPage() {
         <div>
           <p className="eyebrow">FINANCEIRO · CONSULTA</p>
           <h1>Relatórios</h1>
-          <p className="page-description">Valores separados pela data de cada registro. Sem integração bancária.</p>
+          <p className="page-description">Vendas, pagamentos e gastos do período.</p>
         </div>
         <div className="record-heading-actions report-actions">
           <button className="button button-secondary" disabled={!reportCanBeUsed} onClick={exportCsv} type="button">Exportar CSV</button>
@@ -628,7 +628,7 @@ export function ReportsPage() {
             <label className="record-field"><span className="field-label">Até</span><input aria-describedby={rangeError ? 'report-period-error' : undefined} aria-invalid={Boolean(rangeError)} className="text-input" min={customStart || undefined} onChange={(event) => setCustomEndOverride(event.target.value)} type="date" value={customEnd} /></label>
           </>}
           {rangeError && <p className="form-message form-message-error report-period-error" id="report-period-error" role="alert">{rangeError}</p>}
-          <p className="section-footnote">Período atual: {startOn && endOn ? `${formatBusinessDate(startOn)} a ${formatBusinessDate(endOn)}` : 'datas inválidas'}. Valores que faltam receber consideram parcelas com prazo dentro do período e são apurados hoje. Gastos usam a data do pagamento; o lucro estimado considera quando o pedido foi entregue ou retirado.</p>
+          <p className="section-footnote">{startOn && endOn ? `${formatBusinessDate(startOn)} a ${formatBusinessDate(endOn)} · ` : ''}A receber: data do vencimento · gastos: data do pagamento · lucro: entrega ou retirada.</p>
         </div>
       </section>
 
@@ -638,29 +638,32 @@ export function ReportsPage() {
       {!loading && reportMatchesPeriod && summary && !error && <>
         {reconciliationWarning && <div className="form-message form-message-warning report-reconciliation-warning" role="alert"><span>O resumo e os lançamentos detalhados não coincidem neste carregamento. Confira novamente antes de usar estes valores.</span><button className="text-button" disabled={loading} onClick={() => void loadReport()} type="button">Reconciliar novamente</button></div>}
         {!reconciliationWarning && <>
-        <p className="section-footnote report-scope-note">Os cartões de faturamento contam pedidos criados neste período e não cancelados. O lucro estimado conta pedidos entregues ou retirados neste período.</p>
+        <p className="section-footnote report-scope-note">Faturamento pela data do pedido. Lucro pela data da entrega ou retirada.</p>
         <section className="report-summary-grid" aria-label="Resumo do período">
           <article className="surface-panel report-summary-card"><span>Faturamento bruto</span><strong>{formatBRLExact((BigInt(summary.sales.active_subtotal_cents) + BigInt(summary.sales.active_delivery_fee_cents)).toString())}</strong><small>{summary.sales.active_order_count} pedidos não cancelados · antes dos descontos</small></article>
           <article className="surface-panel report-summary-card"><span>Faturamento líquido</span><strong>{formatBRLExact(summary.sales.active_total_cents)}</strong><small>Pedidos não cancelados após descontos · inclui os ainda em andamento</small></article>
-          <article className="surface-panel report-summary-card"><span>Pagamentos recebidos</span><strong>{formatBRLExact(summary.receipts.amount_cents)}</strong><small>{summary.receipts.record_count} registros manuais · não conferidos no banco</small></article>
-          <article className="surface-panel report-summary-card"><span>Falta receber</span><strong>{formatBRLExact(summary.receivables.open_balance_cents)}</strong><small>{summary.receivables.installment_count} parcelas ainda sem pagamento</small></article>
-          <article className="surface-panel report-summary-card"><span>Pagamentos atrasados</span><strong>{formatBRLExact(summary.receivables.overdue_balance_cents)}</strong><small>Parcelas sem pagamento após a data limite</small></article>
-          <article className="surface-panel report-summary-card"><span>Gastos pagos</span><strong>{formatBRLExact(summary.outflows.total_cents)}</strong><small>{summary.outflows.record_count} registros manuais · inclui produtos para revenda</small></article>
+          <article className="surface-panel report-summary-card"><span>Pagamentos recebidos</span><strong>{formatBRLExact(summary.receipts.amount_cents)}</strong><small>{summary.receipts.record_count} pagamentos registrados</small></article>
+          <article className="surface-panel report-summary-card"><span>Saldo a receber</span><strong>{formatBRLExact(summary.receivables.open_balance_cents)}</strong><small>{summary.receivables.installment_count} parcelas pendentes</small></article>
+          <article className="surface-panel report-summary-card"><span>Pagamentos atrasados</span><strong>{formatBRLExact(summary.receivables.overdue_balance_cents)}</strong><small>Parcelas fora do prazo</small></article>
+          <article className="surface-panel report-summary-card"><span>Gastos pagos</span><strong>{formatBRLExact(summary.outflows.total_cents)}</strong><small>{summary.outflows.record_count} gastos registrados</small></article>
         </section>
 
         <section className="surface-panel report-definition-panel" aria-labelledby="report-result-title">
           <div>
             <p className="eyebrow">LUCRO ESTIMADO · ANTES DE IMPOSTOS</p>
             <h2 id="report-result-title">{summary.managerial_result.available && summary.managerial_result.result_cents !== null ? formatBRLExact(summary.managerial_result.result_cents) : 'Não foi possível calcular o lucro deste período'}</h2>
-            <p>Faturamento líquido dos pedidos entregues ou retirados, menos o custo dos produtos vendidos, os gastos da empresa pagos e os pagamentos de entrega.</p>
-            <div className="report-breakdown report-result-breakdown" aria-label="Como o lucro estimado é calculado">
-              <span>Faturamento líquido <strong>{formatBRLExact(summary.managerial_result.sales_cents)}</strong></span>
-              <span>Custo dos produtos vendidos <strong>{summary.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(summary.managerial_result.item_cost_cents)}</strong></span>
-              <span>Gastos da empresa pagos <strong>{formatBRLExact(summary.managerial_result.operating_expense_cents)}</strong></span>
-              <span>Pagamentos de entrega <strong>{formatBRLExact(summary.managerial_result.delivery_cost_cents)}</strong></span>
+            <p className="report-result-formula">Faturamento líquido − custo dos produtos vendidos − gastos pagos − entregas pagas.</p>
+            <div className="report-breakdown report-result-breakdown" aria-label="Valores usados no lucro estimado">
+              <div><span>Faturamento líquido</span><strong>{formatBRLExact(summary.managerial_result.sales_cents)}</strong></div>
+              <div><span>Custo dos produtos</span><strong>{summary.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(summary.managerial_result.item_cost_cents)}</strong></div>
+              <div><span>Gastos</span><strong>{formatBRLExact(summary.managerial_result.operating_expense_cents)}</strong></div>
+              <div><span>Entregas</span><strong>{formatBRLExact(summary.managerial_result.delivery_cost_cents)}</strong></div>
             </div>
             {!summary.managerial_result.available && <p className="report-scope-note">{summary.managerial_result.missing_cost_line_count > 0 ? `Falta o custo de ${summary.managerial_result.missing_cost_line_count} produto(s) vendido(s).` : ''}{summary.managerial_result.returned_order_count > 0 ? ` ${summary.managerial_result.returned_order_count} pedido(s) têm produtos devolvidos sem ajuste financeiro.` : ''} O valor fica oculto enquanto não for possível calcular com segurança.</p>}
-            <p className="report-scope-note">Pedidos e custo dos produtos entram quando a entrega é concluída ou a retirada é registrada. Gastos entram na data do pagamento. Compras para revenda afetam o dinheiro que saiu; o custo aparece aqui quando o produto é vendido. Impostos, reembolsos e ajustes ainda não estão incluídos.</p>
+            <details className="report-calculation-details">
+              <summary>Como calculamos</summary>
+              <p>O custo de produtos para revenda entra quando cada produto é vendido. Impostos, reembolsos e ajustes não estão incluídos.</p>
+            </details>
           </div>
           <Link className="quiet-link report-related-link" to="/financeiro/saidas">Registrar gasto pago</Link>
         </section>
@@ -668,7 +671,7 @@ export function ReportsPage() {
         <section className="surface-panel record-panel report-section" aria-labelledby="report-completed-title">
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">DATA DA ENTREGA OU RETIRADA</p><h2 id="report-completed-title">Pedidos entregues ou retirados</h2></div><span className="neutral-status">{completedOrders.length}</span></div>
           {completedOrders.length === 0 ? <p className="inline-state">Nenhuma entrega concluída ou retirada registrada neste período.</p> : <div aria-label="Pedidos entregues ou retirados e seus custos" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data</th><th>Pedido / cliente</th><th>Valor da venda após descontos</th><th>Custo dos produtos vendidos</th><th>Custos registrados?</th></tr></thead><tbody>{completedOrders.map((order) => <tr key={order.id}><td>{reportDate(order.completed_at)}</td><td><Link className="report-order-link" to={`/pedidos/${order.id}`}>{order.customer_name_snapshot}</Link></td><td>{formatBRLExact(String(order.total_cents))}</td><td>{order.item_cost_cents === null ? 'Indisponível' : formatBRLExact(order.item_cost_cents.toString())}</td><td>{order.return_movement_count > 0 ? `${order.return_movement_count} produto(s) devolvido(s)` : order.missing_cost_line_count > 0 ? `${order.missing_cost_line_count} produto(s) sem custo` : 'Sim'}</td></tr>)}</tbody></table></div>}
-          <p className="section-footnote">A venda entra no resultado quando a entrega é concluída ou o proprietário registra a retirada do cliente. Valores recebidos em parcelas são exibidos à parte e não determinam esta data.</p>
+          <p className="section-footnote">Conta no lucro pela data da entrega ou retirada.</p>
         </section>
 
         <section className="surface-panel record-panel report-section" aria-labelledby="report-sales-title">
@@ -679,7 +682,7 @@ export function ReportsPage() {
             <span>Descontos <strong>{formatBRLExact(summary.sales.active_discount_cents)}</strong></span>
             <span>Atualmente cancelados entre os pedidos criados no período <strong>{summary.sales.cancelled_order_count} · {formatBRLExact(summary.sales.cancelled_total_cents)}</strong></span>
           </div>
-          <p className="section-footnote">A lista usa a data de criação do pedido e mostra a situação atual. Um cancelamento posterior pode alterar os totais ativos de um período anterior; a data do cancelamento aparece em cada linha.</p>
+          <p className="section-footnote">Cancelamentos posteriores podem alterar o total atual deste período.</p>
           {orders.length === 0 ? <p className="inline-state">Nenhum pedido criado no período.</p> : <div aria-label="Tabela de pedidos do período" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data</th><th>Pedido / cliente</th><th>Produtos</th><th>Taxa</th><th>Desconto</th><th>Total original</th><th>Situação atual</th></tr></thead><tbody>{orders.map((order) => <tr key={order.id}><td>{reportDate(order.created_at)}</td><td><Link className="report-order-link" to={`/pedidos/${order.id}`}>{order.customer_name_snapshot}</Link></td><td>{formatBRLExact(String(order.subtotal_cents))}</td><td>{formatBRLExact(String(order.delivery_fee_cents))}</td><td>{formatBRLExact(String(order.discount_cents))}</td><td>{formatBRLExact(String(order.total_cents))}</td><td>{statusLabel(order)}</td></tr>)}</tbody></table></div>}
         </section>
 
@@ -696,13 +699,13 @@ export function ReportsPage() {
             <span>Pagamentos de entrega <strong>{formatBRLExact(summary.outflows.delivery_cost_cents)}</strong></span>
           </div>
           {outflows.length === 0 ? <p className="inline-state">Nenhum gasto pago neste período.</p> : <div aria-label="Tabela de gastos pagos do período" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data paga</th><th>Tipo</th><th>Descrição</th><th>Categoria</th><th>Pago a</th><th>Pedido</th><th>Valor</th><th>Situação</th></tr></thead><tbody>{outflows.map((outflow) => <tr key={outflow.id}><td>{formatBusinessDate(outflow.paid_on)}</td><td>{outflowTypeLabel(outflow.outflow_type)}</td><td>{outflow.description}</td><td>{outflow.category || '—'}</td><td>{outflow.counterparty_name || '—'}</td><td>{outflow.order_id ? <Link className="report-order-link" to={`/pedidos/${outflow.order_id}`}>Abrir pedido</Link> : '—'}</td><td>{formatBRLExact(String(outflow.amount_cents))}</td><td>{outflow.void_event ? <><strong>Anulado por erro</strong><small className="section-footnote">{formatBusinessDate(outflow.void_event.created_at)} · {outflow.void_event.reason}</small></> : 'Ativo'}</td></tr>)}</tbody></table></div>}
-          <p className="section-footnote">Cada linha é um valor já pago, registrado manualmente. Compras para revenda aparecem aqui; o custo é descontado do lucro quando o produto for vendido.</p>
+          <p className="section-footnote">Inclui gastos pagos e compras para revenda.</p>
         </section>
 
         <section className="surface-panel record-panel report-section" aria-labelledby="report-receivables-title">
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">DATA LIMITE DO PAGAMENTO</p><h2 id="report-receivables-title">Pagamentos que ainda faltam receber</h2></div><span className="neutral-status">{receivables.length}</span></div>
           {receivables.length === 0 ? <p className="inline-state">Nenhum pagamento pendente neste período.</p> : <div aria-label="Tabela de pagamentos pendentes" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data limite</th><th>Cliente / pedido</th><th>Parcela</th><th>Valor original</th><th>Falta receber hoje</th><th>Situação</th></tr></thead><tbody>{receivables.map((item) => <tr key={item.id}><td>{formatBusinessDate(item.due_on)}</td><td><Link className="report-order-link" to={`/pedidos/${item.order_id}`}>{item.customer_name}</Link></td><td>{item.installment_number}</td><td>{formatBRLExact(String(item.amount_cents))}</td><td>{formatBRLExact(item.balance_cents.toString())}</td><td>{item.due_on < (summary.as_of_on ?? today) ? 'Atrasado' : 'Ainda não pago'}</td></tr>)}</tbody></table></div>}
-          <p className="section-footnote">Mostra pedidos ativos com pagamentos ainda não registrados. O valor restante considera pagamentos já informados no pedido.</p>
+          <p className="section-footnote">Saldo restante após os pagamentos registrados.</p>
         </section>
         </>}
       </>}

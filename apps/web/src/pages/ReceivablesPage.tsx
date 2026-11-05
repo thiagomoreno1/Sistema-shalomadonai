@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
+import { FinancialChartsPanel } from '../components/FinancialChartsPanel'
 import { FinanceNavigation } from '../components/FinanceNavigation'
 import { businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
@@ -558,12 +559,12 @@ export function ReceivablesPage() {
         <div>
           <p className="eyebrow">FINANCEIRO · PEDIDOS</p>
           <h1>Pagamentos a receber</h1>
-          <p className="page-description">Parcelas de pedidos que você ainda não recebeu. Os valores e as datas vêm de cada pedido.</p>
+          <p className="page-description">Parcelas de pedidos que ainda faltam receber.</p>
         </div>
         <Link className="button button-secondary" to="/pedidos">Ver pedidos</Link>
       </header>
 
-      <p className="section-footnote order-policy-note">Atraso é calculado quando a data informada já passou e ainda há saldo. Nenhum juro, lembrete ou mensagem é gerado automaticamente.</p>
+      <p className="section-footnote order-policy-note">Atrasado = ainda há saldo e a data de vencimento já passou.</p>
 
       {followUpStorageError && <p className="form-message form-message-error" role="alert">{followUpStorageError}</p>}
       {followUpDraft?.pending && !loading && !receivables.some((item) => item.id === followUpDraft.installmentId) && <section className="surface-panel record-panel" aria-labelledby="pending-follow-up-heading">
@@ -580,6 +581,8 @@ export function ReceivablesPage() {
         <article className="surface-panel receivable-summary-card"><span>Parcelas que vencem hoje</span><strong>{formatBRL(groupTotal(dueToday))}</strong><small>{dueToday.length} parcelas ainda sem pagamento</small></article>
         <article className="surface-panel receivable-summary-card"><span>Próximos vencimentos</span><strong>{formatBRL(groupTotal(upcoming))}</strong><small>{upcoming.length} parcelas ainda sem pagamento</small></article>
       </section>}
+
+      {businessRole === 'owner' && <FinancialChartsPanel />}
 
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void loadReceivables()} type="button">Tentar novamente</button></div>}
 

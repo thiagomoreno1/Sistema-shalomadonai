@@ -24,6 +24,7 @@ type DashboardTrendsProps = {
   salesError: boolean
   loading: boolean
   error: boolean
+  embedded?: boolean
   onRetry: () => void
   onRetrySales: () => void
 }
@@ -138,7 +139,7 @@ function ChartState({ loading, onRetry, errorMessage = 'Não foi possível carre
   )
 }
 
-export function DashboardTrends({ days, startOn, endOn, period, periodLabel, grossSalesCents, netSalesCents, salesLoading, salesError, loading, error, onRetry, onRetrySales }: DashboardTrendsProps) {
+export function DashboardTrends({ days, startOn, endOn, period, periodLabel, grossSalesCents, netSalesCents, salesLoading, salesError, loading, error, embedded = false, onRetry, onRetrySales }: DashboardTrendsProps) {
   const headingId = useId()
   const salesHeadingId = useId()
   const moneyHeadingId = useId()
@@ -156,13 +157,13 @@ export function DashboardTrends({ days, startOn, endOn, period, periodLabel, gro
 
   return (
     <section className="dashboard-trends" aria-labelledby={headingId}>
-      <div className="section-heading dashboard-trends-heading">
+      {embedded ? <h2 className="visually-hidden" id={headingId}>Gráficos financeiros</h2> : <div className="section-heading dashboard-trends-heading">
         <div>
           <p className="eyebrow">GRÁFICOS</p>
           <h2 id={headingId}>Acompanhe o período</h2>
           <p className="dashboard-trends-range">{periodLabel} · {dateRange} · horário de São Paulo</p>
         </div>
-      </div>
+      </div>}
 
       <div className="dashboard-trends-grid" aria-busy={loading}>
         <figure className="surface-panel dashboard-trend-panel" aria-labelledby={salesHeadingId}>
