@@ -32,6 +32,7 @@
 .driver-portal-brand strong { color: var(--ink); font-size: 14px; }
 .driver-portal-brand small { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .driver-portal-account > span { max-width: 250px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.driver-portal-account .signout-button { text-decoration: none; }
 
 .driver-portal-content {
   display: flex;

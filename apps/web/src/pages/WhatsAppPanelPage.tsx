@@ -27,13 +27,13 @@ export function WhatsAppPanelPage() {
       ) : !dashboardUrl ? (
         <section className="surface-panel whatsapp-connection-state" aria-labelledby="chatwoot-pending-title">
           <span className="empty-icon"><Icon name="message" /></span>
-          <p className="eyebrow">ETAPA 1 · PAINEL CHATWOOT</p>
-          <h2 id="chatwoot-pending-title">O painel será exibido aqui após a implantação do Chatwoot</h2>
-          <p>Ainda faltam a instância, o domínio e a URL da caixa. Nenhuma conversa de demonstração foi criada.</p>
+          <p className="eyebrow">INTEGRAÇÃO EM PREPARAÇÃO</p>
+          <h2 id="chatwoot-pending-title">A Evolution API vai conectar o WhatsApp à caixa Chatwoot</h2>
+          <p>O Chatwoot continua sendo o painel de atendimento dentro do Shalom. A Evolution API será o canal de conexão com o WhatsApp.</p>
           <ol className="whatsapp-setup-steps">
-            <li><span>1</span><div><strong>Hospedar o Chatwoot</strong><small>Usaremos a VPS Contabo e um endereço HTTPS próprio.</small></div><span className="neutral-status">Pendente</span></li>
-            <li><span>2</span><div><strong>Permitir o painel dentro do Shalom</strong><small>O Caddy da hospedagem Chatwoot aceitará somente a origem configurada para o aplicativo.</small></div><span className="neutral-status">Pendente</span></li>
-            <li><span>3</span><div><strong>Entrar na conta Chatwoot</strong><small>O acesso ao Chatwoot terá uma sessão própria; o login do Shalom não entra automaticamente.</small></div><span className="neutral-status">Pendente</span></li>
+            <li><span>1</span><div><strong>Preparar a Evolution API</strong><small>Instância local com chave protegida, banco persistente e acesso limitado ao computador.</small></div><span className="neutral-status">Pendente</span></li>
+            <li><span>2</span><div><strong>Conectar Evolution e Chatwoot</strong><small>O Chatwoot precisa alcançar a Evolution por uma URL segura para receber e responder conversas.</small></div><span className="neutral-status">Pendente</span></li>
+            <li><span>3</span><div><strong>Testar um número de homologação</strong><small>Validar mensagens recebidas, respostas e reconexão antes de usar o número da operação.</small></div><span className="neutral-status">Pendente</span></li>
           </ol>
           <Link className="quiet-link" to="/configuracoes">Ver preparação da conexão <Icon name="arrow" /></Link>
           <Link className="quiet-link" to="/whatsapp/caixa-shalom">Abrir a caixa nativa do Shalom <Icon name="arrow" /></Link>

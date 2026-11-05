@@ -1,18 +1,22 @@
-# WhatsApp no Shalom Adonai: Chatwoot na Contabo
+# WhatsApp no Shalom Adonai: Evolution API e Chatwoot
 
 ## Objetivo
 
-Atender conversas do WhatsApp dentro do Shalom Adonai e associá-las a clientes e pedidos. O proprietário indicou a Contabo como caminho preferido para hospedar a integração. A Contabo fornece o servidor; o Chatwoot fornece a caixa de atendimento; a plataforma oficial da Meta conecta o número do WhatsApp.
+Atender conversas do WhatsApp dentro do Shalom Adonai e associá-las a clientes e pedidos. O proprietário indicou a Contabo como caminho preferido para hospedar a integração. Neste primeiro fluxo, a Evolution API conecta um número de teste por QR/Baileys ao Chatwoot, que fornece a caixa de atendimento. A Cloud API oficial da Meta ligada diretamente ao Chatwoot é uma alternativa separada, fora desta primeira prova.
 
 ```text
-WhatsApp Business Platform (Meta)
+WhatsApp (Evolution API)
                  ↕
         Chatwoot hospedado na VPS
                  ↕ painel embutido
        Aplicativo Shalom Adonai
 ```
 
-O proprietário escolheu embutir o painel original do Chatwoot dentro do Shalom. Isso é diferente de carregar WhatsApp Web em um iframe. O Chatwoot continua sendo o serviço de atendimento e a plataforma oficial da Meta continua conectando o número.
+O proprietário escolheu embutir o painel original do Chatwoot dentro do Shalom e agora indicou a Evolution API como caminho para conectar o WhatsApp. O Chatwoot continua sendo a caixa de atendimento; a Evolution faz a conexão com o WhatsApp. A hospedagem da Contabo continua como intenção, ainda sem VPS ou domínio provisionados.
+
+O Compose local usa a versão fixada `v2.3.7` e serve apenas para a primeira prova de API/QR. O modo QR/Baileys será testado com um número dedicado; não conecte o número de operação antes de validar a sessão e a integração. O próprio projeto descreve limitações do modo WhatsApp Web, e a equipe do Chatwoot esclarece que Evolution é um canal de terceiros não oficialmente suportado. Trate Evolution–Chatwoot como compatibilidade a validar, não como integração garantida.
+
+Há um relato aberto no repositório oficial da Evolution sobre a versão `v2.3.7`: `AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=false` não oculta o token de instância na resposta de `/instance/fetchInstances`. Por isso, o Compose local prende a API a `127.0.0.1`; esta versão não deve ser publicada diretamente na internet antes de confirmar a correção ou uma proteção de rede adequada.
 
 O iframe mostra o atendimento do Chatwoot, mas não associa por conta própria a conversa ao cadastro ou pedido no Shalom. Esses vínculos manuais permanecem na caixa nativa alternativa até que uma integração de contexto seja definida.
 
@@ -28,6 +32,8 @@ O login do Shalom não inicia sessão no Chatwoot. Na primeira etapa, cada agent
 - A migration `20261103170953_whatsapp_chatwoot_links.sql` cria os vínculos locais entre conversas, clientes e pedidos.
 - A rota `/whatsapp` abre o painel original em iframe quando `VITE_CHATWOOT_DASHBOARD_URL` contém uma URL HTTPS válida de `/app`; sem ela, mostra a implantação como pendente. A URL é pública e não contém token.
 - A rota `/whatsapp/caixa-shalom` preserva a caixa nativa baseada na API como alternativa. Ela ainda depende da migration hospedada, da Edge Function publicada e dos secrets do Chatwoot.
+- `ops/evolution` prepara uma instância local da Evolution API, com PostgreSQL, Redis, sessão persistente e chave gerada localmente. O serviço fica vinculado a `127.0.0.1:8080`; nenhum segredo ou endpoint da Evolution é enviado ao navegador.
+- O Compose local cobre apenas a API e o QR. A instância local não é alcançável pelo Chatwoot remoto nem pelo Supabase hospedado. A prova ponta a ponta exige uma URL HTTPS protegida para a Evolution, hospedada na mesma VPS do Chatwoot ou em outro host alcançável por ele.
 - O Caddy exige `SHALOM_APP_ORIGIN` e só permite que essa origem incorpore o painel. O valor não deve ser `*`.
 - A política CSP do host do Shalom também precisa permitir carregar o domínio do Chatwoot em `frame-src`; não há `frame-src` configurado no repositório atualmente.
 - A migration não foi aplicada ao Supabase hospedado e a função ainda não foi publicada.
@@ -51,29 +57,34 @@ O sistema deve continuar mostrando a integração como pendente até que uma con
 
 O bundle reproduzível está em [`ops/chatwoot`](../../ops/chatwoot/README.md) e usa Docker Compose, Caddy para HTTPS, PostgreSQL com pgvector e Redis. É uma preparação versionada; nenhuma VPS ou domínio foi provisionado.
 
-### 2. Criar a caixa de atendimento
+### 2. Preparar Evolution e Chatwoot
 
-- Criar a conta e o inbox de WhatsApp no Chatwoot.
+- Para a prova local, abrir o Docker Desktop, aguardar o Engine e seguir `ops/evolution/README.md`. Se `docker version` não mostrar a seção `Server`, o Engine ainda não está pronto e os containers não podem iniciar.
+- Escolher o tipo de conexão antes de parear: QR/Baileys para um número dedicado de teste é o primeiro caminho proposto. A Cloud API oficial conectada diretamente ao Chatwoot é uma alternativa separada. O projeto não salva nem envia QR de demonstração.
+- Quando a VPS estiver provisionada, hospedar a Evolution em uma URL HTTPS que o Chatwoot alcance. Não use uma URL `localhost` no serviço hospedado.
+- Criar a conta no Chatwoot e gerar um token de agente. Ao criar a instância com os parâmetros de integração do Chatwoot, a Evolution pode criar o inbox automaticamente; não crie outro inbox para o mesmo número. Validar a conexão no ambiente de teste antes de ser considerada operacional.
 - Criar uma conta de agente para cada pessoa autorizada no Shalom e testar o login dentro do iframe e em uma nova guia. A sessão e as permissões do Chatwoot são próprias do Chatwoot.
-- Configurar `VITE_CHATWOOT_DASHBOARD_URL` na aplicação com a rota `/app/accounts/<id>/inbox` da instalação. Essa URL não é um segredo; não colocar tokens ou credenciais nela.
-- Escolher o fluxo de conexão Meta antes de registrar o número. O método manual da Cloud API não oferece coexistência com o aplicativo WhatsApp Business; o fluxo Quick Setup com Meta pode oferecer essa opção, conforme disponibilidade da conta.
-- Em uma instalação própria, o superadministrador do Chatwoot precisa configurar as credenciais da Meta antes de disponibilizar o Quick Setup.
 - Guardar o ID da conta, ID do inbox e token de API fora do repositório e do navegador.
 
-### 3. Conectar Meta e Supabase
+### 3. Abrir o painel Chatwoot no Shalom
 
-- Configurar o número e o aplicativo WhatsApp Business na Meta, com as permissões e o webhook exigidos pelo método escolhido.
+- Configurar `VITE_CHATWOOT_DASHBOARD_URL` na aplicação com a rota `/app/accounts/<id>/inbox` da instalação. Essa URL não é um segredo; não colocar tokens ou credenciais nela.
+- Validar `frame-src` no Shalom e `frame-ancestors` no Chatwoot pelas respostas HTTP.
+
+### 4. Configurar a caixa do Shalom e Supabase
+
+- Para Evolution com QR/Baileys, criar a instância e vincular a conta do Chatwoot usando a URL HTTPS, o ID da conta e o token de Chatwoot. A Evolution cria o inbox; depois, localizar seu ID no Chatwoot e atualizar `CHATWOOT_INBOX_ID` na função do Shalom. Para a alternativa Cloud API conectada diretamente ao Chatwoot, configurar o número e o aplicativo WhatsApp Business na Meta com as permissões e o webhook exigidos.
 - Aplicar a migration de vínculos e publicar a função Edge após a revisão de configuração e autorização operacional para as mudanças no Supabase hospedado.
 - Configurar `CHATWOOT_BASE_URL`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_INBOX_ID` e `CHATWOOT_API_TOKEN` como secrets da função. Configurar `CHATWOOT_ATTACHMENT_ALLOWED_HOSTS` somente se anexos usarem domínios externos de armazenamento.
 - Preservar a verificação JWT e a autorização de proprietário. O token de Chatwoot nunca deve ir para variáveis `VITE_*`, respostas ao navegador ou logs.
 
-### 4. Verificar a operação de ponta a ponta
+### 5. Verificar a operação de ponta a ponta
 
-Com um número de teste aprovado ou o número autorizado pelo proprietário:
+Com um número e um inbox dedicados a teste:
 
-1. Enviar uma mensagem ao número comercial e confirmar que ela aparece na caixa do Shalom.
+1. Enviar uma mensagem ao número de teste e confirmar que ela aparece na caixa do Chatwoot embutida no Shalom.
 2. Fazer login no Chatwoot dentro do iframe, navegar pelas conversas e confirmar que a sessão persiste após atualizar o Shalom; repetir em celular e em uma nova guia. Confirmar `frame-src` no Shalom e `frame-ancestors` no Chatwoot pelas respostas HTTP.
-3. Responder pelo painel e confirmar a entrega no telefone remetente.
+3. Responder pelo painel e confirmar a entrega no telefone remetente; verificar também status, mídia e reconexão.
 4. Confirmar o fluxo de entrada e saída em uma origem não autorizada e verificar que o navegador bloqueia o iframe; testar também os links para nova guia e para a caixa nativa.
 5. Confirmar atualização do estado da conversa e vínculo manual com cliente e pedido usando a caixa nativa alternativa.
 6. Verificar mensagens com anexos, falhas de rede, token inválido e usuário sem acesso de proprietário na alternativa via API.
@@ -97,3 +108,8 @@ Até completar essas verificações, a integração é uma estrutura de código 
 - [Chatwoot: opções de conexão para WhatsApp](https://chatwoot.help/hc/user-guide/articles/1677832735-how-to-setup-a-whats_app-channel)
 - [Chatwoot v4.19.0: suporte à autenticação Bearer para tokens de API](https://github.com/chatwoot/chatwoot/releases/tag/v4.19.0)
 - [Chatwoot v4.19.1: release fixada no bundle de implantação](https://github.com/chatwoot/chatwoot/releases/tag/v4.19.1)
+- [Evolution API: Docker e requisitos de PostgreSQL/Redis](https://github.com/evolution-foundation/docs-evolution/blob/main/v2/en/install/docker.mdx)
+- [Evolution API: instância vinculada ao Chatwoot e geração de QR](https://github.com/evolution-foundation/evolution-docs/blob/main/docs/03-Instance%20contoller/00-create-instance.md)
+- [Evolution API: provedores Baileys e Cloud API e versão estável](https://github.com/evolution-foundation/evolution-api/releases)
+- [Evolution API: relato aberto sobre o token retornado por `fetchInstances` na v2.3.7](https://github.com/evolution-foundation/evolution-api/issues/2677)
+- [Chatwoot: Evolution é uma integração de terceiros](https://github.com/orgs/chatwoot/discussions/13391)
