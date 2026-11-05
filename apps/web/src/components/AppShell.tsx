@@ -10,27 +10,27 @@ import { ThemeToggle } from './ThemeToggle'
 type NavItem = { to: string; label: string; icon: IconName }
 
 const primaryItems: NavItem[] = [
-  { to: '/', label: 'Início', icon: 'home' },
+  { to: '/', label: 'Dashboard', icon: 'home' },
+  { to: '/financeiro', label: 'Financeiro', icon: 'coin' },
   { to: '/atendimento', label: 'Atendimento', icon: 'phone' },
   { to: '/pedidos', label: 'Pedidos', icon: 'bag' },
-  { to: '/clientes', label: 'Clientes', icon: 'people' },
 ]
 
 const desktopItems: NavItem[] = [
-  { to: '/', label: 'Início', icon: 'home' },
+  { to: '/', label: 'Dashboard', icon: 'home' },
+  { to: '/financeiro', label: 'Financeiro', icon: 'coin' },
   { to: '/clientes', label: 'Clientes', icon: 'people' },
   { to: '/atendimento', label: 'Atendimento', icon: 'phone' },
   { to: '/whatsapp', label: 'WhatsApp', icon: 'message' },
   { to: '/pedidos', label: 'Pedidos', icon: 'bag' },
-  { to: '/catalogo', label: 'Catálogo', icon: 'box' },
+  { to: '/catalogo', label: 'Catálogo', icon: 'tag' },
   { to: '/estoque', label: 'Estoque', icon: 'box' },
   { to: '/entregas', label: 'Entregas', icon: 'truck' },
-  { to: '/financeiro', label: 'Financeiro', icon: 'coin' },
   { to: '/relatorios', label: 'Relatórios', icon: 'chart' },
 ]
 
 const routeLabels: Record<string, string> = {
-  '/': 'Central do dia',
+  '/': 'Dashboard',
   '/clientes': 'Clientes',
   '/atendimento': 'Atendimento',
   '/whatsapp': 'WhatsApp',

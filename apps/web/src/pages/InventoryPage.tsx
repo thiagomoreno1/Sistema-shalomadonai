@@ -350,7 +350,7 @@ export function InventoryPage() {
     try {
       const [componentsResult, movementsResult] = await Promise.all([
         supabaseClient.from('order_line_components')
-          .select('product_id, product_name_snapshot, inventory_unit_snapshot, quantity_snapshot, inventory_tracked_snapshot')
+          .select('product_id, product_name_snapshot, inventory_unit_snapshot, inventory_tracked_snapshot')
           .eq('business_id', businessId).eq('order_id', orderId),
         supabaseClient.from('inventory_movements')
           .select('product_id, movement_type, quantity_delta')
@@ -360,27 +360,25 @@ export function InventoryPage() {
         setFormError('Não foi possível conferir os itens ainda enviados deste pedido. Tente carregar novamente.')
         return
       }
-      const orderedByProduct = new Map<string, { product_name: string; inventory_unit: string; quantity: number }>()
+      const orderedByProduct = new Map<string, { product_name: string; inventory_unit: string }>()
       for (const component of componentsResult.data ?? []) {
         if (!component.inventory_tracked_snapshot || !component.inventory_unit_snapshot) continue
         const current = orderedByProduct.get(component.product_id) ?? {
           product_name: component.product_name_snapshot,
           inventory_unit: component.inventory_unit_snapshot,
-          quantity: 0,
         }
-        current.quantity += Number(component.quantity_snapshot)
         orderedByProduct.set(component.product_id, current)
       }
-      const netIssuedByProduct = new Map<string, number>()
+      const netMovementMilliByProduct = new Map<string, number>()
       for (const movement of movementsResult.data ?? []) {
-        const issued = movement.movement_type === 'dispatch' ? -Number(movement.quantity_delta) : Number(movement.quantity_delta)
-        netIssuedByProduct.set(movement.product_id, (netIssuedByProduct.get(movement.product_id) ?? 0) + issued)
+        const quantityMilli = Math.round(Number(movement.quantity_delta) * 1000)
+        netMovementMilliByProduct.set(movement.product_id, (netMovementMilliByProduct.get(movement.product_id) ?? 0) + quantityMilli)
       }
       const returnable = [...orderedByProduct].map(([product_id, item]) => ({
         product_id,
         product_name: item.product_name,
         inventory_unit: item.inventory_unit,
-        remaining_quantity: Math.max(item.quantity - (netIssuedByProduct.get(product_id) ?? 0), 0),
+        remaining_quantity: Math.max(-(netMovementMilliByProduct.get(product_id) ?? 0), 0) / 1000,
       })).filter((item) => item.remaining_quantity > 0)
       if (requestNumber === returnItemsRequestRef.current) setReturnableItems(returnable)
     } catch {
@@ -609,16 +607,18 @@ export function InventoryPage() {
     <div className="page-stack">
       <header className="page-heading">
         <div><p className="eyebrow">OPERAÇÃO · ESTOQUE</p><h1>Estoque</h1><p className="page-description">Quantidade atual de cada produto, compras recebidas e alterações registradas.</p></div>
-        <div className="record-heading-actions"><button className="button button-secondary" disabled={countStarting} onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Ajuste, perda ou retorno</button><button className="button button-secondary" disabled={loading || countStarting || balances.length === 0 || balances.length > 500} onClick={startCount} ref={countTriggerRef} type="button"><Icon name="box" /> Contagem física</button><button className="button button-primary" disabled={countStarting} onClick={startReceipt} ref={receiptTriggerRef} type="button"><Icon name="box" /> Receber compra</button></div>
+        <div className="record-heading-actions"><button className="button button-secondary" disabled={countStarting} onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Movimentar estoque</button><button aria-describedby={!loading && balances.length === 0 ? 'inventory-count-prerequisite' : undefined} className="button button-secondary" disabled={loading || countStarting || balances.length === 0 || balances.length > 500} onClick={startCount} ref={countTriggerRef} type="button"><Icon name="check" /> Contagem física</button><button className="button button-primary" disabled={countStarting} onClick={startReceipt} ref={receiptTriggerRef} type="button"><Icon name="file" /> Receber compra</button></div>
       </header>
+
+      {!loading && balances.length === 0 && <p className="section-footnote" id="inventory-count-prerequisite">Para fazer uma contagem, configure o estoque e o saldo inicial de um produto no <Link to="/catalogo">Catálogo</Link>.</p>}
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadData() }} type="button">Tentar novamente</button></div>}
-      {!loading && balances.length > 500 && <p className="form-message form-message-warning" role="status">A contagem física está indisponível: há {balances.length} produtos com quantidade acompanhada, e o limite atual é 500.</p>}
+      {!loading && balances.length > 500 && <p className="form-message form-message-warning" role="status">A contagem física está indisponível: há {balances.length} produtos com saldo registrado; o limite é 500.</p>}
 
       {showCountForm && <form className="surface-panel record-form" onSubmit={(event) => void handleCountSubmit(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">CONFERÊNCIA FÍSICA</p><h2 ref={countHeadingRef} tabIndex={-1}>Contagem de estoque</h2></div><button className="text-button" disabled={saving || uncertain || countStarting} onClick={() => setShowCountForm(false)} type="button">Fechar</button></div>
-        <p className="section-footnote inventory-form-hint">O saldo esperado é capturado ao iniciar. Fechar este painel não cancela a contagem; ao abrir novamente, a mesma referência será retomada. Entradas, vendas e outras movimentações depois do início são preservadas quando a diferença for aplicada.</p>
+        <p className="section-footnote inventory-form-hint">Confira o saldo físico. Se fechar, a mesma contagem será retomada; movimentações feitas depois do início serão preservadas.</p>
         {countStarting && <p className="inline-state" aria-live="polite">Capturando os saldos de referência…</p>}
         {countStartError && <div className="form-message form-message-error" role="alert"><p>{countStartError}</p>{countStartErrorKind === 'network' || countStartErrorKind === 'begin' ? <button className="text-button" disabled={countStarting} onClick={retryCountStart} type="button">{countSnapshotId ? 'Tentar carregar a referência' : 'Tentar iniciar ou retomar a contagem'}</button> : countStartErrorKind === 'empty' ? <Link className="quiet-link" to="/catalogo">Conferir produtos no catálogo →</Link> : null}</div>}
         {!countStarting && countSnapshotId && countDrafts.length > 0 && <div className="inventory-line-list">
@@ -639,15 +639,15 @@ export function InventoryPage() {
       </form>}
 
       <section className="order-balance-grid inventory-summary" aria-label="Resumo do estoque">
-        <article className="surface-panel order-balance-card"><span>Produtos com quantidade acompanhada</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>O saldo muda quando produtos são vendidos ou recebidos.</small></article>
+        <article className="surface-panel order-balance-card"><span>Produtos com saldo no sistema</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>Atualizado em despachos, retiradas e recebimentos.</small></article>
         <article className="surface-panel order-balance-card"><span>Abaixo do mínimo</span><strong>{loading ? '—' : belowMinimum.length}</strong><small>Somente produtos com limite configurado.</small></article>
-        <article className="surface-panel order-balance-card"><span>Estoque abaixo de zero</span><strong>{loading ? '—' : negativeBalances.length}</strong><small>Foram despachadas mais unidades do que havia no estoque.</small></article>
+        <article className="surface-panel order-balance-card"><span>Estoque negativo</span><strong>{loading ? '—' : negativeBalances.length}</strong><small>Saíram mais unidades do que havia no saldo.</small></article>
       </section>
 
       {showReceiptForm && <form className="surface-panel record-form" onSubmit={(event) => void handleReceiptSubmit(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA FÍSICA</p><h2 ref={receiptHeadingRef} tabIndex={-1}>Registrar compra recebida</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowReceiptForm(false)} type="button">Fechar</button></div>
-        <p className="section-footnote inventory-form-hint">A entrada altera o saldo quando os itens chegam. O registro não lança pagamento, despesa ou saída de caixa.</p>
-        {trackedProducts.length === 0 ? <p className="inline-state">Configure unidade e contagem inicial de um produto no <Link to="/catalogo">catálogo</Link> antes de registrar recebimentos.</p> : <>
+        <p className="section-footnote inventory-form-hint">Some ao estoque os itens que chegaram. Esta ação não registra pagamento.</p>
+        {trackedProducts.length === 0 ? <p className="inline-state">Ative o estoque e informe o saldo inicial de pelo menos um produto no <Link to="/catalogo">Catálogo</Link> para registrar compras recebidas.</p> : <>
           <div className="record-form-grid">
             <label className="record-field"><span className="field-label">Fornecedor <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={160} onChange={(event) => setReceiptSupplier(event.target.value)} value={receiptSupplier} /></label>
             <label className="record-field"><span className="field-label">Referência da compra <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={120} onChange={(event) => setReceiptReference(event.target.value)} value={receiptReference} /></label>
@@ -671,10 +671,10 @@ export function InventoryPage() {
       </form>}
 
       {showMovementForm && <form className="surface-panel record-form" onSubmit={(event) => void handleMovementSubmit(event)}>
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">MOVIMENTAÇÃO MANUAL</p><h2 ref={movementHeadingRef} tabIndex={-1}>Registrar ajuste, perda ou retorno</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowMovementForm(false)} type="button">Fechar</button></div>
-        <p className="section-footnote inventory-form-hint">Ajustes e perdas precisam de motivo. Um retorno só entra no saldo depois da conferência física.</p>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">MOVIMENTAÇÃO MANUAL</p><h2 ref={movementHeadingRef} tabIndex={-1}>Ajustar estoque</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowMovementForm(false)} type="button">Fechar</button></div>
+        <p className="section-footnote inventory-form-hint">Corrija uma contagem, registre uma perda ou adicione um retorno já conferido.</p>
         <div className="record-form-grid">
-          <label className="record-field"><span className="field-label">Tipo de movimentação <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { setMovementKind(event.target.value as MovementKind); setMovementOrderId(''); setMovementProductId(''); setReturnableItems([]); setFormError(null) }} value={movementKind}><option value="adjustment">Ajuste de contagem</option><option value="loss">Perda ou avaria</option><option value="return">Retorno conferido de pedido</option></select></label>
+          <label className="record-field"><span className="field-label">O que aconteceu? <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { setMovementKind(event.target.value as MovementKind); setMovementOrderId(''); setMovementProductId(''); setReturnableItems([]); setFormError(null) }} value={movementKind}><option value="adjustment">Corrigir quantidade</option><option value="loss">Registrar perda ou avaria</option><option value="return">Registrar retorno conferido</option></select></label>
           {movementKind === 'return' && <label className="record-field"><span className="field-label">Pedido associado <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { const orderId = event.target.value; setMovementOrderId(orderId); setMovementProductId(''); setReturnableItems([]); if (orderId) void loadReturnableItems(orderId) }} required value={movementOrderId}><option value="">Selecione um pedido enviado</option>{returnCandidates.map((order) => <option key={order.id} value={order.id}>{order.customer_name_snapshot} · {order.fulfillment_type === 'pickup' ? 'Retirada' : 'Entrega'} · {order.id.slice(0, 8)}</option>)}</select></label>}
           <label className="record-field"><span className="field-label">Produto <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain || (movementKind === 'return' && (returnItemsLoading || !movementOrderId))} onChange={(event) => setMovementProductId(event.target.value)} required value={movementProductId}><option value="">{movementKind === 'return' ? returnItemsLoading ? 'Conferindo itens do pedido…' : 'Selecione um item enviado' : 'Selecione um produto com estoque'}</option>{movementKind === 'return' ? returnableItems.map((item) => <option key={item.product_id} value={item.product_id}>{item.product_name} · ainda enviado {formatQuantity(item.remaining_quantity)} {item.inventory_unit}</option>) : trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
           <label className="record-field"><span className="field-label">Quantidade <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || uncertain} inputMode="decimal" onChange={(event) => setMovementQuantity(event.target.value)} placeholder="0" required value={movementQuantity} /></label>
@@ -693,7 +693,7 @@ export function InventoryPage() {
       </form>}
 
       <section className="surface-panel record-panel" aria-labelledby="inventory-balance-heading">
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">QUANTIDADE ATUAL</p><h2 id="inventory-balance-heading">Produtos acompanhados</h2></div><span className="neutral-status">{loading ? '—' : balances.length}</span></div>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">QUANTIDADE ATUAL</p><h2 id="inventory-balance-heading">Produtos com saldo</h2></div><span className="neutral-status">{loading ? '—' : balances.length}</span></div>
         {!loading && balances.length > 0 && <label className="search-field"><Icon name="search" /><span className="visually-hidden">Buscar produtos no estoque</span><input onChange={(event) => setBalanceSearch(event.target.value)} placeholder="Buscar produto" value={balanceSearch} /></label>}
         {loading ? <p className="inline-state" aria-live="polite">Carregando saldos…</p> : balances.length === 0 ? <div className="inline-state"><p>Não há saldos configurados. Configure a unidade e a contagem inicial no catálogo.</p><Link className="quiet-link" to="/catalogo">Abrir catálogo →</Link></div> : <ul className="inventory-balance-list">
           {filteredBalances.length === 0 ? <li className="inline-state">Nenhum produto corresponde à busca.</li> : filteredBalances.map((balance) => {
@@ -703,11 +703,11 @@ export function InventoryPage() {
             const isBelow = balance.minimum_stock !== null && quantity < Number(balance.minimum_stock)
             return <li key={balance.product_id}>
               <span className="inventory-balance-copy"><strong>{balance.product_name}</strong><small>Unidade: {balance.inventory_unit}{balance.minimum_stock !== null ? ' · Mínimo ' + formatQuantity(Number(balance.minimum_stock)) : ' · Sem limite mínimo'}</small></span>
-              <span className="inventory-balance-value"><strong>{formatQuantity(quantity)} <small>{balance.inventory_unit}</small></strong><span className={'stock-state' + (isNegative ? ' stock-state-negative' : isZero ? ' stock-state-zero' : isBelow ? ' stock-state-low' : '')}>{isNegative ? 'Abaixo de zero' : isZero ? 'Sem estoque' : isBelow ? 'Abaixo do mínimo' : 'Disponível'}</span></span>
+              <span className="inventory-balance-value"><strong>{formatQuantity(quantity)} <small>{balance.inventory_unit}</small></strong><span className={'stock-state' + (isNegative ? ' stock-state-negative' : isZero ? ' stock-state-zero' : isBelow ? ' stock-state-low' : '')}>{isNegative ? 'Estoque negativo' : isZero ? 'Sem estoque' : isBelow ? 'Abaixo do mínimo' : 'Disponível'}</span></span>
             </li>
           })}
         </ul>}
-        {!loading && untrackedProducts.length > 0 && <div className="inventory-untracked"><p className="eyebrow">AINDA NÃO CONTROLADOS</p><p>{untrackedProducts.map((product) => product.name).join(' · ')}</p><Link className="quiet-link" to="/catalogo">Configurar unidade e contagem inicial →</Link></div>}
+        {!loading && untrackedProducts.length > 0 && <div className="inventory-untracked"><p className="eyebrow">SEM CONTROLE DE ESTOQUE</p><p>{untrackedProducts.map((product) => product.name).join(' · ')}</p><Link className="quiet-link" to="/catalogo">Ativar estoque no catálogo →</Link></div>}
         {!loading && products.some((product) => product.is_combo) && <p className="section-footnote inventory-combo-note">Combos não têm saldo próprio. A disponibilidade é formada pelos saldos dos produtos da composição.</p>}
       </section>
 

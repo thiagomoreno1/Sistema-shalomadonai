@@ -414,6 +414,11 @@
 .record-field .field-label { min-height: 20px; }
 .field-optional { color: var(--quiet); font-size: 10px; font-weight: 450; }
 .record-field .text-input { margin-bottom: 14px; }
+.product-stock-settings { min-width: 0; margin: 4px 0 12px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
+.product-stock-settings .section-heading { margin-bottom: 5px; }
+.product-stock-settings h3 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 620; }
+.product-stock-settings > .record-checkbox { margin-bottom: 6px; }
+.product-stock-grid { margin: 0; }
 .customer-whatsapp-hint { margin: -8px 0 14px; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .customer-phone-row { display: grid; grid-template-columns: minmax(175px, 0.78fr) minmax(0, 1fr); gap: 8px; }
 .customer-phone-row-custom { grid-template-columns: minmax(155px, 0.78fr) 72px minmax(0, 1fr); }
@@ -446,6 +451,13 @@
 .product-photo-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .record-checkbox { display: flex; flex-direction: row; align-items: center; gap: 9px; min-height: 42px; color: var(--ink); font-size: 12px; }
 .record-checkbox input { width: 18px; height: 18px; accent-color: var(--accent); }
+.record-checkbox > span { display: grid; min-width: 0; gap: 4px; line-height: 1.4; }
+.record-checkbox > span > strong, .record-checkbox > span > small { display: block; }
+.record-checkbox > span > small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.belvo-sandbox-scope > summary, .bank-import-details > summary { color: var(--ink); font-weight: 620; cursor: pointer; }
+.belvo-sandbox-scope-copy { display: grid; gap: 4px; padding-top: 5px; }
+.bank-import-details { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.bank-import-details p { margin: 7px 0 0; }
 .record-field-actions { justify-content: flex-start; }
 .category-inline-form { display: flex; align-items: flex-end; gap: 14px; padding: 17px 20px; }
 .category-inline-form .record-field { flex: 1; }

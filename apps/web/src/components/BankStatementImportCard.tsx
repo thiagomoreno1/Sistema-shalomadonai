@@ -275,7 +275,7 @@ export function BankStatementImportCard({ businessId, accounts, disabled = false
         <div><p className="eyebrow">ARQUIVO DO BANCO</p><h2 id="bank-statement-import-title">Importar extrato OFX</h2></div>
         <span className="neutral-status">Prévia antes de gravar</span>
       </div>
-      <p className="section-footnote">Selecione um arquivo OFX ou QFX e confira os lançamentos. O arquivo é lido no navegador; só os movimentos normalizados e o resumo do lote são registrados no Shalom.</p>
+      <p className="section-footnote">Selecione um arquivo OFX ou QFX para conferir os movimentos.</p>
 
       <div className="record-form-grid bank-import-fields">
         <label className="record-field"><span className="field-label">Conta de destino</span><select className="text-input" disabled={disabled || importing || uncertain || accounts.length === 0} onChange={(event) => { setSelectedAccountId(event.target.value); setRequestId(crypto.randomUUID()); setConfirmed(false); setResult(null); setError(null) }} value={selectedAccountId}><option value="">Selecione uma conta</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.institution_name} · {account.account_label}{account.account_last_four ? ` · final ${account.account_last_four}` : ''}</option>)}</select></label>
@@ -301,7 +301,7 @@ export function BankStatementImportCard({ businessId, accounts, disabled = false
           {statement.rows.slice(0, showAllRows ? undefined : 5).map((row) => <li key={row.externalTransactionId}><span><strong>{row.description}</strong><small>{row.transactionDate}{existingFitids.has(row.externalTransactionId) ? ' · já importado nesta faixa de datas' : ''}</small></span><strong>{formatBRLExact(row.amountCents)}</strong></li>)}
         </ul>
         {statement.rows.length > 5 && <button aria-expanded={showAllRows} className="text-button bank-import-show-all" onClick={() => setShowAllRows((value) => !value)} type="button">{showAllRows ? 'Mostrar somente os 5 primeiros' : `Mostrar todos os ${statement.rows.length} lançamentos`}</button>}
-        <p className="section-footnote">A prévia marca duplicados encontrados nas mesmas datas do arquivo. Na gravação, o banco compara o FITID na conta inteira e ignora duplicados mesmo que a data tenha mudado.</p>
+        <details className="bank-import-details"><summary>Como o sistema trata duplicados</summary><p>A prévia marca duplicados nas datas do arquivo. Na gravação, o sistema também compara o FITID em toda a conta.</p></details>
         {uncertain && <div className="bank-import-recovery"><p className="form-message form-message-warning" role="status">A resposta anterior não foi confirmada. Reenvie com a mesma conta e arquivo para consultar o mesmo lote.</p><button className="text-button" onClick={() => setDiscardConfirm(true)} type="button">Descartar esta tentativa</button>{discardConfirm && <div className="bank-import-discard" role="alert"><p>O lote pode ter sido registrado antes da falha. Se você importar este extrato de novo para a mesma conta, os FITIDs já registrados nessa conta serão ignorados.</p><div className="record-form-actions"><button className="button button-secondary" onClick={() => { setDiscardConfirm(false); setUncertain(false); setStatement(null); setFileName(''); setConfirmed(false); setRequestId(crypto.randomUUID()); setError(null); if (fileInputRef.current) fileInputRef.current.value = '' }} type="button">Confirmar descarte</button><button className="text-button" onClick={() => setDiscardConfirm(false)} type="button">Voltar</button></div></div>}</div>}
         <label className="bank-import-confirm"><input checked={confirmed} disabled={disabled || importing || uncertain || accountMismatch || checkingDuplicates || Boolean(duplicateLookupError)} onChange={(event) => setConfirmed(event.target.checked)} type="checkbox" /><span>Conferi a conta e a prévia. Autorizo registrar os movimentos normalizados nesta conciliação.</span></label>
         {duplicateLookupError && <div className="bank-import-duplicate-error" role="alert"><p className="form-message form-message-error">{duplicateLookupError}</p><button className="button button-secondary" disabled={checkingDuplicates} onClick={() => setLookupRetry((retry) => retry + 1)} type="button">Verificar duplicidades novamente</button></div>}
@@ -310,7 +310,7 @@ export function BankStatementImportCard({ businessId, accounts, disabled = false
 
       {error && <p className="form-message form-message-error" role="alert">{error}</p>}
       {result && <p className="form-message form-message-success" role="status">Lote {result.batchId.slice(0, 8).toUpperCase()}: {result.importedCount} importados e {result.duplicateCount} duplicados ignorados.</p>}
-      <p className="bank-import-privacy-note">O arquivo e o número completo da conta não são enviados nem armazenados. A deduplicação usa o identificador FITID informado no extrato, combinado à conta selecionada.</p>
+      <details className="bank-import-details"><summary>Privacidade do arquivo</summary><p>O arquivo e o número completo da conta não são enviados nem armazenados. A deduplicação usa o FITID do extrato na conta selecionada.</p></details>
     </section>
   )
 }

@@ -296,20 +296,26 @@ export function DeliveriesPage() {
     if (!statusRequestIdsRef.current.has(key)) statusRequestIdsRef.current.set(key, newRequestId())
     if (status === 'dispatched') {
       const relevant = components.filter((component) => component.order_id === delivery.order_id && component.inventory_tracked_snapshot)
-      const quantities = new Map<string, { name: string; unit: string; ordered: number }>()
+      const quantities = new Map<string, { name: string; unit: string; orderedMilli: number }>()
       for (const component of relevant) {
-        const current = quantities.get(component.product_id) ?? { name: component.product_name_snapshot, unit: component.inventory_unit_snapshot ?? '', ordered: 0 }
-        current.ordered += Number(component.quantity_snapshot)
+        const current = quantities.get(component.product_id) ?? { name: component.product_name_snapshot, unit: component.inventory_unit_snapshot ?? '', orderedMilli: 0 }
+        current.orderedMilli += Math.round(Number(component.quantity_snapshot) * 1000)
         quantities.set(component.product_id, current)
       }
       const warnings: Array<{ name: string; unit: string; available: number; needed: number; projected: number }> = []
       for (const [productId, line] of quantities) {
-        const netIssued = movements
-          .filter((movement) => movement.order_id === delivery.order_id && movement.product_id === productId && ['dispatch', 'return'].includes(movement.movement_type))
-          .reduce((sum, movement) => sum + (movement.movement_type === 'dispatch' ? -Number(movement.quantity_delta) : Number(movement.quantity_delta)), 0)
-        const needed = Math.max(line.ordered - netIssued, 0)
-        const available = Number(balanceMap.get(productId)?.quantity_on_hand ?? 0)
-        const projected = available - needed
+        const netIssuedMilli = Math.max(
+          -movements
+            .filter((movement) => movement.order_id === delivery.order_id && movement.product_id === productId && ['dispatch', 'return'].includes(movement.movement_type))
+            .reduce((sum, movement) => sum + Math.round(Number(movement.quantity_delta) * 1000), 0),
+          0,
+        )
+        const neededMilli = Math.max(line.orderedMilli - netIssuedMilli, 0)
+        const availableMilli = Math.round(Number(balanceMap.get(productId)?.quantity_on_hand ?? 0) * 1000)
+        const projectedMilli = availableMilli - neededMilli
+        const needed = neededMilli / 1000
+        const available = availableMilli / 1000
+        const projected = projectedMilli / 1000
         if (needed > 0 && projected < 0) warnings.push({ name: line.name, unit: line.unit, available, needed, projected })
       }
       setDispatchWarnings(warnings)

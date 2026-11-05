@@ -220,12 +220,14 @@ export function BelvoSandboxCard() {
         <div>
           <p className="eyebrow">OPEN FINANCE · AMBIENTE DE TESTES</p>
           <h2 id="belvo-sandbox-heading">Prova de conceito com Belvo Sandbox</h2>
-        <p className="belvo-sandbox-intro">Vamos validar o consentimento e a criação de um vínculo fictício antes de planejar a importação de movimentações.</p>
+        <p className="belvo-sandbox-intro">Teste na instituição fictícia; a Belvo pedirá consentimento. Nenhum movimento será importado.</p>
         </div>
         <span className="neutral-status">Sem conta real</span>
       </div>
 
-      <div className="belvo-sandbox-scope" role="note">
+      <details className="belvo-sandbox-scope">
+        <summary>Cuidados e detalhes do teste</summary>
+        <div className="belvo-sandbox-scope-copy" role="note">
         <strong>O widget ficará restrito à instituição fictícia da Belvo Sandbox.</strong>
         <p>A Belvo pedirá seu consentimento para cadastro, contas, cartões e operações de crédito.</p>
         <p>Nesta prova, o aplicativo buscará somente dados de contas (<code>ACCOUNTS</code>). Não pediremos <code>TRANSACTIONS</code> nem importaremos extratos ou movimentos para o Shalom.</p>
@@ -233,7 +235,8 @@ export function BelvoSandboxCard() {
         <p>Depois da confirmação, use <strong>Excluir vínculo de teste</strong> antes de sair desta tela. O Shalom não salva o ID do vínculo; se você sair sem excluir, esse botão não poderá recuperá-lo depois.</p>
         <p>Use somente a identidade fictícia indicada no <a href={BELVO_SANDBOX_GUIDE} rel="noreferrer" target="_blank">guia oficial da Belvo Sandbox</a>.</p>
         <p>O nome e o CPF fictícios serão enviados à Belvo pelo servidor para gerar o token, mas não serão salvos pelo Shalom. Não informe CPF, senha ou código de uma conta real.</p>
-      </div>
+        </div>
+      </details>
 
       {statusLoading && <p className="belvo-sandbox-status" role="status">Verificando a configuração segura da sandbox…</p>}
       {statusError && <div className="form-message form-message-error" role="alert">{statusError} <button className="text-button" onClick={() => void refreshStatus()} type="button">Verificar novamente</button></div>}
@@ -271,7 +274,7 @@ export function BelvoSandboxCard() {
         <small>A exclusão é permanente na Belvo Sandbox e apaga os dados associados a este vínculo fictício.</small>
       </div>}
 
-      <p className="belvo-sandbox-next-step">Próxima etapa após esta prova: processar webhooks, buscar transações, validar duplicidade e permitir conciliação. Nenhum movimento é gravado no histórico bancário, e o ID do vínculo e o resultado do teste ficam apenas nesta sessão; sair ou atualizar exige iniciar outra prova.</p>
+      <p className="belvo-sandbox-next-step">Próxima etapa: buscar os movimentos bancários e permitir a conciliação.</p>
     </section>
   )
 }

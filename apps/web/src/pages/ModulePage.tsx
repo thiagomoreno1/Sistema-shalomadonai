@@ -31,7 +31,8 @@ export function ModulePage({ title, description, icon, nextStep }: ModulePagePro
 }
 
 const secondaryModules: Array<{ to: string; title: string; description: string; icon: IconName }> = [
-  { to: '/catalogo', title: 'Catálogo', description: 'Produtos, cestas e combos', icon: 'box' },
+  { to: '/clientes', title: 'Clientes', description: 'Cadastros e histórico', icon: 'people' },
+  { to: '/catalogo', title: 'Catálogo', description: 'Produtos, cestas e combos', icon: 'tag' },
   { to: '/estoque', title: 'Estoque', description: 'Saldos e movimentações', icon: 'box' },
   { to: '/entregas', title: 'Entregas', description: 'Separação e acompanhamento', icon: 'truck' },
   { to: '/whatsapp', title: 'WhatsApp', description: 'Caixa de entrada e conversas', icon: 'message' },

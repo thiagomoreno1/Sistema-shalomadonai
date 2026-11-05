@@ -793,8 +793,8 @@ export function BankReconciliationPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">FINANCEIRO</p>
-          <h1>Conferir extrato do banco</h1>
-          <p className="page-description">Compare cada movimento do banco com um pagamento recebido ou gasto já registrado. Esta conferência é manual.</p>
+          <h1>Conferir extrato</h1>
+          <p className="page-description">Compare os movimentos do banco com os registros do sistema.</p>
         </div>
         <span className="module-heading-icon"><Icon name="coin" /></span>
       </header>
@@ -811,7 +811,7 @@ export function BankReconciliationPage() {
           <div><p className="eyebrow">CONTAS</p><h2 id="bank-accounts-heading">Contas bancárias</h2></div>
           <button className="button button-secondary" disabled={loading || Boolean(loadError) || savingAccount} ref={accountTriggerRef} onClick={() => { setAccountFormOpen((value) => !value); setFormError(null) }} type="button">{accountFormOpen ? 'Fechar' : 'Adicionar conta'}</button>
         </div>
-        <p className="section-footnote">Use um nome curto e, se quiser, apenas os 4 últimos dígitos. Não informe senha, token ou número completo de conta.</p>
+        <p className="section-footnote">Informe o banco, um apelido e, se quiser, os 4 últimos dígitos.</p>
 
         {accountFormOpen && <form className="record-form bank-inline-form" onSubmit={(event) => void saveAccount(event)}>
           <h2 ref={accountFormHeadingRef} tabIndex={-1}>Cadastrar conta bancária</h2>
@@ -840,7 +840,7 @@ export function BankReconciliationPage() {
           <div><p className="eyebrow">MOVIMENTOS</p><h2 id="bank-movements-heading">Movimentos do extrato</h2></div>
           <button className="button button-primary" disabled={activeAccounts.length === 0 || loading || Boolean(loadError)} onClick={() => { setAccountId(activeAccounts[0]?.id ?? ''); setMovementFormOpen((value) => !value); setFormError(null) }} ref={movementTriggerRef} type="button">{movementFormOpen ? 'Fechar' : 'Registrar movimento'}</button>
         </div>
-        <p className="section-footnote">Para conferir, ligue cada movimento do banco a um ou mais pagamentos recebidos ou gastos pagos. A soma precisa ser igual ao valor do banco; cada registro entra inteiro. Nada é ligado automaticamente.</p>
+        <p className="section-footnote">Associe manualmente um ou mais lançamentos; a soma deve igualar o valor do extrato. Isso não altera pagamentos, gastos ou lucro.</p>
 
         {(summaryBusinessId !== businessId || summaryLoading) && <p className="inline-state bank-summary-loading" aria-live="polite">Carregando resumo de todos os movimentos…</p>}
         {summaryBusinessId === businessId && !summaryLoading && summaryError && <div className="bank-summary-error" role="alert"><p>{summaryError}</p><button className="text-button" onClick={() => void loadReconciliationSummary()} type="button">Tentar novamente</button></div>}
@@ -849,7 +849,7 @@ export function BankReconciliationPage() {
             <div><p className="eyebrow">RESUMO GLOBAL</p><h3 id="bank-reconciliation-summary-title">Todos os movimentos</h3></div>
             <span>{reconciliationSummary.movement_count} {reconciliationSummary.movement_count === '1' ? 'movimento' : 'movimentos'}</span>
           </div>
-          <p className="bank-reconciliation-summary-note">Valores brutos: soma dos valores absolutos; entradas e saídas não se compensam.</p>
+          <p className="bank-reconciliation-summary-note">Total bruto dos movimentos; entradas e saídas não se compensam.</p>
           <dl className="bank-reconciliation-summary-grid">
             <div className="bank-reconciliation-summary-card"><dt>Conciliados</dt><dd><strong>{reconciliationSummary.reconciled.count}</strong><span>{formatAmount(reconciliationSummary.reconciled.gross_cents)}</span></dd></div>
             <div className="bank-reconciliation-summary-card"><dt>Pendentes</dt><dd><strong>{reconciliationSummary.pending.count}</strong><span>{formatAmount(reconciliationSummary.pending.gross_cents)}</span></dd></div>
@@ -977,7 +977,6 @@ export function BankReconciliationPage() {
         {loadError && transactions.length > 0 && <p className="inline-state inline-state-error">A lista anterior está desatualizada e as ações de conciliação estão suspensas.</p>}
       </section>
 
-      <p className="section-footnote bank-scope-note">Anotações manuais não alteram pagamentos recebidos, gastos pagos ou o lucro estimado. A conferência do extrato só mostra dados reais depois que uma conta bancária for conectada ou um arquivo for importado.</p>
     </div>
   )
 }

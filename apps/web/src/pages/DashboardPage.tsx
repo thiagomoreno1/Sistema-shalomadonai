@@ -421,7 +421,7 @@ export function DashboardPage() {
       <header className="page-heading dashboard-heading">
         <div>
           <p className="eyebrow">{businessDate}</p>
-          <h1>Central do dia</h1>
+          <h1>Dashboard</h1>
           <p className="page-description">O que precisa de ação hoje?</p>
         </div>
         {role === 'owner' && <div className="dashboard-heading-actions">
@@ -567,9 +567,9 @@ export function DashboardPage() {
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count === 0 && <div className="small-empty-state"><p>Nenhum produto está configurado para controle de estoque.</p><Link className="quiet-link" to="/catalogo">Configurar produtos <Icon name="arrow" /></Link></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count > 0 && priorities.inventory.attention_count === 0 && <div className="small-empty-state"><p>Nenhum saldo está negativo ou abaixo do mínimo definido.{priorities.inventory.without_minimum_count > 0 ? ` ${priorities.inventory.without_minimum_count} produto(s) ainda sem mínimo definido.` : ''}</p><Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.attention_count > 0 && <>
-            <ul className="dashboard-stock-list">{priorities.inventory.items.map((item) => <li key={item.product_id}><span><strong>{item.product_name}</strong><small>{item.minimum_stock === null ? 'Abaixo de zero · defina o estoque mínimo' : item.quantity_on_hand < 0 ? `Abaixo de zero · mínimo ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}` : `Estoque mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span><span className="dashboard-stock-quantity">{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span></li>)}</ul>
+            <ul className="dashboard-stock-list">{priorities.inventory.items.map((item) => <li key={item.product_id}><span><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.minimum_stock === null ? 'Defina um mínimo para receber alerta' : `Estoque mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span><span className="dashboard-stock-quantity">{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span></li>)}</ul>
             {priorities.inventory.attention_count > priorities.inventory.items.length && <p className="section-footnote">Mostrando {priorities.inventory.items.length} de {priorities.inventory.attention_count} produtos em atenção.</p>}
-            {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">{priorities.inventory.without_minimum_count} produto(s) com quantidade acompanhada ainda sem estoque mínimo definido.</p>}
+            {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">{priorities.inventory.without_minimum_count} produto(s) sem mínimo configurado para alerta.</p>}
             <Link className="quiet-link" to="/estoque">Ver produtos em atenção <Icon name="arrow" /></Link>
           </>}
         </section>
