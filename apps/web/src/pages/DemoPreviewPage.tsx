@@ -90,11 +90,10 @@ function ReadOnlyButton({ children }: { children: ReactNode }) {
   return <button className="demo-readonly-button" disabled type="button">{children}</button>
 }
 
-function FinanceTabs({ current }: { current: 'receivables' | 'outflows' | 'banks' }) {
+function FinanceTabs({ current }: { current: 'receivables' | 'outflows' }) {
   return <nav className="finance-subnav" aria-label="Seções financeiras">
     <Link className={current === 'receivables' ? 'is-active' : ''} to="/financeiro">Pagamentos pendentes</Link>
     <Link className={current === 'outflows' ? 'is-active' : ''} to="/financeiro/saidas">Gastos pagos</Link>
-    <Link className={current === 'banks' ? 'is-active' : ''} to="/financeiro/bancos">Extrato do banco</Link>
   </nav>
 }
 
@@ -293,22 +292,6 @@ function OutflowsPreview({ today }: { today: string }) {
   </div>
 }
 
-function BankPreview({ today }: { today: string }) {
-  const rows = [
-    [dateLabel(today), 'Pix recebido · Mercado Boa Praça', '+ R$ 645,50', <DemoBadge tone="success">Conferido</DemoBadge>, 'Pedido SA-1048 · parcela 1'],
-    [dateLabel(day(today, -1)), 'Transferência · Distribuidora Modelo', '− R$ 1.240,00', <DemoBadge tone="warning">A conferir</DemoBadge>, 'Compra de estoque'],
-    [dateLabel(day(today, -1)), 'Pix recebido · Flor & Afeto', '+ R$ 189,90', <DemoBadge tone="success">Conferido</DemoBadge>, 'Pedido SA-1045'],
-    [dateLabel(day(today, -2)), 'Tarifa bancária', '− R$ 18,90', <DemoBadge tone="neutral">Sem lançamento ligado</DemoBadge>, '—'],
-  ]
-  return <div className="page-stack demo-preview-page">
-    <DemoHeading eyebrow="FINANCEIRO · EXTRATO DO BANCO" title="Conferir extrato do banco" description="Compare os movimentos do banco com os pedidos e gastos registrados no sistema." />
-    <FinanceTabs current="banks" />
-    <div className="demo-callout"><Icon name="shield" /><p><strong>Banco não conectado.</strong> Os movimentos abaixo são um extrato fictício; Open Finance e importação OFX não foram acionados.</p></div>
-    <DemoMetrics items={[{ label: 'Banco de exemplo', value: 'Banco Modelo', note: 'Conta fictícia · final 0001', icon: 'coin' }, { label: 'Movimentos a conferir', value: '1', note: 'Ainda sem gasto ligado', icon: 'clock' }, { label: 'Movimentos conferidos', value: '12', note: 'Neste mês · exemplos', icon: 'check' }]} />
-    <DemoPanel title="Movimentos do extrato" subtitle="Movimentos fictícios; a conta bancária não está conectada." action={<ReadOnlyButton>Importar extrato</ReadOnlyButton>}><DemoTable caption="Movimentos bancários fictícios" headings={['Data', 'O que apareceu no banco', 'Valor', 'Conferência', 'Relacionado a']} rows={rows} /></DemoPanel>
-  </div>
-}
-
 function ReportsPreview({ today }: { today: string }) {
   const months = [{ label: 'Jun', value: 45 }, { label: 'Jul', value: 58 }, { label: 'Ago', value: 52 }, { label: 'Set', value: 69 }, { label: 'Out', value: 78 }, { label: 'Nov', value: 42 }]
   return <div className="page-stack demo-preview-page">
@@ -322,7 +305,7 @@ function ReportsPreview({ today }: { today: string }) {
 function SettingsPreview({ today }: { today: string }) {
   return <div className="page-stack demo-preview-page">
     <DemoHeading eyebrow="OPERAÇÃO · PREFERÊNCIAS" title="Configurações" description="Perfil da empresa, equipe e estado das conexões." />
-    <div className="demo-two-column"><DemoPanel title="Dados da empresa" subtitle="Perfil demonstrativo"><dl className="demo-detail-list"><div><dt>Nome</dt><dd>Shalom Adonai · exemplo</dd></div><div><dt>Município</dt><dd>Niterói, Rio de Janeiro</dd></div><div><dt>Fuso horário</dt><dd>America/Sao_Paulo</dd></div><div><dt>Cadastro iniciado</dt><dd>{dateLabel(day(today, -30))}</dd></div></dl><ReadOnlyButton>Editar dados</ReadOnlyButton></DemoPanel><DemoPanel title="Conexões" subtitle="Nenhuma integração está ativa"><ul className="demo-connection-list"><li><span><strong>WhatsApp / Chatwoot</strong><small>Caixa de exemplo sem sessão conectada</small></span><DemoBadge tone="warning">Pendente</DemoBadge></li><li><span><strong>Banco / Open Finance</strong><small>Sem conta real conectada</small></span><DemoBadge tone="warning">Pendente</DemoBadge></li><li><span><strong>Fiscal</strong><small>Configuração aguardando contador</small></span><DemoBadge>Dados pendentes</DemoBadge></li></ul></DemoPanel></div>
+    <div className="demo-two-column"><DemoPanel title="Dados da empresa" subtitle="Perfil demonstrativo"><dl className="demo-detail-list"><div><dt>Nome</dt><dd>Shalom Adonai · exemplo</dd></div><div><dt>Município</dt><dd>Niterói, Rio de Janeiro</dd></div><div><dt>Fuso horário</dt><dd>America/Sao_Paulo</dd></div><div><dt>Cadastro iniciado</dt><dd>{dateLabel(day(today, -30))}</dd></div></dl><ReadOnlyButton>Editar dados</ReadOnlyButton></DemoPanel><DemoPanel title="Conexões" subtitle="Nenhuma integração está ativa"><ul className="demo-connection-list"><li><span><strong>WhatsApp / Chatwoot</strong><small>Caixa de exemplo sem sessão conectada</small></span><DemoBadge tone="warning">Pendente</DemoBadge></li><li><span><strong>Fiscal</strong><small>Configuração aguardando contador</small></span><DemoBadge>Dados pendentes</DemoBadge></li></ul></DemoPanel></div>
     <DemoPanel title="Equipe de demonstração" subtitle="Perfis fictícios; nenhuma permissão será alterada"><DemoTable caption="Equipe fictícia" headings={['Pessoa', 'Perfil', 'Acesso', 'Situação']} rows={[[<span className="demo-secondary-copy"><strong>Conta proprietária (exemplo)</strong><small>gestao@example.com</small></span>, 'Proprietário', 'Todas as áreas', <DemoBadge tone="success">Ativo</DemoBadge>], [<span className="demo-secondary-copy"><strong>Atendimento (exemplo)</strong><small>atendimento@example.com</small></span>, 'Equipe', 'Clientes, pedidos e atendimento', <DemoBadge tone="success">Ativo</DemoBadge>]]} /></DemoPanel>
   </div>
 }
@@ -348,7 +331,6 @@ function DemoDefaultPage({ path }: { path: string }) {
   if (path === '/estoque') return <InventoryPreview today={today} />
   if (path === '/entregas') return <DeliveriesPreview today={today} />
   if (path === '/financeiro/saidas') return <OutflowsPreview today={today} />
-  if (path === '/financeiro/bancos') return <BankPreview today={today} />
   if (path === '/financeiro') return <ReceivablesPreview today={today} />
   if (path === '/relatorios') return <ReportsPreview today={today} />
   if (path === '/configuracoes') return <SettingsPreview today={today} />

@@ -396,19 +396,6 @@ export function SettingsPage() {
             <p className="settings-integration-note">Nenhuma mensagem é enviada ou recebida até concluir a conexão e validar o canal real.</p>
           </article>
 
-          <article className="settings-integration-card" aria-labelledby="bank-title">
-            <div className="settings-integration-heading">
-              <h3 id="bank-title">Movimentação bancária</h3>
-              <span className="neutral-status">Planejado</span>
-            </div>
-            <p className="settings-integration-copy">Open Finance é a abordagem planejada para trazer os movimentos ao sistema.</p>
-            <dl className="settings-detail-list settings-integration-details">
-              <div><dt>Conexão Open Finance</dt><dd>Não iniciada</dd></div>
-              <div><dt>Teste de conexão</dt><dd>Não realizado</dd></div>
-            </dl>
-            <p className="settings-integration-note"><Link to="/financeiro/bancos">Conferir extrato bancário</Link></p>
-          </article>
-
           <article className="settings-integration-card" aria-labelledby="fiscal-title">
             <div className="settings-integration-heading">
               <h3 id="fiscal-title">Configuração fiscal</h3>

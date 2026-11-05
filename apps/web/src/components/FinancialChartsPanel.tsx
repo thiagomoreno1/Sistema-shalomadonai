@@ -3,6 +3,7 @@ import { useBusiness } from '../business/BusinessContext'
 import { DashboardTrends, type DashboardTrendDay, type DashboardTrendPeriod } from './DashboardTrends'
 import { formatBusinessDate } from '../lib/formatters'
 import { isDemoPreviewEnabled } from '../lib/demoPreview'
+import { createDemoRevenueTrendDays, loadDashboardRevenueTrendDays, type DashboardRevenueTrendDay } from '../lib/dashboardRevenueTrends'
 import { supabaseClient } from '../lib/supabase'
 import { useBusinessToday } from '../lib/useBusinessToday'
 
@@ -84,8 +85,6 @@ function demoDays(startOn: string, dayCount: number): DashboardTrendDay[] {
   })
 }
 
-type SalesSummary = { managerial_result: { product_subtotal_cents: string; customer_delivery_fee_cents: string; sales_cents: string } }
-
 export function FinancialChartsPanel() {
   const { id: businessId, role } = useBusiness()
   const today = useBusinessToday()
@@ -94,11 +93,11 @@ export function FinancialChartsPanel() {
   const { startOn, dayCount, label } = getDateRange(today, period)
   const scopeKey = `${businessId}:${role}:${startOn}:${today}`
   const trendRequestId = useRef(0)
-  const salesRequestId = useRef(0)
+  const revenueRequestId = useRef(0)
   const [trendState, setTrendState] = useState<{ scopeKey: string; loading: boolean; error: boolean; days: DashboardTrendDay[] }>({ scopeKey: '', loading: true, error: false, days: [] })
-  const [salesState, setSalesState] = useState<{ scopeKey: string; loading: boolean; error: boolean; gross: bigint | null; net: bigint | null }>({ scopeKey: '', loading: true, error: false, gross: null, net: null })
+  const [revenueState, setRevenueState] = useState<{ scopeKey: string; loading: boolean; error: boolean; days: DashboardRevenueTrendDay[] }>({ scopeKey: '', loading: true, error: false, days: [] })
   const trends = trendState.scopeKey === scopeKey ? trendState : { loading: true, error: false, days: [] }
-  const sales = salesState.scopeKey === scopeKey ? salesState : { loading: true, error: false, gross: null, net: null }
+  const revenue = revenueState.scopeKey === scopeKey ? revenueState : { loading: true, error: false, days: [] }
 
   const loadTrends = useCallback(async () => {
     const requestId = ++trendRequestId.current
@@ -127,32 +126,30 @@ export function FinancialChartsPanel() {
     }
   }, [businessId, dayCount, demoPreview, scopeKey, startOn])
 
-  const loadSales = useCallback(async () => {
-    const requestId = ++salesRequestId.current
+  const loadRevenue = useCallback(async () => {
+    const requestId = ++revenueRequestId.current
     try {
       if (demoPreview) {
         await Promise.resolve()
-        const gross = BigInt(dayCount) * 248000n
-        const net = gross - BigInt(dayCount) * 12000n
-        if (requestId === salesRequestId.current) setSalesState({ scopeKey, loading: false, error: false, gross, net })
+        const days = createDemoRevenueTrendDays(startOn, dayCount)
+        if (requestId === revenueRequestId.current) setRevenueState({ scopeKey, loading: false, error: false, days })
         return
       }
       const client = supabaseClient
       if (!client) throw new Error('Supabase is not configured.')
-      const { data, error } = await client.rpc('get_financial_report_summary', {
-        p_business_id: businessId,
-        p_start_on: startOn,
-        p_end_on: today,
+      const days = await loadDashboardRevenueTrendDays(startOn, dayCount, async (chunkStart, chunkEnd) => {
+        const { data, error } = await client.rpc('get_dashboard_revenue_trends', {
+          p_business_id: businessId,
+          p_start_on: chunkStart,
+          p_end_on: chunkEnd,
+        })
+        return { data, error }
       })
-      if (error || !data) throw error
-      const summary = data as SalesSummary
-      const gross = BigInt(summary.managerial_result.product_subtotal_cents) + BigInt(summary.managerial_result.customer_delivery_fee_cents)
-      const net = BigInt(summary.managerial_result.sales_cents)
-      if (requestId === salesRequestId.current) setSalesState({ scopeKey, loading: false, error: false, gross, net })
+      if (requestId === revenueRequestId.current) setRevenueState({ scopeKey, loading: false, error: false, days })
     } catch {
-      if (requestId === salesRequestId.current) setSalesState({ scopeKey, loading: false, error: true, gross: null, net: null })
+      if (requestId === revenueRequestId.current) setRevenueState({ scopeKey, loading: false, error: true, days: [] })
     }
-  }, [businessId, dayCount, demoPreview, scopeKey, startOn, today])
+  }, [businessId, dayCount, demoPreview, scopeKey, startOn])
 
   useEffect(() => {
     let active = true
@@ -164,12 +161,12 @@ export function FinancialChartsPanel() {
   }, [loadTrends])
   useEffect(() => {
     let active = true
-    queueMicrotask(() => { if (active) void loadSales() })
+    queueMicrotask(() => { if (active) void loadRevenue() })
     return () => {
       active = false
-      salesRequestId.current += 1
+      revenueRequestId.current += 1
     }
-  }, [loadSales])
+  }, [loadRevenue])
 
   return (
     <section className="financial-charts-section" aria-labelledby="financial-charts-title">
@@ -191,15 +188,14 @@ export function FinancialChartsPanel() {
         embedded
         endOn={today}
         error={trends.error}
-        grossSalesCents={sales.gross}
         loading={trends.loading}
-        netSalesCents={sales.net}
+        revenueDays={revenue.days}
+        revenueError={revenue.error}
+        revenueLoading={revenue.loading}
         onRetry={() => void loadTrends()}
-        onRetrySales={() => void loadSales()}
+        onRetryRevenue={() => void loadRevenue()}
         period={period}
         periodLabel={label}
-        salesError={sales.error}
-        salesLoading={sales.loading}
         startOn={startOn}
       />
     </section>

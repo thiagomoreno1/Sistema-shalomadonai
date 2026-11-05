@@ -557,13 +557,16 @@ export function ReceivablesPage() {
       <FinanceNavigation active="receivables" />
       <header className="page-heading">
         <div>
-          <p className="eyebrow">FINANCEIRO · PEDIDOS</p>
-          <h1>Pagamentos a receber</h1>
-          <p className="page-description">Parcelas de pedidos que ainda faltam receber.</p>
+          <p className="eyebrow">FINANCEIRO</p>
+          <h1>Dashboard</h1>
+          <p className="page-description">Faturamento, custos e pagamentos pendentes.</p>
         </div>
         <Link className="button button-secondary" to="/pedidos">Ver pedidos</Link>
       </header>
 
+      {businessRole === 'owner' && <FinancialChartsPanel />}
+
+      <div className="section-heading receivables-section-heading"><h2>Pagamentos a receber</h2></div>
       <p className="section-footnote order-policy-note">Atrasado = ainda há saldo e a data de vencimento já passou.</p>
 
       {followUpStorageError && <p className="form-message form-message-error" role="alert">{followUpStorageError}</p>}
@@ -582,8 +585,6 @@ export function ReceivablesPage() {
         <article className="surface-panel receivable-summary-card"><span>Próximos vencimentos</span><strong>{formatBRL(groupTotal(upcoming))}</strong><small>{upcoming.length} parcelas ainda sem pagamento</small></article>
       </section>}
 
-      {businessRole === 'owner' && <FinancialChartsPanel />}
-
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void loadReceivables()} type="button">Tentar novamente</button></div>}
 
       {loading ? <p className="inline-state" aria-live="polite">Carregando vencimentos…</p> : !error && (
@@ -600,7 +601,7 @@ export function ReceivablesPage() {
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">AGENDA</p><h2 id="receivable-upcoming-heading">Próximos vencimentos</h2></div><span className="neutral-status">{upcoming.length}</span></div>
             {renderGroup(upcoming, 'Nenhum pagamento com vencimento futuro.')}
           </section>
-          {receivables.length === 0 && <p className="section-footnote">Gastos, conferência do extrato bancário e lucro estimado aparecem nas outras telas do Financeiro quando houver registros.</p>}
+          {receivables.length === 0 && <p className="section-footnote">Nenhum pagamento pendente neste período.</p>}
         </div>
       )}
     </div>

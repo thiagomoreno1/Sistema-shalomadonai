@@ -17,7 +17,6 @@ const NewOrderPage = lazy(async () => ({ default: (await import('../pages/NewOrd
 const OrderDetailPage = lazy(async () => ({ default: (await import('../pages/OrderDetailPage')).OrderDetailPage }))
 const ReceivablesPage = lazy(async () => ({ default: (await import('../pages/ReceivablesPage')).ReceivablesPage }))
 const FinancialOutflowsPage = lazy(async () => ({ default: (await import('../pages/FinancialOutflowsPage')).FinancialOutflowsPage }))
-const BankReconciliationPage = lazy(async () => ({ default: (await import('../pages/BankReconciliationPage')).BankReconciliationPage }))
 const ReportsPage = lazy(async () => ({ default: (await import('../pages/ReportsPage')).ReportsPage }))
 const InventoryPage = lazy(async () => ({ default: (await import('../pages/InventoryPage')).InventoryPage }))
 const DeliveriesPage = lazy(async () => ({ default: (await import('../pages/DeliveriesPage')).DeliveriesPage }))
@@ -59,6 +58,7 @@ export function AuthRoutes() {
           <Route path="/entrar" element={session ? <Navigate replace to={nextAfterSignIn} /> : <SignInPage />} />
           <Route path="/entregador" element={session ? <DeliveryDriverPortalPage /> : <Navigate replace to="/entrar?next=%2Fentregador" />} />
           <Route element={session ? <BusinessProvider><AppShell /></BusinessProvider> : <Navigate replace to="/entrar" />}>
+            <Route path="financeiro/bancos" element={<Navigate replace to="/financeiro" />} />
             <Route element={<DemoPreviewRoute />}>
               <Route index element={<DashboardPage />} />
               <Route path="clientes" element={<CustomersPage />} />
@@ -74,7 +74,6 @@ export function AuthRoutes() {
               <Route path="entregas" element={<DeliveriesPage />} />
               <Route path="financeiro" element={<ReceivablesPage />} />
               <Route path="financeiro/saidas" element={<FinancialOutflowsPage />} />
-              <Route path="financeiro/bancos" element={<BankReconciliationPage />} />
               <Route path="relatorios" element={<ReportsPage />} />
               <Route path="mais" element={<MorePage />} />
               <Route path="configuracoes" element={<SettingsPage />} />
