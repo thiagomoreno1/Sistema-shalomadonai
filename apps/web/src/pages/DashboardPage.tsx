@@ -65,6 +65,14 @@ const actionFilters: Array<{ value: ActionFilter; label: string }> = [
   { value: 'deliveries', label: 'Entregas' },
 ]
 
+const trendPeriodOptions: Array<{ value: DashboardTrendPeriod; label: string }> = [
+  { value: 'week', label: 'Esta semana' },
+  { value: 'last_7', label: 'Últimos 7 dias' },
+  { value: 'month', label: 'Este mês' },
+  { value: 'last_30', label: 'Últimos 30 dias' },
+  { value: 'year', label: 'Este ano' },
+]
+
 const integrations = [
   { label: 'WhatsApp', state: 'Conexão pendente' },
   { label: 'Banco', state: 'Open Finance não conectado' },
@@ -123,15 +131,16 @@ function createDemoPriorities(today: string): DashboardPriorities {
   }
 }
 
-function createDemoTrends(startOn: string, period: DashboardTrendPeriod): DashboardTrendDay[] {
+function createDemoTrends(startOn: string, dayCount: number): DashboardTrendDay[] {
   const orders = [0, 1, 2, 1, 3, 2, 4]
   const receipts = [0, 125000, 86000, 250000, 0, 340000, 422000]
   const outflows = [45000, 0, 95000, 145000, 62000, 88000, 73000]
-  return Array.from({ length: period }, (_, index) => {
+  return Array.from({ length: dayCount }, (_, index) => {
     const patternIndex = index % orders.length
+    const orderCount = orders[patternIndex]
     return {
       business_date: shiftCalendarDate(startOn, index),
-      order_count: BigInt(orders[patternIndex]),
+      order_count: BigInt(orderCount),
       receipts_cents: BigInt(receipts[patternIndex]),
       paid_outflows_cents: BigInt(outflows[patternIndex]),
     }
@@ -189,14 +198,40 @@ function shiftCalendarDate(value: string, offset: number) {
   return date.toISOString().slice(0, 10)
 }
 
+function getTrendDateRange(today: string, period: DashboardTrendPeriod) {
+  const date = new Date(`${today}T12:00:00Z`)
+  const weekday = date.getUTCDay()
+  const startOn = period === 'week'
+    ? shiftCalendarDate(today, -((weekday + 6) % 7))
+    : period === 'last_7'
+      ? shiftCalendarDate(today, -6)
+      : period === 'month'
+        ? `${today.slice(0, 7)}-01`
+        : period === 'last_30'
+          ? shiftCalendarDate(today, -29)
+          : `${today.slice(0, 4)}-01-01`
+  const dayCount = Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${startOn}T00:00:00Z`)) / 86_400_000) + 1
+  return { startOn, dayCount, label: trendPeriodOptions.find((option) => option.value === period)?.label ?? 'Últimos 7 dias' }
+}
+
+function getTrendDateChunks(startOn: string, dayCount: number) {
+  const chunks: Array<{ startOn: string; endOn: string; dayCount: number }> = []
+  for (let offset = 0; offset < dayCount; offset += 30) {
+    const chunkDayCount = Math.min(30, dayCount - offset)
+    const chunkStartOn = shiftCalendarDate(startOn, offset)
+    chunks.push({ startOn: chunkStartOn, endOn: shiftCalendarDate(chunkStartOn, chunkDayCount - 1), dayCount: chunkDayCount })
+  }
+  return chunks
+}
+
 function readTrendInteger(value: unknown) {
   if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value)
   if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value)
   throw new Error('Invalid daily aggregate.')
 }
 
-function readTrendDays(value: unknown, startOn: string, period: DashboardTrendPeriod): DashboardTrendDay[] {
-  if (!Array.isArray(value) || value.length !== period) throw new Error('Incomplete daily series.')
+function readTrendDays(value: unknown, startOn: string, dayCount: number): DashboardTrendDay[] {
+  if (!Array.isArray(value) || value.length !== dayCount) throw new Error('Incomplete daily series.')
   return value.map((row: unknown, index) => {
     if (typeof row !== 'object' || row === null) throw new Error('Invalid daily series.')
     const item = row as Record<string, unknown>
@@ -236,8 +271,8 @@ export function DashboardPage() {
   const recentOrdersRequestId = useRef(0)
   const [recentOrdersState, setRecentOrdersState] = useState<{ scopeKey: string; loading: boolean; error: boolean; orders: RecentOrder[] }>({ scopeKey: '', loading: true, error: false, orders: [] })
   const currentRecentOrders = recentOrdersState.scopeKey === recentOrdersScopeKey ? recentOrdersState : { loading: true, error: false, orders: [] }
-  const [trendPeriod, setTrendPeriod] = useState<DashboardTrendPeriod>(7)
-  const trendStartOn = shiftCalendarDate(today, 1 - trendPeriod)
+  const [trendPeriod, setTrendPeriod] = useState<DashboardTrendPeriod>('last_7')
+  const { startOn: trendStartOn, dayCount: trendDayCount, label: trendPeriodLabel } = getTrendDateRange(today, trendPeriod)
   const trendScopeKey = `${businessId}:${trendStartOn}:${today}`
   const trendRequestId = useRef(0)
   const [trendState, setTrendState] = useState<{ scopeKey: string; loading: boolean; error: boolean; days: DashboardTrendDay[] }>({ scopeKey: '', loading: true, error: false, days: [] })
@@ -258,22 +293,28 @@ export function DashboardPage() {
     setTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
     try {
       if (demoPreview) {
-        setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: createDemoTrends(trendStartOn, trendPeriod) })
+        setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: createDemoTrends(trendStartOn, trendDayCount) })
         return
       }
-      if (!supabaseClient) throw new Error('Authentication service unavailable.')
-      const { data, error } = await supabaseClient.rpc('get_dashboard_daily_trends', {
-        p_business_id: businessId,
-        p_start_on: trendStartOn,
-        p_end_on: today,
-      })
-      if (error) throw error
-      const days = readTrendDays(data, trendStartOn, trendPeriod)
+      const client = supabaseClient
+      if (!client) throw new Error('Authentication service unavailable.')
+      const chunks = getTrendDateChunks(trendStartOn, trendDayCount)
+      const dailyResults = await Promise.all(chunks.map(async (chunk) => {
+        const { data, error } = await client.rpc('get_dashboard_daily_trends', {
+          p_business_id: businessId,
+          p_start_on: chunk.startOn,
+          p_end_on: chunk.endOn,
+        })
+        if (error) throw error
+        return readTrendDays(data, chunk.startOn, chunk.dayCount)
+      }))
+      const days = dailyResults.flat()
+      if (days.length !== trendDayCount) throw new Error('Incomplete daily series.')
       if (requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days })
     } catch {
       if (requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
     }
-  }, [businessId, demoPreview, role, today, trendPeriod, trendScopeKey, trendStartOn])
+  }, [businessId, demoPreview, role, today, trendDayCount, trendScopeKey, trendStartOn])
 
   const loadFinancialSummary = useCallback(async () => {
     const requestId = ++financialSummaryRequestId.current
@@ -281,7 +322,7 @@ export function DashboardPage() {
     setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: true, error: false, data: null })
     try {
       if (demoPreview) {
-        setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: createDemoFinancialSummary(createDemoTrends(trendStartOn, trendPeriod)) })
+        setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: createDemoFinancialSummary(createDemoTrends(trendStartOn, trendDayCount)) })
         return
       }
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
@@ -296,7 +337,7 @@ export function DashboardPage() {
     } catch {
       if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: true, data: null })
     }
-  }, [businessId, demoPreview, financialSummaryScopeKey, role, today, trendPeriod, trendStartOn])
+  }, [businessId, demoPreview, financialSummaryScopeKey, role, today, trendDayCount, trendStartOn])
 
   const loadPriorities = useCallback(async () => {
     const requestId = ++prioritiesRequestId.current
@@ -371,8 +412,9 @@ export function DashboardPage() {
 
   const financialSummary = currentFinancialSummary.data?.managerial_result
   const grossSalesCents = financialSummary
-    ? (BigInt(financialSummary.product_subtotal_cents) + BigInt(financialSummary.customer_delivery_fee_cents)).toString()
+    ? BigInt(financialSummary.product_subtotal_cents) + BigInt(financialSummary.customer_delivery_fee_cents)
     : null
+  const netSalesCents = financialSummary ? BigInt(financialSummary.sales_cents) : null
 
   return (
     <div className="page-stack dashboard-page">
@@ -382,7 +424,15 @@ export function DashboardPage() {
           <h1>Central do dia</h1>
           <p className="page-description">O que precisa de ação hoje?</p>
         </div>
-        {role === 'owner' && <Link className="dashboard-reference-link" to="/referencias-central"><Icon name="chart" /> Comparar visuais</Link>}
+        {role === 'owner' && <div className="dashboard-heading-actions">
+          <label className="dashboard-range-picker" htmlFor="dashboard-period">
+            <span>Período</span>
+            <select id="dashboard-period" value={trendPeriod} onChange={(event) => setTrendPeriod(event.target.value as DashboardTrendPeriod)}>
+              {trendPeriodOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <Link className="dashboard-reference-link" to="/referencias-central"><Icon name="chart" /> Comparar visuais</Link>
+        </div>}
       </header>
 
       {role === 'owner' ? <>
@@ -418,6 +468,58 @@ export function DashboardPage() {
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
       </nav>
+
+      {role === 'owner' && <section className="dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
+          <div className="section-heading dashboard-financial-heading">
+          <div>
+            <p className="eyebrow">{trendPeriodLabel.toUpperCase()}</p>
+            <h2 id="dashboard-financial-title">Resumo de vendas e pagamentos</h2>
+            <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)} · vendas contam na entrega ou retirada; pagamentos na data registrada; atrasos consideram hoje</p>
+          </div>
+          <Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link>
+        </div>
+        {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando indicadores financeiros…</p>}
+        {!currentFinancialSummary.loading && currentFinancialSummary.error && <div className="dashboard-panel-state" role="alert"><p>Não foi possível carregar os indicadores financeiros.</p><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
+        {!currentFinancialSummary.loading && !currentFinancialSummary.error && currentFinancialSummary.data && <>
+          <div className="indicator-grid dashboard-financial-indicators">
+            <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossSalesCents === null ? '—' : formatBRLExact(grossSalesCents)}</strong><span>Produtos + entrega, antes dos descontos</span></article>
+            <article className="indicator-card"><p>Faturamento líquido</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</strong><span>Total dos pedidos após descontos</span></article>
+            <article className="indicator-card"><p>Pagamentos recebidos</p><strong>{formatBRLExact(currentFinancialSummary.data.receipts.amount_cents)}</strong><span>Valores que você marcou como recebidos</span></article>
+            <article className="indicator-card"><p>Pagamentos atrasados</p><strong>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.overdue_count} parcelas não pagas após a data` : 'Indisponível'}</span></article>
+            <article className="indicator-card"><p>Parcelas que vencem hoje</p><strong>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.due_today_count} ainda não pagas` : 'Indisponível'}</span></article>
+            <article className="indicator-card"><p>Lucro estimado</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>Após produtos e gastos pagos · antes de impostos</span></article>
+          </div>
+          <section className="surface-panel dashboard-result-breakdown" aria-labelledby="dashboard-result-breakdown-title">
+            <div className="dashboard-result-breakdown-heading"><h3 id="dashboard-result-breakdown-title">Como calculamos o lucro estimado</h3><span>Compra para estoque entra na conta quando o produto é vendido</span></div>
+            <dl>
+              <div><dt>Faturamento bruto · antes de descontos</dt><dd>{grossSalesCents === null ? 'Indisponível' : formatBRLExact(grossSalesCents)}</dd></div>
+              <div><dt>Descontos nos pedidos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
+              <div><dt>Faturamento líquido · após descontos</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</dd></div>
+              <div><dt>Custo dos produtos vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
+              <div><dt>Gastos da empresa já pagos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
+              <div><dt>Pagamentos de entrega</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
+              <div className="is-total"><dt>Lucro estimado · antes de impostos</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
+            </dl>
+            {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">Não foi possível calcular o lucro: {currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `faltam os custos de ${currentFinancialSummary.data.managerial_result.missing_cost_line_count} item(ns) vendido(s). ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) têm devolução sem ajuste financeiro. ` : ''}</p>}
+          </section>
+        </>}
+      </section>}
+      <DashboardTrends
+        days={currentTrends.days}
+        endOn={today}
+        error={currentTrends.error}
+        grossSalesCents={grossSalesCents}
+        loading={currentTrends.loading}
+        netSalesCents={netSalesCents}
+        onRetry={() => void loadTrends()}
+        onRetrySales={() => void loadFinancialSummary()}
+        period={trendPeriod}
+        periodLabel={trendPeriodLabel}
+        salesError={currentFinancialSummary.error}
+        salesLoading={currentFinancialSummary.loading}
+        startOn={trendStartOn}
+      />
+
 
       <div className="dashboard-command-grid dashboard-command-priorities">
         <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
@@ -482,52 +584,6 @@ export function DashboardPage() {
         </section>
 
       </div>
-      {role === 'owner' && <section className="dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
-          <div className="section-heading dashboard-financial-heading">
-          <div>
-            <p className="eyebrow">ÚLTIMOS {trendPeriod} DIAS</p>
-            <h2 id="dashboard-financial-title">Resumo de vendas e pagamentos</h2>
-            <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)} · faturamento e lucro seguem a entrega ou retirada; pagamentos seguem a data registrada; parcelas atrasadas refletem hoje</p>
-          </div>
-          <Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link>
-        </div>
-        {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando indicadores financeiros…</p>}
-        {!currentFinancialSummary.loading && currentFinancialSummary.error && <div className="dashboard-panel-state" role="alert"><p>Não foi possível carregar os indicadores financeiros.</p><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
-        {!currentFinancialSummary.loading && !currentFinancialSummary.error && currentFinancialSummary.data && <>
-          <div className="indicator-grid dashboard-financial-indicators">
-            <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossSalesCents === null ? '—' : formatBRLExact(grossSalesCents)}</strong><span>Produtos + entrega, antes dos descontos</span></article>
-            <article className="indicator-card"><p>Faturamento líquido</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</strong><span>Total dos pedidos após descontos</span></article>
-            <article className="indicator-card"><p>Pagamentos recebidos</p><strong>{formatBRLExact(currentFinancialSummary.data.receipts.amount_cents)}</strong><span>Valores que você marcou como recebidos</span></article>
-            <article className="indicator-card"><p>Pagamentos atrasados</p><strong>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.overdue_count} parcelas não pagas após a data` : 'Indisponível'}</span></article>
-            <article className="indicator-card"><p>Parcelas que vencem hoje</p><strong>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : '—'}</strong><span>{priorities ? `${priorities.receivables.due_today_count} ainda não pagas` : 'Indisponível'}</span></article>
-            <article className="indicator-card"><p>Lucro estimado</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>Após produtos e gastos pagos · antes de impostos</span></article>
-          </div>
-          <section className="surface-panel dashboard-result-breakdown" aria-labelledby="dashboard-result-breakdown-title">
-            <div className="dashboard-result-breakdown-heading"><h3 id="dashboard-result-breakdown-title">Como calculamos o lucro estimado</h3><span>Compra para estoque entra na conta quando o produto é vendido</span></div>
-            <dl>
-              <div><dt>Faturamento bruto · antes de descontos</dt><dd>{grossSalesCents === null ? 'Indisponível' : formatBRLExact(grossSalesCents)}</dd></div>
-              <div><dt>Descontos nos pedidos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
-              <div><dt>Faturamento líquido · após descontos</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</dd></div>
-              <div><dt>Custo dos produtos vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
-              <div><dt>Gastos da empresa já pagos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
-              <div><dt>Pagamentos de entrega</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
-              <div className="is-total"><dt>Lucro estimado · antes de impostos</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
-            </dl>
-            {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">Não foi possível calcular o lucro: {currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `faltam os custos de ${currentFinancialSummary.data.managerial_result.missing_cost_line_count} item(ns) vendido(s). ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) têm devolução sem ajuste financeiro. ` : ''}</p>}
-          </section>
-        </>}
-      </section>}
-      <DashboardTrends
-        days={currentTrends.days}
-        endOn={today}
-        error={currentTrends.error}
-        loading={currentTrends.loading}
-        onPeriodChange={setTrendPeriod}
-        onRetry={() => void loadTrends()}
-        period={trendPeriod}
-        startOn={trendStartOn}
-      />
-
       <div className="dashboard-columns dashboard-operations-grid">
         <section className="surface-panel dashboard-recent-panel" aria-labelledby="dashboard-recent-orders-title">
           <div className="section-heading">
