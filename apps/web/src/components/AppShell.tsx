@@ -10,15 +10,15 @@ import { ThemeToggle } from './ThemeToggle'
 type NavItem = { to: string; label: string; icon: IconName }
 
 const primaryItems: NavItem[] = [
-  { to: '/', label: 'Dashboard', icon: 'home' },
-  { to: '/financeiro', label: 'Financeiro', icon: 'coin' },
+  { to: '/', label: 'Início', icon: 'home' },
+  { to: '/financeiro', label: 'Dashboard', icon: 'coin' },
   { to: '/atendimento', label: 'Atendimento', icon: 'phone' },
   { to: '/pedidos', label: 'Pedidos', icon: 'bag' },
 ]
 
 const desktopItems: NavItem[] = [
-  { to: '/', label: 'Dashboard', icon: 'home' },
-  { to: '/financeiro', label: 'Financeiro', icon: 'coin' },
+  { to: '/', label: 'Início', icon: 'home' },
+  { to: '/financeiro', label: 'Dashboard', icon: 'coin' },
   { to: '/clientes', label: 'Clientes', icon: 'people' },
   { to: '/atendimento', label: 'Atendimento', icon: 'phone' },
   { to: '/whatsapp', label: 'WhatsApp', icon: 'message' },
@@ -30,7 +30,7 @@ const desktopItems: NavItem[] = [
 ]
 
 const routeLabels: Record<string, string> = {
-  '/': 'Dashboard',
+  '/': 'Início',
   '/clientes': 'Clientes',
   '/atendimento': 'Atendimento',
   '/whatsapp': 'WhatsApp',
@@ -38,7 +38,7 @@ const routeLabels: Record<string, string> = {
   '/catalogo': 'Catálogo',
   '/estoque': 'Estoque',
   '/entregas': 'Entregas',
-  '/financeiro': 'Financeiro',
+  '/financeiro': 'Dashboard',
   '/financeiro/saidas': 'Gastos pagos',
   '/financeiro/bancos': 'Conferir extrato',
   '/relatorios': 'Relatórios',

@@ -421,7 +421,7 @@ export function DashboardPage() {
       <header className="page-heading dashboard-heading">
         <div>
           <p className="eyebrow">{businessDate}</p>
-          <h1>Dashboard</h1>
+          <h1>Início</h1>
           <p className="page-description">O que precisa de ação hoje?</p>
         </div>
         {role === 'owner' && <div className="dashboard-heading-actions">

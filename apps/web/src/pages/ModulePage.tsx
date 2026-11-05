@@ -36,7 +36,7 @@ const secondaryModules: Array<{ to: string; title: string; description: string; 
   { to: '/estoque', title: 'Estoque', description: 'Saldos e movimentações', icon: 'box' },
   { to: '/entregas', title: 'Entregas', description: 'Separação e acompanhamento', icon: 'truck' },
   { to: '/whatsapp', title: 'WhatsApp', description: 'Caixa de entrada e conversas', icon: 'message' },
-  { to: '/financeiro', title: 'Financeiro', description: 'Pagamentos a receber e gastos pagos', icon: 'coin' },
+  { to: '/financeiro', title: 'Dashboard', description: 'Pagamentos a receber e gastos pagos', icon: 'coin' },
   { to: '/relatorios', title: 'Relatórios', description: 'Visões diárias e mensais', icon: 'chart' },
   { to: '/configuracoes', title: 'Configurações', description: 'Conta e conexões', icon: 'settings' },
 ]
