@@ -49,7 +49,7 @@ function statusActions(status: DeliveryStatus): DeliveryStatus[] {
 }
 
 export function DeliveriesPage() {
-  const { id: businessId, role } = useBusiness()
+  const { id: businessId } = useBusiness()
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [workers, setWorkers] = useState<Worker[]>([])
@@ -62,17 +62,6 @@ export function DeliveriesPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('pending')
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [showWorkerForm, setShowWorkerForm] = useState(false)
-  const [workerName, setWorkerName] = useState('')
-  const [workerPhone, setWorkerPhone] = useState('')
-  const [savingWorker, setSavingWorker] = useState(false)
-  const [workerError, setWorkerError] = useState<string | null>(null)
-  const [linkWorkerId, setLinkWorkerId] = useState<string | null>(null)
-  const [linkWorkerEmail, setLinkWorkerEmail] = useState('')
-  const [linkingWorker, setLinkingWorker] = useState(false)
-  const [unlinkWorkerId, setUnlinkWorkerId] = useState<string | null>(null)
-  const [unlinkingWorker, setUnlinkingWorker] = useState(false)
-  const [workerAccessError, setWorkerAccessError] = useState<string | null>(null)
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null)
   const [planWorkerId, setPlanWorkerId] = useState('')
   const [planDate, setPlanDate] = useState('')
@@ -217,106 +206,6 @@ export function DeliveriesPage() {
     setPlanError(null)
     setPlanUncertain(false)
     planRequestIdRef.current = newRequestId()
-  }
-
-  async function handleWorkerSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!supabaseClient || savingWorker || error) return
-    const name = workerName.trim()
-    const phone = workerPhone.trim()
-    if (!name || name.length > 120 || phone.length > 64) {
-      setWorkerError('Informe um nome e confira se o telefone tem até 64 caracteres.')
-      return
-    }
-    setSavingWorker(true)
-    setWorkerError(null)
-    try {
-      const { error: insertError } = await supabaseClient.from('delivery_workers').insert({ business_id: businessId, name, phone: phone || null })
-      if (insertError) {
-        setWorkerError('Não foi possível salvar o entregador. Tente novamente.')
-        return
-      }
-      setShowWorkerForm(false)
-      setWorkerName('')
-      setWorkerPhone('')
-      setNotice('Entregador cadastrado. Crie a conta dele e vincule o e-mail para liberar o painel.')
-      await loadQueue()
-    } catch {
-      setWorkerError('Não foi possível salvar o entregador. Tente novamente.')
-    } finally {
-      setSavingWorker(false)
-    }
-  }
-
-  async function handleLinkWorkerSubmit(event: FormEvent<HTMLFormElement>, worker: Worker) {
-    event.preventDefault()
-    if (!supabaseClient || linkingWorker || role !== 'owner' || error) return
-    const email = linkWorkerEmail.trim().toLowerCase()
-    if (!email || email.length > 320) {
-      setWorkerError('Informe o e-mail da conta do entregador.')
-      return
-    }
-    setLinkingWorker(true)
-    setWorkerAccessError(null)
-    try {
-      const { error: linkError } = await supabaseClient.rpc('link_delivery_worker_account', {
-        p_business_id: businessId,
-        p_worker_id: worker.id,
-        p_email: email,
-      })
-      if (linkError) {
-        setWorkerAccessError('Não foi possível vincular. Confirme que a pessoa já criou a conta e verificou o e-mail.')
-        return
-      }
-      setLinkWorkerId(null)
-      setLinkWorkerEmail('')
-      setWorkerAccessError(null)
-      setNotice(`A conta de ${worker.name} foi conectada ao painel.`)
-      await loadQueue()
-    } catch {
-      setWorkerAccessError('Não foi possível confirmar o vínculo. Atualize a fila e confira o acesso antes de tentar novamente.')
-    } finally {
-      setLinkingWorker(false)
-    }
-  }
-
-  async function unlinkWorkerAccount(worker: Worker) {
-    if (!supabaseClient || unlinkingWorker || role !== 'owner' || error) return
-    setUnlinkingWorker(true)
-    setWorkerAccessError(null)
-    try {
-      const { error: unlinkError } = await supabaseClient.rpc('unlink_delivery_worker_account', {
-        p_business_id: businessId,
-        p_worker_id: worker.id,
-      })
-      if (unlinkError) {
-        setWorkerAccessError('Não foi possível remover o acesso. Atualize a página e tente novamente.')
-        return
-      }
-      setUnlinkWorkerId(null)
-      setNotice(`O acesso ao painel de ${worker.name} foi removido.`)
-      await loadQueue()
-    } catch {
-      setWorkerAccessError('Não foi possível confirmar a remoção. Atualize a fila antes de tentar novamente.')
-    } finally {
-      setUnlinkingWorker(false)
-    }
-  }
-
-  async function toggleWorker(worker: Worker) {
-    if (!supabaseClient || error) return
-    try {
-      const { error: updateError } = await supabaseClient.from('delivery_workers').update({ is_active: !worker.is_active })
-        .eq('business_id', businessId).eq('id', worker.id)
-      if (updateError) {
-        setError('Não foi possível atualizar o cadastro do entregador.')
-        return
-      }
-      setNotice(worker.is_active ? 'Entregador desativado; o histórico permanece.' : 'Entregador reativado para novas atribuições.')
-      await loadQueue()
-    } catch {
-      setError('Não foi possível atualizar o cadastro do entregador.')
-    }
   }
 
   async function handlePlanSubmit(event: FormEvent<HTMLFormElement>, delivery: Delivery) {
@@ -464,40 +353,16 @@ export function DeliveriesPage() {
     <div className="page-stack">
       <header className="page-heading">
         <div><p className="eyebrow">OPERAÇÃO · ROTA</p><h1>Entregas</h1><p className="page-description">Fila ligada aos pedidos marcados para entrega, com atribuição e histórico.</p></div>
-        <button className="button button-primary" disabled={Boolean(error)} onClick={() => { setShowWorkerForm((open) => !open); setWorkerError(null); setNotice(null) }} type="button"><Icon name="plus" /> Cadastrar entregador</button>
+        <Link className="button button-primary" to="/equipe"><Icon name="people" /> Gerenciar equipe</Link>
       </header>
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void loadQueue()} type="button">Tentar novamente</button></div>}
 
-      {showWorkerForm && <form className="surface-panel record-form worker-create-form" onSubmit={(event) => void handleWorkerSubmit(event)}>
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">CADASTRO DE APOIO</p><h2>Novo entregador</h2></div><button className="text-button" disabled={savingWorker} onClick={() => setShowWorkerForm(false)} type="button">Fechar</button></div>
-        <p className="section-footnote">Peça ao entregador para criar a conta no próprio aparelho em /criar-conta-entregador. Depois, vincule o e-mail aqui para liberar somente o painel dele.</p>
-        <div className="record-form-grid"><label className="record-field"><span className="field-label">Nome <span aria-hidden="true">*</span></span><input className="text-input" maxLength={120} onChange={(event) => setWorkerName(event.target.value)} required value={workerName} /></label><label className="record-field"><span className="field-label">Telefone <span className="field-optional">opcional</span></span><input className="text-input" maxLength={64} onChange={(event) => setWorkerPhone(event.target.value)} value={workerPhone} /></label></div>
-        {workerError && <p className="form-message form-message-error" role="alert">{workerError}</p>}
-        <div className="record-form-actions"><button className="button button-primary" disabled={savingWorker} type="submit">{savingWorker ? 'Salvando…' : 'Salvar entregador'}</button></div>
-      </form>}
-
       <section className="surface-panel record-panel" aria-labelledby="delivery-workers-heading">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">ATRIBUIÇÃO</p><h2 id="delivery-workers-heading">Entregadores cadastrados</h2></div><span className="neutral-status">{workers.filter((worker) => worker.is_active).length} ativos</span></div>
-        {workerAccessError && <p className="form-message form-message-error" role="alert">{workerAccessError}</p>}
-        {loading ? <p className="inline-state" aria-live="polite">Carregando entregadores…</p> : workers.length === 0 ? <p className="inline-state">Nenhum entregador cadastrado. É possível manter a fila sem atribuição.</p> : <ul className="worker-list">{workers.map((worker) => <li key={worker.id} className={worker.is_active ? '' : 'record-inactive'}>
-          <span><strong>{worker.name}</strong><small>{worker.phone || 'Telefone não informado'} · {worker.is_active ? 'Ativo' : 'Inativo'} · {worker.user_id ? 'Painel conectado' : 'Sem acesso ao painel'}</small></span>
-          <div className="record-form-actions">
-            {role === 'owner' && worker.is_active && !worker.user_id && <button className="text-button" disabled={Boolean(error)} onClick={() => { setLinkWorkerId(linkWorkerId === worker.id ? null : worker.id); setLinkWorkerEmail(''); setWorkerAccessError(null) }} type="button">{linkWorkerId === worker.id ? 'Fechar vínculo' : 'Vincular conta'}</button>}
-            {role === 'owner' && worker.user_id && <button className="text-button" disabled={Boolean(error) || unlinkingWorker} onClick={() => { setUnlinkWorkerId(unlinkWorkerId === worker.id ? null : worker.id); setWorkerAccessError(null) }} type="button">{unlinkWorkerId === worker.id ? 'Cancelar' : 'Desvincular painel'}</button>}
-            <button className="text-button" disabled={Boolean(error)} onClick={() => void toggleWorker(worker)} type="button">{worker.is_active ? 'Desativar' : 'Reativar'}</button>
-          </div>
-          {linkWorkerId === worker.id && <form className="worker-access-form" onSubmit={(event) => void handleLinkWorkerSubmit(event, worker)}>
-            <label className="record-field"><span className="field-label">E-mail da conta do entregador</span><input autoComplete="off" className="text-input" disabled={linkingWorker} onChange={(event) => setLinkWorkerEmail(event.target.value)} required type="email" value={linkWorkerEmail} /></label>
-            <p className="section-footnote">Use uma conta própria do entregador, já criada e com e-mail confirmado. A conta da gestão não pode ser usada. Se ainda não tiver conta, peça para abrir /criar-conta-entregador no próprio aparelho.</p>
-            <button className="button button-secondary" disabled={linkingWorker} type="submit">{linkingWorker ? 'Vinculando…' : 'Conectar ao painel'}</button>
-          </form>}
-          {unlinkWorkerId === worker.id && <div className="worker-access-form" role="group" aria-label={`Remover acesso de ${worker.name}`}>
-            <p className="section-footnote">Essa conta perderá acesso ao painel. O histórico das entregas será mantido.</p>
-            <button className="button button-secondary" disabled={unlinkingWorker} onClick={() => void unlinkWorkerAccount(worker)} type="button">{unlinkingWorker ? 'Removendo acesso…' : 'Confirmar remoção de acesso'}</button>
-          </div>}
-        </li>)}</ul>}
+        {loading ? <p className="inline-state" aria-live="polite">Carregando entregadores…</p> : workers.length === 0 ? <p className="inline-state">Nenhum entregador cadastrado.</p> : <ul className="worker-list">{workers.map((worker) => <li key={worker.id} className={worker.is_active ? '' : 'record-inactive'}><span><strong>{worker.name}</strong><small>{worker.phone || 'Telefone não informado'} · {worker.is_active ? 'Ativo' : 'Inativo'}</small></span></li>)}</ul>}
+        <Link className="quiet-link" to="/equipe">Cadastrar e conectar entregadores <Icon name="arrow" /></Link>
       </section>
 
       <section className="surface-panel record-panel" aria-labelledby="delivery-queue-heading">

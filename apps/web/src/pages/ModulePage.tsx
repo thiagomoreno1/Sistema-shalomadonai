@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Icon, type IconName } from '../components/Icon'
+import { prefetchRoute } from '../lib/prefetchRoute'
 
 type ModulePageProps = {
   title: string
@@ -35,6 +36,7 @@ const secondaryModules: Array<{ to: string; title: string; description: string; 
   { to: '/catalogo', title: 'Catálogo', description: 'Produtos, cestas e combos', icon: 'tag' },
   { to: '/estoque', title: 'Estoque', description: 'Saldos e movimentações', icon: 'box' },
   { to: '/entregas', title: 'Entregas', description: 'Separação e acompanhamento', icon: 'truck' },
+  { to: '/equipe', title: 'Equipe', description: 'Entregadores e acesso ao painel', icon: 'people' },
   { to: '/whatsapp', title: 'WhatsApp', description: 'Caixa de entrada e conversas', icon: 'message' },
   { to: '/financeiro', title: 'Dashboard', description: 'Pagamentos a receber e gastos pagos', icon: 'coin' },
   { to: '/relatorios', title: 'Relatórios', description: 'Visões diárias e mensais', icon: 'chart' },
@@ -53,7 +55,7 @@ export function MorePage() {
       </header>
       <div className="module-link-list">
         {secondaryModules.map((module) => (
-          <Link className="module-link" to={module.to} key={module.to}>
+          <Link className="module-link" onPointerEnter={() => prefetchRoute(module.to)} onFocus={() => prefetchRoute(module.to)} onTouchStart={() => prefetchRoute(module.to)} to={module.to} key={module.to}>
             <span className="module-link-icon"><Icon name={module.icon} /></span>
             <span><strong>{module.title}</strong><small>{module.description}</small></span>
             <Icon className="quick-link-arrow" name="arrow" />

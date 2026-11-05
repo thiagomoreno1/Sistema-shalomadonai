@@ -203,7 +203,7 @@ function DailyProfitBars({ days, monthly, dateRange }: { days: DashboardRevenueT
 
 function ChartState({ loading, onRetry, errorMessage = 'Não foi possível carregar este período.' }: { loading: boolean; onRetry: () => void; errorMessage?: string }) {
   return (
-    <div className="dashboard-chart-state" role="status">
+    <div className={`dashboard-chart-state${loading ? ' is-loading' : ' is-error'}`} role="status">
       <Icon name={loading ? 'clock' : 'chart'} />
       <p>{loading ? 'Carregando o período…' : errorMessage}</p>
       {!loading && <button className="text-button" onClick={onRetry} type="button">Tentar novamente</button>}

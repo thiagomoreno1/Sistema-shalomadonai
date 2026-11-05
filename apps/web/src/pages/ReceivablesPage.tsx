@@ -554,8 +554,7 @@ export function ReceivablesPage() {
 
   return (
     <div className="page-stack">
-      <FinanceNavigation active="receivables" />
-      <header className="page-heading">
+      <header className="page-heading receivables-page-heading">
         <div>
           <p className="eyebrow">FINANCEIRO</p>
           <h1>Dashboard</h1>
@@ -563,6 +562,7 @@ export function ReceivablesPage() {
         </div>
         <Link className="button button-secondary" to="/pedidos">Ver pedidos</Link>
       </header>
+      <FinanceNavigation active="receivables" />
 
       {businessRole === 'owner' && <FinancialChartsPanel />}
 

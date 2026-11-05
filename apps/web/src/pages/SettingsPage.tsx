@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
+import { ProfileSettingsPanel } from '../components/ProfileSettingsPanel'
 import { ACCENT_COLORS, useTheme } from '../theme/ThemeProvider'
 import { supabaseClient } from '../lib/supabase'
 
@@ -23,7 +24,7 @@ type BusinessMember = {
 export function SettingsPage() {
   const { session } = useAuth()
   const business = useBusiness()
-  const { accent, setAccent, theme } = useTheme()
+  const { accent, setAccent, theme, toggleTheme } = useTheme()
   const [accessRequests, setAccessRequests] = useState<AccessRequest[]>([])
   const [requestsLoading, setRequestsLoading] = useState(true)
   const [requestActionId, setRequestActionId] = useState<string | null>(null)
@@ -231,16 +232,18 @@ export function SettingsPage() {
         <div>
           <p className="eyebrow">SISTEMA</p>
           <h1>Configurações</h1>
-          <p className="page-description">Conta da equipe de gestão e preparação gradual das integrações.</p>
+          <p className="page-description">Seu perfil, senha, aparência, equipe e conexões.</p>
         </div>
         <span className="module-heading-icon"><Icon name="settings" /></span>
       </header>
+
+      <ProfileSettingsPanel />
 
       <section className="surface-panel settings-panel" aria-labelledby="account-title">
         <div className="section-heading">
           <div>
             <p className="eyebrow">CONTA</p>
-            <h2 id="account-title">Equipe de gestão</h2>
+            <h2 id="account-title">Conta da empresa</h2>
           </div>
           <span className="connected-status"><span className="connected-dot" /> Sessão ativa</span>
         </div>
@@ -348,12 +351,25 @@ export function SettingsPage() {
         ) : null}
       </section>}
 
+      <section className="surface-panel settings-panel settings-team-entry" aria-labelledby="team-entry-title">
+        <div className="section-heading">
+          <div><p className="eyebrow">ENTREGAS</p><h2 id="team-entry-title">Equipe de entregadores</h2></div>
+          <span className="neutral-status">Cadastro e painel</span>
+        </div>
+        <p className="settings-appearance-description">Cadastre entregadores, conecte cada conta ao painel e desative acessos quando necessário.</p>
+        <div className="settings-records-shortcuts">
+          <Link to="/equipe">Gerenciar equipe</Link>
+          <Link to="/entregas">Ver entregas</Link>
+        </div>
+      </section>
+
       <section className="surface-panel settings-panel" aria-labelledby="appearance-title">
         <div className="section-heading">
           <div>
             <p className="eyebrow">APARÊNCIA</p>
-            <h2 id="appearance-title">Cor de destaque</h2>
+            <h2 id="appearance-title">Tema e cor</h2>
           </div>
+          <button className="button button-secondary settings-theme-action" onClick={toggleTheme} type="button">Ativar tema {theme === 'dark' ? 'claro' : 'escuro'}</button>
         </div>
         <p className="settings-appearance-description">Escolha a cor usada em botões, links e destaques. A preferência fica salva neste dispositivo.</p>
         <div className="accent-options" role="group" aria-label="Escolha a cor de destaque">
@@ -372,11 +388,23 @@ export function SettingsPage() {
         </div>
       </section>
 
+      <section className="surface-panel settings-panel" aria-labelledby="automations-title">
+        <div className="section-heading">
+          <div><p className="eyebrow">AUTOMAÇÃO</p><h2 id="automations-title">Regras da operação</h2></div>
+          <span className="neutral-status">1 ativa</span>
+        </div>
+        <ul className="settings-automation-list">
+          <li><span><strong>Baixa de estoque</strong><small>Automática no despacho ou na retirada confirmada.</small></span><span className="connected-status"><span className="connected-dot" /> Ativa</span></li>
+          <li><span><strong>Mensagens pelo WhatsApp</strong><small>Aguardando a conexão do canal.</small></span><span className="neutral-status">Pendente</span></li>
+          <li><span><strong>Avisos e lembretes</strong><small>Regras serão definidas antes de ativar.</small></span><span className="neutral-status">Não configurado</span></li>
+        </ul>
+      </section>
+
       <section className="surface-panel settings-panel settings-integration-panel" aria-labelledby="connections-title">
         <div className="section-heading">
           <div>
             <p className="eyebrow">INTEGRAÇÕES</p>
-            <h2 id="connections-title">Preparação gradual</h2>
+            <h2 id="connections-title">Conexões externas</h2>
           </div>
           <span className="neutral-status">Nenhuma conexão ativa</span>
         </div>
@@ -386,7 +414,7 @@ export function SettingsPage() {
               <h3 id="whatsapp-title">Caixa de entrada WhatsApp</h3>
               <span className="neutral-status">Não conectada</span>
             </div>
-            <p className="settings-integration-copy">Quando a instância estiver configurada, o painel original do Chatwoot ficará dentro do Shalom. O login e as permissões continuam sendo gerenciados no Chatwoot; a caixa nativa do Shalom, ainda pendente de conexão, está preparada para associar conversas a clientes e pedidos.</p>
+            <p className="settings-integration-copy">O painel do Chatwoot será exibido aqui depois de conectar a conta e o número de WhatsApp Business.</p>
             <dl className="settings-detail-list settings-integration-details">
               <div><dt>Provedor de atendimento</dt><dd>Chatwoot · preparação em andamento</dd></div>
               <div><dt>Infraestrutura</dt><dd>Contabo, se escolhida para hospedagem; versão própria 4.19+</dd></div>
@@ -410,7 +438,7 @@ export function SettingsPage() {
             </dl>
           </article>
         </div>
-        <p className="section-footnote">As integrações só serão marcadas como ativas após configuração e teste real com a conta ou serviço aprovado.</p>
+        <p className="section-footnote">Conexões aparecem como ativas após configuração e teste.</p>
       </section>
 
       <section className="surface-panel settings-panel" aria-labelledby="records-title">
@@ -420,7 +448,7 @@ export function SettingsPage() {
             <h2 id="records-title">Preenchimento progressivo</h2>
           </div>
         </div>
-        <p className="settings-records-note">Clientes, produtos, estoque, pedidos e financeiro serão preenchidos progressivamente pelos módulos existentes do sistema.</p>
+        <p className="settings-records-note">Cadastre os dados nos próprios módulos.</p>
         <nav className="settings-records-shortcuts" aria-label="Atalhos para cadastrar dados">
           <Link to="/clientes">Clientes</Link>
           <Link to="/catalogo">Produtos</Link>

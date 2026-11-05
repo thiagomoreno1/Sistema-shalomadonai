@@ -20,6 +20,7 @@ const FinancialOutflowsPage = lazy(async () => ({ default: (await import('../pag
 const ReportsPage = lazy(async () => ({ default: (await import('../pages/ReportsPage')).ReportsPage }))
 const InventoryPage = lazy(async () => ({ default: (await import('../pages/InventoryPage')).InventoryPage }))
 const DeliveriesPage = lazy(async () => ({ default: (await import('../pages/DeliveriesPage')).DeliveriesPage }))
+const TeamPage = lazy(async () => ({ default: (await import('../pages/TeamPage')).TeamPage }))
 const FollowUpsPage = lazy(async () => ({ default: (await import('../pages/FollowUpsPage')).FollowUpsPage }))
 const WhatsAppPanelPage = lazy(async () => ({ default: (await import('../pages/WhatsAppPanelPage')).WhatsAppPanelPage }))
 const WhatsAppInboxPage = lazy(async () => ({ default: (await import('../pages/WhatsAppInboxPage')).WhatsAppInboxPage }))
@@ -72,6 +73,7 @@ export function AuthRoutes() {
               <Route path="catalogo" element={<ProductsPage />} />
               <Route path="estoque" element={<InventoryPage />} />
               <Route path="entregas" element={<DeliveriesPage />} />
+              <Route path="equipe" element={<TeamPage />} />
               <Route path="financeiro" element={<ReceivablesPage />} />
               <Route path="financeiro/saidas" element={<FinancialOutflowsPage />} />
               <Route path="relatorios" element={<ReportsPage />} />

@@ -1,11 +1,13 @@
-import { useState } from 'react'
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { useLayoutEffect, useState } from 'react'
+import { NavLink, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useBusiness } from '../business/BusinessContext'
 import { supabaseClient } from '../lib/supabase'
 import { clearDemoPreview, isDemoPreviewEnabled } from '../lib/demoPreview'
 import { Icon, type IconName } from './Icon'
 import { ThemeToggle } from './ThemeToggle'
+import { prefetchRoute } from '../lib/prefetchRoute'
+import { useProfileAvatarUrl } from '../lib/useProfileAvatarUrl'
 
 type NavItem = { to: string; label: string; icon: IconName }
 
@@ -26,6 +28,7 @@ const desktopItems: NavItem[] = [
   { to: '/catalogo', label: 'Catálogo', icon: 'tag' },
   { to: '/estoque', label: 'Estoque', icon: 'box' },
   { to: '/entregas', label: 'Entregas', icon: 'truck' },
+  { to: '/equipe', label: 'Equipe', icon: 'people' },
   { to: '/relatorios', label: 'Relatórios', icon: 'chart' },
 ]
 
@@ -38,6 +41,7 @@ const routeLabels: Record<string, string> = {
   '/catalogo': 'Catálogo',
   '/estoque': 'Estoque',
   '/entregas': 'Entregas',
+  '/equipe': 'Equipe',
   '/financeiro': 'Dashboard',
   '/financeiro/saidas': 'Gastos pagos',
   '/relatorios': 'Relatórios',
@@ -56,9 +60,23 @@ export function AppShell() {
   const { role } = useBusiness()
   const navigate = useNavigate()
   const location = useLocation()
+  const navigationType = useNavigationType()
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState<string | null>(null)
   const demoPreview = role === 'owner' && isDemoPreviewEnabled()
+  const profileName = session?.user.user_metadata?.display_name
+  const displayName = typeof profileName === 'string' && profileName.trim()
+    ? profileName.trim()
+    : session?.user.email ?? 'Equipe de gestão'
+  const avatarPath = session?.user.user_metadata?.avatar_path
+  const avatarUrl = useProfileAvatarUrl(typeof avatarPath === 'string' ? avatarPath : null)
+
+  useLayoutEffect(() => {
+    if (navigationType !== 'POP') {
+      window.scrollTo(0, 0)
+      document.getElementById('main-content')?.focus({ preventScroll: true })
+    }
+  }, [location.pathname, navigationType])
 
   function exitDemoPreview() {
     clearDemoPreview()
@@ -98,8 +116,8 @@ export function AppShell() {
         <div className="sidebar-bottom">
           <NavigationLink item={{ to: '/configuracoes', label: 'Configurações', icon: 'settings' }} />
           <div className="sidebar-account">
-            <span className="account-avatar" aria-hidden="true">{session?.user.email?.slice(0, 1).toUpperCase() ?? 'S'}</span>
-            <span className="account-copy"><strong>Equipe de gestão</strong><small>{session?.user.email ?? 'Conta autenticada'}</small></span>
+            <span className="account-avatar" aria-hidden="true">{avatarUrl ? <img alt="" src={avatarUrl} /> : displayName.slice(0, 1).toUpperCase()}</span>
+            <span className="account-copy"><strong>{displayName}</strong><small>{session?.user.email ?? 'Conta autenticada'}</small></span>
           </div>
         </div>
       </aside>
@@ -108,7 +126,7 @@ export function AppShell() {
         <header className="topbar">
           <div className="topbar-greeting">
             <img className="mobile-mark" src="/shalom-adonai-logo.png" alt="" />
-            <span><strong>Shalom Adonai</strong><small className="topbar-email">{getRouteLabel(location.pathname)}{session?.user.email ? ` · ${session.user.email}` : ''}</small></span>
+          <span><strong>Shalom Adonai</strong><small className="topbar-email">{getRouteLabel(location.pathname)}{displayName ? ` · ${displayName}` : ''}</small></span>
           </div>
           <div className="topbar-actions">
             <ThemeToggle />
@@ -146,6 +164,9 @@ function NavigationLink({ item, compact = false }: { item: NavItem; compact?: bo
       className={({ isActive }) => `nav-link${isActive ? ' is-active' : ''}${compact ? ' nav-link-compact' : ''}`}
       end={item.to === '/'}
       to={item.to}
+      onPointerEnter={() => prefetchRoute(item.to)}
+      onFocus={() => prefetchRoute(item.to)}
+      onTouchStart={() => prefetchRoute(item.to)}
     >
       <Icon name={item.icon} />
       <span>{item.label}</span>
