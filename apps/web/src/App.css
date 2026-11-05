@@ -417,7 +417,7 @@
 .product-stock-settings { min-width: 0; margin: 4px 0 12px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
 .product-stock-settings .section-heading { margin-bottom: 5px; }
 .product-stock-settings h3 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 620; }
-.product-stock-settings > .record-checkbox { margin-bottom: 6px; }
+.product-stock-settings > .section-footnote { margin: 0 0 10px; }
 .product-stock-grid { margin: 0; }
 .customer-whatsapp-hint { margin: -8px 0 14px; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .customer-phone-row { display: grid; grid-template-columns: minmax(175px, 0.78fr) minmax(0, 1fr); gap: 8px; }

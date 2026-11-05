@@ -199,7 +199,7 @@ export function ProductsPage() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
-  const [inventoryEnabled, setInventoryEnabled] = useState(false)
+  const [productIsActive, setProductIsActive] = useState(true)
   const [comboEnabled, setComboEnabled] = useState(false)
   const [openingQuantity, setOpeningQuantity] = useState('')
   const [minimumStock, setMinimumStock] = useState('')
@@ -372,10 +372,10 @@ export function ProductsPage() {
     setNotice(null)
     setEditingProduct(null)
     setShowForm(true)
+    setProductIsActive(true)
     setFormError(null)
     setPhotoError(null)
     selectProductPhoto(null)
-    setInventoryEnabled(false)
     setComboEnabled(false)
     setOpeningQuantity('')
     setMinimumStock('')
@@ -387,10 +387,10 @@ export function ProductsPage() {
     setNotice(null)
     setEditingProduct(product)
     setShowForm(true)
+    setProductIsActive(product.is_active)
     setFormError(null)
     setPhotoError(product.image_path && !product.image_url ? 'A foto está cadastrada, mas a prévia não carregou. Tente atualizar a foto.' : null)
     selectProductPhoto(null)
-    setInventoryEnabled(product.inventory_tracked)
     setComboEnabled(product.is_combo)
     setOpeningQuantity('')
     setMinimumStock(product.minimum_stock === null ? '' : quantityInput(Number(product.minimum_stock)))
@@ -408,11 +408,13 @@ export function ProductsPage() {
     const name = String(form.get('name') ?? '').trim()
     const salePrice = parseBrazilianCurrency(String(form.get('sale_price') ?? ''))
     const cost = parseBrazilianCurrency(String(form.get('cost') ?? ''))
-    const isActive = form.get('is_active') === 'on'
+    const isActive = productIsActive
     const isCombo = comboEnabled
-    const inventoryUnit = editingProduct?.inventory_tracked
-      ? editingProduct.inventory_unit ?? ''
-      : String(form.get('inventory_unit') ?? '').trim()
+    const inventoryUnit = isCombo
+      ? ''
+      : editingProduct?.inventory_tracked
+        ? editingProduct.inventory_unit ?? ''
+        : String(form.get('inventory_unit') ?? '').trim()
     const opening = parseQuantity(openingQuantity, true)
     const minimum = minimumStock.trim() ? parseQuantity(minimumStock, true) : null
     if (!name) {
@@ -428,15 +430,11 @@ export function ProductsPage() {
       return
     }
 
-    if (isCombo && inventoryEnabled) {
-      setFormError('Um combo controla os saldos dos componentes; não configure um saldo próprio para ele.')
+    if (!isCombo && !editingProduct?.inventory_tracked && (!inventoryUnit || opening === null)) {
+      setFormError('Informe a unidade e a quantidade que você tem agora. Use 0 se não houver saldo.')
       return
     }
-    if (inventoryEnabled && !editingProduct?.inventory_tracked && (!inventoryUnit || opening === null)) {
-      setFormError('Para iniciar o controle, informe a unidade e a contagem inicial. Zero também é uma contagem válida.')
-      return
-    }
-    if (inventoryEnabled && minimumStock.trim() && minimum === null) {
+    if (!isCombo && minimumStock.trim() && minimum === null) {
       setFormError('Confira o limite mínimo. Use uma quantidade com até três casas decimais.')
       return
     }
@@ -464,6 +462,8 @@ export function ProductsPage() {
       }
     }
 
+    const mustConfigureInventory = !isCombo && !editingProduct?.inventory_tracked
+    const isInitiallyActive = isCombo ? true : mustConfigureInventory ? false : isActive
     const record = {
       name,
       description: String(form.get('description') ?? '').trim() || null,
@@ -471,13 +471,13 @@ export function ProductsPage() {
       inventory_unit: inventoryUnit || null,
       sale_price_cents: salePrice,
       cost_cents: cost,
-      is_active: isActive,
+      is_active: isInitiallyActive,
     }
     setSaving(true)
     setFormError(null)
     try {
       const result = editingProduct
-        ? await supabaseClient.from('products').update({ ...record, minimum_stock: inventoryEnabled ? minimum : null }).eq('business_id', businessId).eq('id', editingProduct.id).select('id').single()
+        ? await supabaseClient.from('products').update({ ...record, minimum_stock: editingProduct.inventory_tracked && !isCombo ? minimum : null }).eq('business_id', businessId).eq('id', editingProduct.id).select('id').single()
         : await supabaseClient.from('products').insert({ business_id: businessId, ...record }).select('id').single()
       if (result.error || !result.data) {
         setFormError('Não foi possível salvar. Seus dados continuam no formulário; tente novamente.')
@@ -487,8 +487,8 @@ export function ProductsPage() {
       setPriceHistoryRefreshToken((current) => current + 1)
       let trackingWasConfigured = editingProduct?.inventory_tracked ?? false
       let comboWasConfigured = editingProduct?.is_combo ?? false
-      const savedProduct = {
-        id: productId, ...record, minimum_stock: editingProduct?.inventory_tracked && inventoryEnabled ? minimum : null,
+      let savedProduct = {
+        id: productId, ...record, minimum_stock: editingProduct?.inventory_tracked && !isCombo ? minimum : null,
         inventory_tracked: trackingWasConfigured,
         is_combo: comboWasConfigured,
         image_path: editingProduct?.image_path ?? null,
@@ -497,7 +497,7 @@ export function ProductsPage() {
       } as Product
       setEditingProduct(savedProduct)
 
-      if (inventoryEnabled && !trackingWasConfigured) {
+      if (mustConfigureInventory && !trackingWasConfigured) {
         const { error: inventoryError } = await supabaseClient.rpc('configure_product_inventory', {
           p_business_id: businessId,
           p_product_id: productId,
@@ -507,6 +507,9 @@ export function ProductsPage() {
           p_request_id: inventoryRequestIdRef.current,
         })
         if (inventoryError) {
+          savedProduct = { ...savedProduct, is_active: false }
+          setEditingProduct(savedProduct)
+          setProductIsActive(false)
           setFormError('O produto foi salvo, mas o estoque inicial não foi confirmado. Tente novamente sem alterar os dados.')
           await loadProducts()
           return
@@ -521,14 +524,48 @@ export function ProductsPage() {
           p_components: recipe,
         })
         if (recipeError) {
-          setFormError('O produto foi salvo, mas a composição do combo não foi confirmada. Confira os componentes e tente novamente.')
+          const { data: unavailableProduct, error: unavailableError } = await supabaseClient.from('products').update({ is_active: false })
+            .eq('business_id', businessId).eq('id', productId).select('is_active').maybeSingle()
+          const couldNotConfirmUnavailable = Boolean(unavailableError || unavailableProduct?.is_active !== false)
+          let confirmedAvailable = false
+          if (couldNotConfirmUnavailable) {
+            const { data: currentStatus } = await supabaseClient.from('products').select('is_active')
+              .eq('business_id', businessId).eq('id', productId).maybeSingle()
+            confirmedAvailable = currentStatus?.is_active ?? false
+          }
+          savedProduct = { ...savedProduct, is_active: confirmedAvailable }
+          setEditingProduct(savedProduct)
+          setProductIsActive(confirmedAvailable)
+          setFormError(couldNotConfirmUnavailable
+            ? 'A composição não foi salva e não consegui confirmar que o combo ficou indisponível. Confira o catálogo antes de usá-lo.'
+            : 'O combo ficou indisponível porque a composição não foi salva. Revise os componentes e tente novamente.')
           await loadProducts()
           return
         }
         comboWasConfigured = true
       }
 
-      setEditingProduct({ ...savedProduct, inventory_tracked: trackingWasConfigured, is_combo: comboWasConfigured, minimum_stock: inventoryEnabled ? minimum : null })
+      if (isInitiallyActive !== isActive && (mustConfigureInventory || isCombo)) {
+        const { data: activationData, error: activationError } = await supabaseClient.from('products')
+          .update({ is_active: isActive })
+          .eq('business_id', businessId).eq('id', productId).select('id').single()
+        if (activationError || !activationData) {
+          const { data: currentStatus } = await supabaseClient.from('products').select('is_active')
+            .eq('business_id', businessId).eq('id', productId).maybeSingle()
+          const confirmedAvailable = currentStatus?.is_active ?? isInitiallyActive
+          savedProduct = { ...savedProduct, is_active: confirmedAvailable }
+          setEditingProduct(savedProduct)
+          setProductIsActive(confirmedAvailable)
+          setFormError('A configuração foi salva, mas não foi possível atualizar a disponibilidade do produto. Tente novamente.')
+          await loadProducts()
+          return
+        }
+      }
+
+      savedProduct = { ...savedProduct, is_active: isActive }
+      setProductIsActive(isActive)
+
+      setEditingProduct({ ...savedProduct, inventory_tracked: trackingWasConfigured, is_combo: comboWasConfigured, minimum_stock: !isCombo ? minimum : null })
 
       if (selectedPhoto) {
         const extension = PRODUCT_PHOTO_EXTENSIONS[selectedPhoto.type]
@@ -629,8 +666,8 @@ export function ProductsPage() {
     setEditingProduct(null)
     setFormError(null)
     setPhotoError(null)
+    setProductIsActive(true)
     selectProductPhoto(null)
-    setInventoryEnabled(false)
     setComboEnabled(false)
   }
 
@@ -689,7 +726,7 @@ export function ProductsPage() {
   return (
     <div className="page-stack">
       <header className="page-heading">
-        <div><p className="eyebrow">CATÁLOGO</p><h1>Produtos</h1><p className="page-description">Cadastro básico de produtos e categorias para a operação.</p></div>
+        <div><p className="eyebrow">CATÁLOGO</p><h1>Produtos</h1><p className="page-description">Cadastre produtos com estoque atualizado automaticamente.</p></div>
         <button className="button button-primary" onClick={startCreate} type="button"><Icon name="plus" /> Novo produto</button>
       </header>
 
@@ -735,16 +772,19 @@ export function ProductsPage() {
               {(saving && selectedPhoto) && <p className="section-footnote" aria-live="polite" role="status">Salvando produto e enviando foto…</p>}
               {photoError && <p className="form-message form-message-error" role="alert">{photoError}</p>}
             </div>
-            <section className="product-stock-settings record-field-wide" aria-labelledby="product-stock-heading">
-              <div className="section-heading section-heading-compact"><div><p className="eyebrow">ESTOQUE</p><h3 id="product-stock-heading">Controle do saldo</h3></div></div>
-              <label className="record-checkbox"><input checked={inventoryEnabled} disabled={saving || Boolean(editingProduct?.inventory_tracked) || comboEnabled} onChange={(event) => { setInventoryEnabled(event.target.checked); setMinimumStock('') }} name="inventory_tracked" type="checkbox" /><span><strong>Controlar estoque deste produto</strong><small>O saldo baixa ao despachar ou registrar retirada e sobe ao confirmar recebimento.</small></span></label>
+            <section className="product-stock-settings record-field-wide" hidden={comboEnabled} aria-labelledby="product-stock-heading">
+              <div className="section-heading section-heading-compact"><div><p className="eyebrow">ESTOQUE AUTOMÁTICO</p><h3 id="product-stock-heading">Saldo do produto</h3></div></div>
+              <p className="section-footnote">{editingProduct?.inventory_tracked
+                ? 'O saldo baixa ao despachar ou registrar uma retirada e sobe ao confirmar uma compra. Para ajustar a quantidade, use Estoque.'
+                : 'O saldo baixa ao despachar ou registrar uma retirada e sobe ao confirmar uma compra. Informe a quantidade física atual; use 0 se não houver saldo.'}</p>
               <div className="record-form-grid product-stock-grid">
-                <label className="record-field"><span className="field-label">Unidade <span className="field-optional">{inventoryEnabled ? 'obrigatória' : 'opcional'}</span></span><input className="text-input" defaultValue={editingProduct?.inventory_unit ?? ''} disabled={saving || Boolean(editingProduct?.inventory_tracked)} maxLength={32} name="inventory_unit" placeholder="Ex.: un, kg" required={inventoryEnabled} /></label>
-                {inventoryEnabled && !editingProduct?.inventory_tracked && <label className="record-field"><span className="field-label">Saldo inicial <span aria-hidden="true">*</span></span><input className="text-input" inputMode="decimal" onChange={(event) => setOpeningQuantity(event.target.value)} placeholder="0" required value={openingQuantity} /></label>}
-                {inventoryEnabled && <label className="record-field"><span className="field-label">Estoque mínimo <span className="field-optional">opcional</span></span><input className="text-input" inputMode="decimal" onChange={(event) => setMinimumStock(event.target.value)} placeholder="Sem alerta" value={minimumStock} /></label>}
+                <label className="record-field"><span className="field-label">Unidade <span aria-hidden="true">*</span></span><input className="text-input" defaultValue={editingProduct?.inventory_unit ?? 'un'} disabled={saving || comboEnabled || Boolean(editingProduct?.inventory_tracked)} maxLength={32} name="inventory_unit" placeholder="Ex.: un, kg" required={!comboEnabled} /></label>
+                {!editingProduct?.inventory_tracked && <label className="record-field"><span className="field-label">Quantidade inicial <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || comboEnabled} inputMode="decimal" onChange={(event) => setOpeningQuantity(event.target.value)} placeholder="0" required={!comboEnabled} value={openingQuantity} />
+                </label>}
+                <label className="record-field"><span className="field-label">Estoque mínimo <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || comboEnabled} inputMode="decimal" onChange={(event) => setMinimumStock(event.target.value)} placeholder="Sem alerta" value={minimumStock} /></label>
               </div>
             </section>
-            <label className="record-checkbox record-field-wide"><input checked={comboEnabled} disabled={saving || Boolean(editingProduct?.is_combo) || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => { setComboEnabled(event.target.checked); if (event.target.checked) setInventoryEnabled(false) }} name="is_combo" type="checkbox" /><span><strong>Este produto é um combo</strong><small>O estoque do combo é calculado pelos produtos da composição; ele não tem saldo próprio.</small></span></label>
+            <label className="record-checkbox record-field-wide"><input checked={comboEnabled} disabled={saving || Boolean(editingProduct?.is_combo) || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => setComboEnabled(event.target.checked)} name="is_combo" type="checkbox" /><span><strong>Este produto é um combo</strong><small>O combo usa o saldo dos produtos da composição; não precisa de saldo próprio.</small></span></label>
             {comboEnabled && <div className="combo-composition record-field-wide">
               <div className="section-heading section-heading-compact"><div><p className="eyebrow">COMPOSIÇÃO</p><h3>Itens consumidos por combo</h3></div><button className="button button-secondary" disabled={saving} onClick={() => setComboDraft((current) => [...current, { key: newKey(), componentProductId: '', quantity: '1' }])} type="button"><Icon name="plus" /> Adicionar item</button></div>
               <p className="section-footnote">Cada componente precisa ter unidade e estoque inicial configurados. Pedidos existentes guardam a composição usada na venda.</p>
@@ -756,7 +796,7 @@ export function ProductsPage() {
                 </div>
               ))}
             </div>}
-            <label className="record-checkbox record-field-wide"><input defaultChecked={editingProduct?.is_active ?? true} name="is_active" type="checkbox" /><span>Disponível no catálogo</span></label>
+            <label className="record-checkbox record-field-wide"><input checked={productIsActive} onChange={(event) => setProductIsActive(event.target.checked)} name="is_active" type="checkbox" /><span>Disponível no catálogo</span></label>
           </div>
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
           <div className="record-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : editingProduct ? 'Salvar alterações' : 'Salvar produto'}</button><p className="section-footnote">Produtos sem preço podem ser salvos como inativos para completar depois.</p></div>
@@ -794,7 +834,7 @@ export function ProductsPage() {
                   <span className="record-avatar">{product.image_url
                     ? <img alt={`Foto de ${product.name}`} onError={() => { if (product.image_path) void refreshProductPhoto(product.id, product.image_path) }} src={product.image_url} />
                     : <Icon name="box" />}</span>
-                  <span className="record-list-copy"><strong>{product.name}</strong><small>{categoryNames.get(product.category_id ?? '') ?? 'Sem categoria'}{product.inventory_unit ? ' · ' + product.inventory_unit : ''}{product.is_combo ? ' · Combo (' + comboComponents.filter((component) => component.combo_product_id === product.id).length + ' itens)' : product.inventory_tracked ? ' · Estoque acompanhado' : ' · Sem controle de estoque'}</small></span>
+                  <span className="record-list-copy"><strong>{product.name}</strong><small>{categoryNames.get(product.category_id ?? '') ?? 'Sem categoria'}{product.inventory_unit ? ' · ' + product.inventory_unit : ''}{product.is_combo ? ' · Combo (' + comboComponents.filter((component) => component.combo_product_id === product.id).length + ' itens)' : product.inventory_tracked ? ' · Estoque automático' : ' · Contagem inicial pendente'}</small></span>
                   <span className="product-price"><strong>{formatBRL(product.sale_price_cents)}</strong><small>{product.is_active ? 'Ativo' : 'Inativo'}{product.is_combo && comboComponents.filter((component) => component.combo_product_id === product.id).length === 0 ? ' · Sem composição' : ''}</small></span>
                   <button className="text-button" onClick={() => startEdit(product)} type="button">Editar</button>
                 </div>
