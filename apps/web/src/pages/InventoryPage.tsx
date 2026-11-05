@@ -55,7 +55,7 @@ function movementLabel(type: Movement['movement_type']) {
   return ({ opening: 'Contagem inicial', receipt: 'Recebimento de compra', adjustment: 'Ajuste', loss: 'Perda ou avaria', dispatch: 'Despacho de pedido', return: 'Retorno conferido' })[type]
 }
 
-function newLine(): ReceiptLineDraft { return { key: newRequestId(), productId: '', quantity: '1' } }
+function newLine(productId = ''): ReceiptLineDraft { return { key: newRequestId(), productId, quantity: '' } }
 
 export function InventoryPage() {
   const { id: businessId } = useBusiness()
@@ -79,6 +79,10 @@ export function InventoryPage() {
   const [uncertain, setUncertain] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [registeredReceiptId, setRegisteredReceiptId] = useState<string | null>(null)
+  const [receiptSuggestionNotice, setReceiptSuggestionNotice] = useState<string | null>(null)
+  const [repeatingReceipt, setRepeatingReceipt] = useState(false)
+  const [showReplenishmentList, setShowReplenishmentList] = useState(false)
   const [receiptSupplier, setReceiptSupplier] = useState('')
   const [receiptReference, setReceiptReference] = useState('')
   const [receiptDate, setReceiptDate] = useState(businessToday())
@@ -193,6 +197,11 @@ export function InventoryPage() {
   const trackedProducts = products.filter((product) => product.inventory_tracked)
   const untrackedProducts = products.filter((product) => product.is_active && !product.inventory_tracked && !product.is_combo)
   const belowMinimum = balances.filter((balance) => balance.minimum_stock !== null && Number(balance.quantity_on_hand) < Number(balance.minimum_stock))
+  const recentSuppliers = [...receipts.reduce((suppliers, receipt) => {
+    const supplier = receipt.supplier_name?.trim() ?? ''
+    if (supplier) suppliers.set(supplier.toLocaleLowerCase('pt-BR'), supplier)
+    return suppliers
+  }, new Map<string, string>()).values()]
   const negativeBalances = balances.filter((balance) => Number(balance.quantity_on_hand) < 0)
   const receiptMap = new Map(receipts.map((receipt) => [receipt.id, receipt]))
   const productMap = new Map(products.map((product) => [product.id, product]))
@@ -201,24 +210,66 @@ export function InventoryPage() {
   const selectedMovementUnit = movementKind === 'return'
     ? selectedReturnableItem?.inventory_unit
     : trackedProducts.find((product) => product.id === movementProductId)?.inventory_unit
+  const receiptHasProductLines = receiptLines.some((line) => line.productId || line.quantity.trim())
+  const receiptFormDisabled = saving || uncertain || repeatingReceipt
 
-  function startReceipt() {
+  function startReceipt(productIds?: string[]) {
     setNotice(null)
+    setRegisteredReceiptId(null)
     setFormError(null)
+    setReceiptSuggestionNotice(null)
     setShowMovementForm(false)
     setShowReceiptForm(true)
     setShowCountForm(false)
+    setShowReplenishmentList(false)
     setUncertain(false)
     setReceiptSupplier('')
     setReceiptReference('')
     setReceiptDate(businessToday())
     setReceiptNotes('')
-    setReceiptLines([newLine()])
+    const uniqueProductIds = [...new Set(productIds ?? [])].filter((id) => trackedProducts.some((product) => product.id === id))
+    setReceiptLines(uniqueProductIds.length > 0 ? uniqueProductIds.map((id) => newLine(id)) : [newLine()])
     receiptRequestIdRef.current = newRequestId()
+  }
+
+  async function repeatLastReceiptProducts() {
+    const sourceReceipt = receipts[0]
+    if (!supabaseClient || !sourceReceipt || repeatingReceipt) return
+    if (receiptHasProductLines) {
+      setFormError('Para carregar os produtos anteriores, remova primeiro os produtos já adicionados. Seus dados atuais foram preservados.')
+      return
+    }
+    setRepeatingReceipt(true)
+    setFormError(null)
+    setReceiptSuggestionNotice(null)
+    try {
+      const { data, error: queryError } = await supabaseClient.from('inventory_movements')
+        .select('product_id')
+        .eq('business_id', businessId).eq('receipt_id', sourceReceipt.id).eq('movement_type', 'receipt')
+        .order('occurred_at', { ascending: true }).order('id', { ascending: true })
+      if (queryError) {
+        setFormError('Não foi possível carregar os produtos do recebimento anterior. Você pode seguir preenchendo a compra manualmente.')
+        return
+      }
+      const productIds = [...new Set((data ?? []).map((item) => item.product_id))]
+        .filter((id) => trackedProducts.some((product) => product.id === id))
+      if (productIds.length === 0) {
+        setFormError('O recebimento anterior não tem produtos ativos para reaproveitar.')
+        return
+      }
+      setReceiptSupplier((current) => current.trim() ? current : sourceReceipt.supplier_name ?? '')
+      setReceiptLines(productIds.map((id) => newLine(id)))
+      setReceiptSuggestionNotice('Produtos carregados sem quantidades. Confira o fornecedor e informe somente o que chegou agora.')
+    } catch {
+      setFormError('Não foi possível carregar os produtos do recebimento anterior. Você pode seguir preenchendo a compra manualmente.')
+    } finally {
+      setRepeatingReceipt(false)
+    }
   }
 
   function startMovement() {
     setNotice(null)
+    setRegisteredReceiptId(null)
     setFormError(null)
     setShowReceiptForm(false)
     setShowCountForm(false)
@@ -331,6 +382,7 @@ export function InventoryPage() {
   function startCount() {
     if (balances.length === 0 || balances.length > 500) return
     setNotice(null)
+    setRegisteredReceiptId(null)
     setFormError(null)
     setCountStartError(null)
     setCountStartErrorKind(null)
@@ -450,6 +502,7 @@ export function InventoryPage() {
       setShowReceiptForm(false)
       setUncertain(false)
       setNotice('Entrada de estoque registrada para os itens recebidos fisicamente.')
+      setRegisteredReceiptId(data)
       receiptRequestIdRef.current = newRequestId()
       await loadData(false)
     } catch {
@@ -616,12 +669,12 @@ export function InventoryPage() {
     <div className="page-stack">
       <header className="page-heading">
         <div><p className="eyebrow">OPERAÇÃO · ESTOQUE</p><h1>Estoque</h1><p className="page-description">Quantidade atual de cada produto, compras recebidas e alterações registradas.</p></div>
-        <div className="record-heading-actions"><button className="button button-secondary" disabled={countStarting} onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Movimentar estoque</button><button aria-describedby={!loading && balances.length === 0 ? 'inventory-count-prerequisite' : undefined} className="button button-secondary" disabled={loading || countStarting || balances.length === 0 || balances.length > 500} onClick={startCount} ref={countTriggerRef} type="button"><Icon name="check" /> Contagem física</button><button className="button button-primary" disabled={countStarting} onClick={startReceipt} ref={receiptTriggerRef} type="button"><Icon name="file" /> Receber compra</button></div>
+        <div className="record-heading-actions"><button className="button button-secondary" disabled={countStarting || repeatingReceipt} onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Movimentar estoque</button><button aria-describedby={!loading && balances.length === 0 ? 'inventory-count-prerequisite' : undefined} className="button button-secondary" disabled={loading || countStarting || repeatingReceipt || balances.length === 0 || balances.length > 500} onClick={startCount} ref={countTriggerRef} type="button"><Icon name="check" /> Contagem física</button><button className="button button-primary" disabled={countStarting || repeatingReceipt} onClick={() => startReceipt()} ref={receiptTriggerRef} type="button"><Icon name="file" /> Receber compra</button></div>
       </header>
 
       {!loading && balances.length === 0 && <p className="section-footnote" id="inventory-count-prerequisite">Para fazer uma contagem, configure o estoque e o saldo inicial de um produto no <Link to="/catalogo">Catálogo</Link>.</p>}
 
-      {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
+      {notice && <div className="form-message form-message-success" role="status"><p>{notice}</p>{registeredReceiptId && <Link className="quiet-link" to={`/financeiro/saidas?receiptId=${encodeURIComponent(registeredReceiptId)}`}>Registrar o valor pago desta compra →</Link>}</div>}
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadData() }} type="button">Tentar novamente</button></div>}
       {!loading && balances.length > 500 && <p className="form-message form-message-warning" role="status">A contagem física está indisponível: há {balances.length} produtos com saldo registrado; o limite é 500.</p>}
 
@@ -637,7 +690,7 @@ export function InventoryPage() {
             const difference = counted === null ? null : Math.round((counted - draft.expectedQuantity) * 1000) / 1000
             const differenceClass = difference === null || difference === 0 ? '' : difference < 0 ? ' stock-state-low' : ''
             return <div className="inventory-line-row" key={draft.productId}>
-              <span className="inventory-balance-copy"><strong>{draft.productName}</strong><small>Saldo no início da contagem: {formatQuantity(draft.expectedQuantity)} {draft.inventoryUnit}</small></span>
+              <span className="inventory-balance-copy"><strong>{draft.productName}</strong><small>Saldo no início da contagem: {formatQuantity(draft.expectedQuantity)} {draft.inventoryUnit}</small>{quantityText !== formatQuantity(draft.expectedQuantity) && <button aria-label={`Confirmar que ${draft.productName} tem o mesmo saldo do sistema`} className="text-button" disabled={saving || uncertain} onClick={() => setCountDrafts((current) => current.map((item) => item.productId === draft.productId ? { ...item, quantity: formatQuantity(item.expectedQuantity) } : item))} type="button">Confirmar sem diferença</button>}</span>
               <label className="record-field"><span className="field-label">Quantidade contada · {draft.inventoryUnit}</span><input aria-invalid={quantityText !== '' && counted === null} aria-label={'Quantidade contada de ' + draft.productName} className="text-input" disabled={saving || uncertain} inputMode={isDiscreteInventoryUnit(draft.inventoryUnit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setCountDrafts((current) => current.map((item) => item.productId === draft.productId ? { ...item, quantity: event.target.value } : item))} placeholder="0" value={quantityText} /></label>
               <span className="inventory-balance-value"><strong>{difference === null ? '—' : `${difference > 0 ? '+' : ''}${formatQuantity(difference)}`} <small>{draft.inventoryUnit}</small></strong><span className={'stock-state' + differenceClass}>{difference === null ? quantityText ? 'Valor inválido' : 'Informe o contado' : difference === 0 ? 'Sem diferença' : 'Diferença'}</span></span>
             </div>
@@ -649,33 +702,50 @@ export function InventoryPage() {
 
       <section className="order-balance-grid inventory-summary" aria-label="Resumo do estoque">
         <article className="surface-panel order-balance-card"><span>Produtos com saldo no sistema</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>Atualizado em despachos, retiradas e recebimentos.</small></article>
-        <article className="surface-panel order-balance-card"><span>Abaixo do mínimo</span><strong>{loading ? '—' : belowMinimum.length}</strong><small>Somente produtos com limite configurado.</small></article>
+        <article className="surface-panel order-balance-card"><span>Abaixo do mínimo</span><strong>{loading ? '—' : belowMinimum.length}</strong><small>Somente produtos com limite configurado.</small>{!loading && belowMinimum.length > 0 && <button className="text-button" onClick={() => setShowReplenishmentList((value) => !value)} type="button">{showReplenishmentList ? 'Fechar lista' : 'Montar lista de reposição'}</button>}</article>
         <article className="surface-panel order-balance-card"><span>Estoque negativo</span><strong>{loading ? '—' : negativeBalances.length}</strong><small>Saíram mais unidades do que havia no saldo.</small></article>
       </section>
 
+      {showReplenishmentList && belowMinimum.length > 0 && <section className="surface-panel record-panel" aria-labelledby="inventory-replenishment-heading">
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">SUGESTÃO DE COMPRA</p><h2 id="inventory-replenishment-heading">Lista de reposição</h2></div><span className="neutral-status">{belowMinimum.length}</span></div>
+        <p className="section-footnote">A sugestão mostra quanto falta para chegar ao mínimo cadastrado. Ela não altera o estoque; informe a quantidade que realmente chegar.</p>
+        <ul className="inventory-balance-list">{belowMinimum.map((balance) => {
+          const deficit = Math.round((Number(balance.minimum_stock) - Number(balance.quantity_on_hand)) * 1000) / 1000
+          return <li key={balance.product_id}><span className="inventory-balance-copy"><strong>{balance.product_name}</strong><small>Saldo {formatQuantity(Number(balance.quantity_on_hand))} · mínimo {formatQuantity(Number(balance.minimum_stock))}</small></span><span className="inventory-balance-value"><strong>{formatQuantity(deficit)} <small>{balance.inventory_unit}</small></strong><span className="stock-state stock-state-low">Sugestão para repor</span></span></li>
+        })}</ul>
+        <div className="record-form-actions"><button className="button button-secondary" disabled={loading || saving} onClick={() => startReceipt(belowMinimum.map((balance) => balance.product_id))} type="button">Usar produtos na entrada de estoque</button></div>
+      </section>}
+
       {showReceiptForm && <form className="surface-panel record-form" onSubmit={(event) => void handleReceiptSubmit(event)}>
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA FÍSICA</p><h2 ref={receiptHeadingRef} tabIndex={-1}>Registrar compra recebida</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowReceiptForm(false)} type="button">Fechar</button></div>
-        <p className="section-footnote inventory-form-hint">Some ao estoque os itens que chegaram. Esta ação não registra pagamento.</p>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA FÍSICA</p><h2 ref={receiptHeadingRef} tabIndex={-1}>Registrar compra recebida</h2></div><button className="text-button" disabled={receiptFormDisabled} onClick={() => setShowReceiptForm(false)} type="button">Fechar</button></div>
+        <p className="section-footnote inventory-form-hint">Informe os produtos e as quantidades que chegaram fisicamente. Atualiza o estoque; o pagamento é registrado separadamente.</p>
         {trackedProducts.length === 0 ? <p className="inline-state">Edite um produto no <Link to="/catalogo">Catálogo</Link> e informe sua unidade e quantidade física para registrar compras recebidas.</p> : <>
-          <div className="record-form-grid">
-            <label className="record-field"><span className="field-label">Fornecedor <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={160} onChange={(event) => setReceiptSupplier(event.target.value)} value={receiptSupplier} /></label>
-            <label className="record-field"><span className="field-label">Referência da compra <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={120} onChange={(event) => setReceiptReference(event.target.value)} value={receiptReference} /></label>
-            <label className="record-field"><span className="field-label">Recebido em <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || uncertain} max={businessToday()} onChange={(event) => setReceiptDate(event.target.value)} required type="date" value={receiptDate} /></label>
-            <label className="record-field"><span className="field-label">Observações <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={2000} onChange={(event) => setReceiptNotes(event.target.value)} value={receiptNotes} /></label>
-          </div>
+          {receipts[0] && <button className="text-button" disabled={saving || uncertain || repeatingReceipt || receiptHasProductLines} onClick={() => void repeatLastReceiptProducts()} type="button">{repeatingReceipt ? 'Carregando produtos…' : 'Repetir produtos da última compra'}</button>}
+          {receiptSuggestionNotice && <p className="form-message form-message-success" role="status">{receiptSuggestionNotice}</p>}
           <div className="inventory-line-list">
             {receiptLines.map((line, index) => {
               const selected = trackedProducts.find((product) => product.id === line.productId)
               return <div className="inventory-line-row" key={line.key}>
-                <label className="record-field"><span className="field-label">Produto {index + 1}</span><select className="text-input" disabled={saving || uncertain} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, productId: event.target.value } : row))} required value={line.productId}><option value="">Selecione um produto</option>{trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
-                <label className="record-field"><span className="field-label">Quantidade recebida{selected?.inventory_unit ? ' · ' + selected.inventory_unit : ''}</span><input className="text-input" disabled={saving || uncertain} inputMode={isDiscreteInventoryUnit(selected?.inventory_unit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required value={line.quantity} /></label>
-                <button aria-label={'Remover produto ' + (index + 1)} className="text-button order-remove-button" disabled={saving || uncertain || receiptLines.length === 1} onClick={() => setReceiptLines((current) => current.filter((row) => row.key !== line.key))} type="button">Remover</button>
+                <label className="record-field"><span className="field-label">Produto {index + 1}</span><select className="text-input" disabled={receiptFormDisabled} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, productId: event.target.value } : row))} required value={line.productId}><option value="">Selecione um produto</option>{trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
+                <label className="record-field"><span className="field-label">Quantidade recebida{selected?.inventory_unit ? ' · ' + selected.inventory_unit : ''}</span><input className="text-input" disabled={receiptFormDisabled} inputMode={isDiscreteInventoryUnit(selected?.inventory_unit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required value={line.quantity} /></label>
+                <button aria-label={'Remover produto ' + (index + 1)} className="text-button order-remove-button" disabled={receiptFormDisabled || receiptLines.length === 1} onClick={() => setReceiptLines((current) => current.filter((row) => row.key !== line.key))} type="button">Remover</button>
               </div>
             })}
           </div>
-          <button className="button button-secondary inventory-add-line" disabled={saving || uncertain} onClick={() => setReceiptLines((current) => [...current, newLine()])} type="button"><Icon name="plus" /> Adicionar produto</button>
+          <button className="button button-secondary inventory-add-line" disabled={receiptFormDisabled} onClick={() => setReceiptLines((current) => [...current, newLine()])} type="button"><Icon name="plus" /> Adicionar produto</button>
+          <div className="record-form-grid inventory-receipt-date-row">
+            <label className="record-field"><span className="field-label">Recebido em</span><input className="text-input" disabled={receiptFormDisabled} max={businessToday()} onChange={(event) => setReceiptDate(event.target.value)} required type="date" value={receiptDate} /><small className="field-optional">Padrão: hoje. Mude somente se recebeu em outro dia.</small></label>
+          </div>
+          <details className="record-field-wide inventory-receipt-details">
+            <summary>Detalhes opcionais da compra</summary>
+            <div className="record-form-grid">
+              <label className="record-field"><span className="field-label">Fornecedor</span><input autoComplete="off" className="text-input" disabled={receiptFormDisabled} list="inventory-recent-suppliers" maxLength={160} onChange={(event) => setReceiptSupplier(event.target.value)} placeholder="Opcional" value={receiptSupplier} /><datalist id="inventory-recent-suppliers">{recentSuppliers.map((supplier) => <option key={supplier} value={supplier} />)}</datalist></label>
+              <label className="record-field"><span className="field-label">Nº da nota ou referência</span><input className="text-input" disabled={receiptFormDisabled} maxLength={120} onChange={(event) => setReceiptReference(event.target.value)} placeholder="Opcional" value={receiptReference} /></label>
+              <label className="record-field record-field-wide"><span className="field-label">Observações</span><input className="text-input" disabled={receiptFormDisabled} maxLength={2000} onChange={(event) => setReceiptNotes(event.target.value)} placeholder="Opcional" value={receiptNotes} /></label>
+            </div>
+          </details>
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
-          <div className="record-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Registrando…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Confirmar recebimento físico'}</button></div>
+          <div className="record-form-actions"><button className="button button-primary" disabled={saving || repeatingReceipt} type="submit">{saving ? 'Registrando…' : uncertain ? 'Tentar novamente sem alterar os dados' : repeatingReceipt ? 'Carregando produtos…' : 'Confirmar recebimento físico'}</button></div>
         </>}
       </form>}
 

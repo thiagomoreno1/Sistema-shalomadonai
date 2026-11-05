@@ -7,7 +7,7 @@ import { supabaseClient } from '../lib/supabase'
 
 type DeliveryStatus = 'awaiting_separation' | 'ready' | 'dispatched' | 'delivered' | 'attempted' | 'rescheduled' | 'returned'
 type Delivery = { id: string; order_id: string; status: DeliveryStatus; delivery_worker_id: string | null; scheduled_on: string | null; time_window: string | null; notes: string | null; canceled_at: string | null; dispatched_at: string | null; delivered_at: string | null; attempted_at: string | null; returned_at: string | null; created_at: string }
-type Order = { id: string; customer_name_snapshot: string; delivery_address_snapshot: string | null; status: 'open' | 'cancelled'; delivery_fee_cents: number; notes: string | null; created_at: string }
+type Order = { id: string; customer_id: string; customer_name_snapshot: string; delivery_address_snapshot: string | null; status: 'open' | 'cancelled'; delivery_fee_cents: number; notes: string | null; created_at: string }
 type Worker = { id: string; name: string; phone: string | null; is_active: boolean }
 type OrderComponent = { order_id: string; product_id: string; product_name_snapshot: string; inventory_unit_snapshot: string | null; quantity_snapshot: number; inventory_tracked_snapshot: boolean }
 type InventoryMovement = { order_id: string | null; product_id: string; movement_type: string; quantity_delta: number }
@@ -28,6 +28,11 @@ const statusLabels: Record<DeliveryStatus, string> = {
 
 const statusOrder: DeliveryStatus[] = ['awaiting_separation', 'ready', 'dispatched', 'attempted', 'rescheduled', 'delivered', 'returned']
 const deliveryWindowPresets = ['Manhã', '13h–15h', '15h–17h', '17h–19h']
+const failedDeliveryPresets = [
+  { label: 'Cliente ausente', note: 'Cliente não estava disponível no endereço.', nextStep: 'Entrar em contato e combinar novo horário.' },
+  { label: 'Endereço não localizado', note: 'Não foi possível localizar o endereço informado.', nextStep: 'Pedir confirmação do endereço antes de reagendar.' },
+  { label: 'Cliente pediu reagendamento', note: 'Cliente solicitou reagendamento durante a tentativa.', nextStep: 'Confirmar novo dia e período com o cliente.' },
+]
 
 function newRequestId() { return crypto.randomUUID() }
 function formatQuantity(value: number) { return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(Number(value)) }
@@ -120,7 +125,7 @@ export function DeliveriesPage() {
         return true
       }
       const [orderResult, componentResult, movementResult, eventResult] = await Promise.all([
-        supabaseClient.from('orders').select('id, customer_name_snapshot, delivery_address_snapshot, status, delivery_fee_cents, notes, created_at')
+        supabaseClient.from('orders').select('id, customer_id, customer_name_snapshot, delivery_address_snapshot, status, delivery_fee_cents, notes, created_at')
           .eq('business_id', businessId).in('id', orderIds),
         supabaseClient.from('order_line_components').select('order_id, product_id, product_name_snapshot, inventory_unit_snapshot, quantity_snapshot, inventory_tracked_snapshot')
           .eq('business_id', businessId).in('order_id', orderIds),
@@ -168,6 +173,19 @@ export function DeliveriesPage() {
   const orderMap = useMemo(() => new Map(orders.map((order) => [order.id, order])), [orders])
   const workerMap = new Map(workers.map((worker) => [worker.id, worker]))
   const balanceMap = new Map(balances.map((balance) => [balance.product_id, balance]))
+  const lastDeliveredPlanByCustomer = useMemo(() => {
+    const result = new Map<string, Delivery>()
+    const activeWorkerIds = new Set(workers.filter((worker) => worker.is_active).map((worker) => worker.id))
+    for (const delivery of deliveries) {
+      if (delivery.status !== 'delivered' || !delivery.delivered_at) continue
+      if (!activeWorkerIds.has(delivery.delivery_worker_id ?? '') && !delivery.time_window) continue
+      const customerId = orderMap.get(delivery.order_id)?.customer_id
+      if (!customerId) continue
+      const previous = result.get(customerId)
+      if (!previous || (delivery.delivered_at ?? '') > (previous.delivered_at ?? '')) result.set(customerId, delivery)
+    }
+    return result
+  }, [deliveries, orderMap, workers])
   const filteredDeliveries = useMemo(() => {
     if (error) return []
     const eligible = deliveries.filter((delivery) => orderMap.get(delivery.order_id)?.status === 'open')
@@ -415,6 +433,8 @@ export function DeliveriesPage() {
           {filteredDeliveries.map((delivery) => {
             const order = orderMap.get(delivery.order_id)
             const worker = delivery.delivery_worker_id ? workerMap.get(delivery.delivery_worker_id) : null
+            const previousPlan = order ? lastDeliveredPlanByCustomer.get(order.customer_id) : null
+            const previousWorker = previousPlan?.delivery_worker_id ? workers.find((item) => item.id === previousPlan.delivery_worker_id && item.is_active) : null
             const expanded = expandedId === delivery.id
             const deliveryEvents = events.filter((event) => event.delivery_id === delivery.id)
             const actions = statusActions(delivery.status)
@@ -434,7 +454,14 @@ export function DeliveriesPage() {
 
                 {isEditingPlan && <form className="delivery-action-form" onSubmit={(event) => void handlePlanSubmit(event, delivery)}>
                   <div className="section-heading section-heading-compact"><div><p className="eyebrow">PLANEJAMENTO</p><h3 ref={planHeadingRef} tabIndex={-1}>Atribuição e horário</h3></div></div>
-                  <div className="record-form-grid"><label className="record-field"><span className="field-label">Entregador <span className="field-optional">opcional</span></span><select className="text-input" disabled={planSaving || planUncertain} onChange={(event) => setPlanWorkerId(event.target.value)} value={planWorkerId}><option value="">Sem atribuição</option>{workers.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><div className="record-field"><span className="field-label">Data agendada <span className="field-optional">opcional · {delivery.scheduled_on ? 'data salva' : 'padrão: hoje · alterável'}</span></span><label className="field-label"><input checked={planScheduleEnabled} disabled={planSaving || planUncertain} onChange={(event) => setPlanScheduleEnabled(event.target.checked)} type="checkbox" /> Agendar entrega para esta data</label><input className="text-input" disabled={planSaving || planUncertain || !planScheduleEnabled} onChange={(event) => { setPlanDate(event.target.value); setPlanScheduleEnabled(true) }} type="date" value={planDate} /></div><div className="record-field record-field-wide"><span className="field-label">Janela rápida <span className="field-optional">opcional</span></span><div className="record-form-actions" aria-label="Escolher janela de entrega">{deliveryWindowPresets.map((window) => <button aria-pressed={planWindow === window} className="button button-secondary" disabled={planSaving || planUncertain} key={window} onClick={() => { setPlanWindow(window); setPlanScheduleEnabled(true) }} type="button">{window}</button>)}</div></div><label className="record-field"><span className="field-label">Personalizar janela ou horário <span className="field-optional">opcional</span></span><input className="text-input" disabled={planSaving || planUncertain} maxLength={120} onChange={(event) => { setPlanWindow(event.target.value); if (event.target.value.trim()) setPlanScheduleEnabled(true) }} placeholder="Ex.: manhã, 14h–16h" value={planWindow} /></label><label className="record-field"><span className="field-label">Observações da entrega</span><input className="text-input" disabled={planSaving || planUncertain} maxLength={2000} onChange={(event) => setPlanNotes(event.target.value)} value={planNotes} /></label></div>
+                  <div className="record-form-grid">
+                    {previousPlan && <div className="record-field record-field-wide"><span className="field-label">Entrega anterior deste cliente</span><div className="record-form-actions"><button className="button button-secondary" disabled={planSaving || planUncertain} onClick={() => { setPlanWorkerId(previousWorker?.id ?? ''); setPlanWindow(previousPlan.time_window ?? ''); setPlanDate(businessToday()); setPlanScheduleEnabled(Boolean(previousPlan.time_window)) }} type="button">Reutilizar {previousWorker ? previousWorker.name : 'horário'}{previousPlan.time_window ? ` · ${previousPlan.time_window}` : ''}</button></div><span className="section-footnote">Carrega entregador e período da última entrega concluída. Confira antes de salvar.</span></div>}
+                    <label className="record-field"><span className="field-label">Entregador <span className="field-optional">opcional</span></span><select className="text-input" disabled={planSaving || planUncertain} onChange={(event) => setPlanWorkerId(event.target.value)} value={planWorkerId}><option value="">Sem atribuição</option>{workers.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+                    <div className="record-field"><span className="field-label">Data agendada <span className="field-optional">opcional · {delivery.scheduled_on ? 'data salva' : 'padrão: hoje · alterável'}</span></span><label className="field-label"><input checked={planScheduleEnabled} disabled={planSaving || planUncertain} onChange={(event) => setPlanScheduleEnabled(event.target.checked)} type="checkbox" /> Agendar entrega para esta data</label><input className="text-input" disabled={planSaving || planUncertain || !planScheduleEnabled} onChange={(event) => { setPlanDate(event.target.value); setPlanScheduleEnabled(true) }} type="date" value={planDate} /></div>
+                    <div className="record-field record-field-wide"><span className="field-label">Janela rápida <span className="field-optional">opcional</span></span><div className="record-form-actions" aria-label="Escolher janela de entrega">{deliveryWindowPresets.map((window) => <button aria-pressed={planWindow === window} className="button button-secondary" disabled={planSaving || planUncertain} key={window} onClick={() => { setPlanWindow(window); setPlanScheduleEnabled(true) }} type="button">{window}</button>)}</div></div>
+                    <label className="record-field"><span className="field-label">Personalizar janela ou horário <span className="field-optional">opcional</span></span><input className="text-input" disabled={planSaving || planUncertain} maxLength={120} onChange={(event) => { setPlanWindow(event.target.value); if (event.target.value.trim()) setPlanScheduleEnabled(true) }} placeholder="Ex.: manhã, 14h–16h" value={planWindow} /></label>
+                    <label className="record-field"><span className="field-label">Observações da entrega</span><input className="text-input" disabled={planSaving || planUncertain} maxLength={2000} onChange={(event) => setPlanNotes(event.target.value)} value={planNotes} /></label>
+                  </div>
                   <p className="section-footnote">A data começa preenchida com hoje, mas só será aplicada se você marcar “Agendar entrega”. Assim, salvar apenas a atribuição do entregador não agenda a entrega.</p>
                   {planError && <p className="form-message form-message-error" role="alert">{planError}</p>}
                   <div className="record-form-actions"><button className="button button-primary" disabled={planSaving} type="submit">{planSaving ? 'Salvando…' : planUncertain ? 'Tentar novamente sem alterar os dados' : 'Salvar planejamento'}</button><button className="text-button" disabled={planSaving || planUncertain} onClick={() => setEditingPlanId(null)} type="button">Cancelar</button></div>
@@ -442,7 +469,11 @@ export function DeliveriesPage() {
 
                 {target && <form className="delivery-action-form" onSubmit={(event) => void handleStatusSubmit(event)}>
                   <p className="eyebrow">MUDANÇA DE ESTADO</p><h3 ref={statusHeadingRef} tabIndex={-1}>{statusLabels[target.status]}</h3>
-                  {target.status === 'attempted' && <><label className="record-field"><span className="field-label">O que ocorreu? <span aria-hidden="true">*</span></span><textarea className="text-input record-textarea" disabled={statusSaving || statusUncertain} maxLength={1000} onChange={(event) => setStatusNote(event.target.value)} required rows={2} value={statusNote} /></label><label className="record-field"><span className="field-label">Próxima ação <span aria-hidden="true">*</span></span><input className="text-input" disabled={statusSaving || statusUncertain} maxLength={1000} onChange={(event) => setNextStep(event.target.value)} required value={nextStep} /></label></>}
+                  {target.status === 'attempted' && <>
+                    <div className="record-field record-field-wide"><span className="field-label">Preencher com um caso comum</span><div className="record-form-actions">{failedDeliveryPresets.map((preset) => <button className="button button-secondary" disabled={statusSaving || statusUncertain} key={preset.label} onClick={() => { setStatusNote(preset.note); setNextStep(preset.nextStep) }} type="button">{preset.label}</button>)}</div></div>
+                    <label className="record-field"><span className="field-label">O que ocorreu? <span aria-hidden="true">*</span></span><textarea className="text-input record-textarea" disabled={statusSaving || statusUncertain} maxLength={1000} onChange={(event) => setStatusNote(event.target.value)} required rows={2} value={statusNote} /></label>
+                    <label className="record-field"><span className="field-label">Próxima ação <span aria-hidden="true">*</span></span><input className="text-input" disabled={statusSaving || statusUncertain} maxLength={1000} onChange={(event) => setNextStep(event.target.value)} required value={nextStep} /></label>
+                  </>}
                   {target.status === 'delivered' && <label className="record-field"><span className="field-label">Observação de conclusão <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" disabled={statusSaving || statusUncertain} maxLength={1000} onChange={(event) => setStatusNote(event.target.value)} rows={2} value={statusNote} /></label>}
                   {target.status === 'dispatched' && <><p className="section-footnote">O estoque baixa no despacho. Reentregas consideram os itens já enviados e retornos conferidos.</p>{dispatchWarnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Saldo insuficiente para este despacho.</strong><ul>{dispatchWarnings.map((warning) => <li key={warning.name}>{warning.name}: disponível {formatQuantity(warning.available)} {warning.unit}, necessário {formatQuantity(warning.needed)} {warning.unit}; saldo após despacho {formatQuantity(warning.projected)} {warning.unit}.</li>)}</ul><span>Você pode continuar; o saldo ficará negativo e o aviso será registrado.</span></div>}</>}
                   {target.status === 'returned' && <p className="form-message form-message-warning" role="status">Marcar a entrega como devolvida não adiciona mercadoria ao estoque. Registre o retorno após conferência em Estoque.</p>}

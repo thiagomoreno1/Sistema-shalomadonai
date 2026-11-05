@@ -645,7 +645,22 @@ export function BankReconciliationPage() {
           })
         }
       }
-      possibleCandidates.sort((left, right) => Math.abs(Date.parse(`${left.date}T12:00:00-03:00`) - Date.parse(`${movement.transaction_date}T12:00:00-03:00`)) - Math.abs(Date.parse(`${right.date}T12:00:00-03:00`) - Date.parse(`${movement.transaction_date}T12:00:00-03:00`)))
+      const targetMagnitude = signedCents < 0n ? -signedCents : signedCents
+      const dateDistance = (candidate: MatchCandidate) => Math.abs(Date.parse(`${candidate.date}T12:00:00-03:00`) - Date.parse(`${movement.transaction_date}T12:00:00-03:00`))
+      const amountDistance = (candidate: MatchCandidate) => {
+        const amount = BigInt(candidate.amount_cents)
+        return amount > targetMagnitude ? amount - targetMagnitude : targetMagnitude - amount
+      }
+      possibleCandidates.sort((left, right) => {
+        const leftAmount = BigInt(left.amount_cents)
+        const rightAmount = BigInt(right.amount_cents)
+        const leftExactFirst = leftAmount === targetMagnitude ? 0 : 1
+        const rightExactFirst = rightAmount === targetMagnitude ? 0 : 1
+        if (leftExactFirst !== rightExactFirst) return leftExactFirst - rightExactFirst
+        const amountDifference = amountDistance(left) - amountDistance(right)
+        if (amountDifference !== 0n) return amountDifference < 0n ? -1 : 1
+        return dateDistance(left) - dateDistance(right)
+      })
       if (request === candidateRequestRef.current) setCandidates(possibleCandidates)
     } catch {
       if (request === candidateRequestRef.current) setCandidateError('Não foi possível carregar os lançamentos elegíveis. A conciliação não foi gravada.')
@@ -935,7 +950,8 @@ export function BankReconciliationPage() {
                     <fieldset className="bank-candidate-fieldset" disabled={actionSaving || loading || Boolean(loadError)} aria-describedby={`bank-selection-total-${movement.id}`}><legend>Selecionar lançamentos</legend>
                     <ul className="bank-candidate-list">{candidates.slice(0, candidateLimit).map((candidate) => {
                       const selected = matchSelection.items.some((item) => item.kind === candidate.kind && item.id === candidate.id)
-                      return <li key={`${candidate.kind}-${candidate.id}`}><label className="bank-candidate-option"><input type="checkbox" checked={selected} disabled={!selected && matchSelection.items.length >= 50} onChange={() => toggleCandidate(candidate)} /><span><strong>{candidate.title}</strong><small>{candidate.detail} · {formatBusinessDate(candidate.date)} · {candidate.kind === 'receipt' ? 'Recebimento' : 'Saída paga'}</small></span><strong className="bank-candidate-value">{formatAmount(candidate.amount_cents)}</strong></label></li>
+                      const sameAmount = BigInt(candidate.amount_cents) === (signedAmount(movement.amount_cents) < 0n ? -signedAmount(movement.amount_cents) : signedAmount(movement.amount_cents))
+                      return <li key={`${candidate.kind}-${candidate.id}`}><label className="bank-candidate-option"><input type="checkbox" checked={selected} disabled={!selected && matchSelection.items.length >= 50} onChange={() => toggleCandidate(candidate)} /><span><strong>{candidate.title}</strong><small>{candidate.detail} · {formatBusinessDate(candidate.date)} · {candidate.kind === 'receipt' ? 'Recebimento' : 'Saída paga'}{sameAmount ? ' · Valor igual ao extrato' : ''}</small></span><strong className="bank-candidate-value">{formatAmount(candidate.amount_cents)}</strong></label></li>
                     })}</ul></fieldset>
                     {candidates.length > candidateLimit && <button className="button button-secondary" disabled={actionSaving || loading || Boolean(loadError)} onClick={() => setCandidateLimit((limit) => limit + 20)} type="button">Mostrar mais sugestões</button>}
                     <div className="bank-selection-total" id={`bank-selection-total-${movement.id}`} role="status" aria-live="polite" aria-atomic="true"><p>{selectedCandidates.length} de 50 selecionados · Movimento: {formatAmount((signedAmount(movement.amount_cents) < 0n ? -signedAmount(movement.amount_cents) : signedAmount(movement.amount_cents)).toString())}</p><p><strong>Selecionado: {formatAmount(selectionSummary.total.toString())}</strong> · {selectionSummary.difference === 0n ? 'Soma exata' : selectionSummary.difference > 0n ? `Faltam ${formatAmount(selectionSummary.difference.toString())}` : `Excede em ${formatAmount((-selectionSummary.difference).toString())}`}</p>{selectedCandidates.length === 50 && <p>Limite de 50 itens atingido. Desmarque um item para selecionar outro.</p>}</div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { FinanceNavigation } from '../components/FinanceNavigation'
 import { formatBRLExact, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
@@ -29,6 +29,7 @@ type InventoryReceipt = {
   purchase_reference: string | null
   received_on: string
 }
+type ReceiptPrefillStatus = { receiptId: string; state: 'loading' | 'ready' | 'error'; message: string }
 type OutflowReceiptLink = { outflow_id: string; inventory_receipt_id: string }
 type OutflowVoid = { outflow_id: string; reason: string; created_at: string }
 type OrderOption = { id: string; customer_name_snapshot: string }
@@ -85,6 +86,8 @@ async function loadAllPages<T>(
 export function FinancialOutflowsPage() {
   const { id: businessId } = useBusiness()
   const today = useBusinessToday()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const receiptIdFromUrl = searchParams.get('receiptId')
   const [outflows, setOutflows] = useState<OutflowView[]>([])
   const [historyPage, setHistoryPage] = useState(0)
   const [historyTotal, setHistoryTotal] = useState(0)
@@ -121,20 +124,40 @@ export function FinancialOutflowsPage() {
   const [receiptLoadingMore, setReceiptLoadingMore] = useState(false)
   const [receiptError, setReceiptError] = useState<string | null>(null)
   const [selectedReceiptIds, setSelectedReceiptIds] = useState<string[]>([])
+  const [receiptPrefillStatus, setReceiptPrefillStatus] = useState<ReceiptPrefillStatus | null>(null)
   const [notes, setNotes] = useState('')
+  const receiptPrefillBlocked = receiptPrefillStatus?.state === 'loading' || receiptPrefillStatus?.state === 'error'
 
   const requestIdRef = useRef(newRequestId())
   const historyRequestRef = useRef(0)
   const orderSearchRequestRef = useRef(0)
   const receiptOffsetRef = useRef(0)
+  const receiptPrefillRequestRef = useRef<string | null>(null)
+  const prefilledReceiptRef = useRef<InventoryReceipt | null>(null)
   const formTriggerRef = useRef<HTMLButtonElement>(null)
   const formHeadingRef = useRef<HTMLHeadingElement>(null)
+  const amountInputRef = useRef<HTMLInputElement>(null)
   const wasFormOpenRef = useRef(false)
   const voidHeadingRef = useRef<HTMLHeadingElement>(null)
   const voidNoticeRef = useRef<HTMLParagraphElement>(null)
   const voidTriggerRef = useRef<HTMLButtonElement | null>(null)
   const wasVoidOpenRef = useRef(false)
   const voidRequestIdRef = useRef(newRequestId())
+
+  function clearReceiptPrefillFromUrl() {
+    if (!searchParams.has('receiptId')) return
+    const next = new URLSearchParams(searchParams)
+    next.delete('receiptId')
+    setSearchParams(next, { replace: true })
+    receiptPrefillRequestRef.current = null
+  }
+
+  function continueWithoutReceiptLink() {
+    clearReceiptPrefillFromUrl()
+    prefilledReceiptRef.current = null
+    setReceiptPrefillStatus(null)
+    setSelectedReceiptIds([])
+  }
 
   const loadHistory = useCallback(async (page = 0) => {
     const client = supabaseClient
@@ -273,10 +296,16 @@ export function FinancialOutflowsPage() {
         .order('created_at', { ascending: false })
         .range(from, from + RECEIPT_OPTION_LIMIT - 1)
       if (error) throw error
-      const rows = (data ?? []) as InventoryReceipt[]
-      receiptOffsetRef.current = from + rows.length
-      setReceiptOptions((current) => append ? [...current, ...rows] : rows)
-      setReceiptOptionsTotal(count ?? (append ? from + rows.length : rows.length))
+      const fetchedRows = (data ?? []) as InventoryReceipt[]
+      const rows = [...fetchedRows]
+      const prefilledReceipt = prefilledReceiptRef.current
+      if (prefilledReceipt && !rows.some((row) => row.id === prefilledReceipt.id)) rows.unshift(prefilledReceipt)
+      receiptOffsetRef.current = from + fetchedRows.length
+      setReceiptOptions((current) => {
+        const combined = append ? [...current, ...rows] : rows
+        return Array.from(new Map<string, InventoryReceipt>(combined.map((row): [string, InventoryReceipt] => [row.id, row])).values())
+      })
+      setReceiptOptionsTotal(count ?? (append ? from + fetchedRows.length : fetchedRows.length))
     } catch {
       setReceiptError('Não foi possível carregar os recebimentos físicos. Você ainda pode registrar a compra sem vinculá-la.')
       if (!append) setReceiptOptions([])
@@ -324,6 +353,74 @@ export function FinancialOutflowsPage() {
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadReceiptOptions() }, [loadReceiptOptions])
 
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => {
+    if (!receiptIdFromUrl) return
+    const requestKey = `${businessId}:${receiptIdFromUrl}`
+    if (receiptPrefillRequestRef.current === requestKey) return
+    receiptPrefillRequestRef.current = requestKey
+    prefilledReceiptRef.current = null
+    setShowForm(true)
+    setNotice(null)
+    setFormError(null)
+    setOutflowType('purchase')
+    setDescription('')
+    setCategory('')
+    setCounterpartyName('')
+    setAmount('')
+    setPaidOnOverride(null)
+    setSelectedReceiptIds([])
+    setNotes('')
+    setReceiptPrefillStatus({ receiptId: receiptIdFromUrl, state: 'loading', message: 'Carregando o recebimento para vincular ao pagamento…' })
+
+    const setPrefillError = (message: string) => setReceiptPrefillStatus({ receiptId: receiptIdFromUrl, state: 'error', message })
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(receiptIdFromUrl)) {
+      setPrefillError('O identificador do recebimento não é válido. Confira o link ou continue sem vincular um recebimento.')
+      return
+    }
+    if (!supabaseClient) {
+      setPrefillError('Não há conexão com o Supabase para confirmar este recebimento. A compra não foi lançada; reabra o link quando a conexão voltar ou continue sem vínculo.')
+      return
+    }
+
+    let active = true
+    void (async () => {
+      try {
+        const { data, error } = await supabaseClient.from('inventory_receipts')
+          .select('id, supplier_name, purchase_reference, received_on')
+          .eq('business_id', businessId).eq('id', receiptIdFromUrl).maybeSingle()
+        if (!active) return
+        if (error) {
+          setPrefillError('Não foi possível carregar este recebimento. Nenhum gasto foi lançado; reabra o link ou continue sem vínculo.')
+          return
+        }
+        if (!data) {
+          setPrefillError('Este recebimento não foi encontrado para esta empresa. Nenhum gasto foi lançado; confira o estoque ou continue sem vínculo.')
+          return
+        }
+        const receipt = data as InventoryReceipt
+        prefilledReceiptRef.current = receipt
+        setReceiptOptions((current) => [receipt, ...current.filter((row) => row.id !== receipt.id)])
+        setSelectedReceiptIds([receipt.id])
+        setOutflowType('purchase')
+        setCounterpartyName(receipt.supplier_name ?? '')
+        setDescription(receipt.purchase_reference
+          ? `Compra de estoque · ${receipt.purchase_reference}`.slice(0, 200)
+          : 'Compra de estoque')
+        setAmount('')
+        setPaidOnOverride(null)
+        setReceiptPrefillStatus({
+          receiptId: receipt.id,
+          state: 'ready',
+          message: `Recebimento de ${formatBusinessDate(receipt.received_on)} vinculado. Informe o valor que você realmente pagou; nada foi registrado ainda.`,
+        })
+      } catch {
+        if (active) setPrefillError('Não foi possível confirmar este recebimento. Nenhum gasto foi lançado; reabra o link ou continue sem vínculo.')
+      }
+    })()
+    return () => { active = false }
+  }, [businessId, receiptIdFromUrl])
+
   useEffect(() => {
     if (!showForm || outflowType !== 'delivery_cost') return
     const timer = window.setTimeout(() => { void loadOrderOptions(orderSearch) }, 250)
@@ -337,12 +434,19 @@ export function FinancialOutflowsPage() {
   }, [showForm])
 
   useEffect(() => {
+    if (receiptPrefillStatus?.state === 'ready') amountInputRef.current?.focus()
+  }, [receiptPrefillStatus?.state])
+
+  useEffect(() => {
     if (voidTarget) voidHeadingRef.current?.focus()
     else if (wasVoidOpenRef.current) voidTriggerRef.current?.focus()
     wasVoidOpenRef.current = Boolean(voidTarget)
   }, [voidTarget])
 
   function resetForm() {
+    clearReceiptPrefillFromUrl()
+    prefilledReceiptRef.current = null
+    setReceiptPrefillStatus(null)
     setOutflowType('')
     setDescription('')
     setCategory('')
@@ -360,6 +464,13 @@ export function FinancialOutflowsPage() {
   }
 
   function toggleReceipt(receiptId: string) {
+    if (receiptPrefillStatus?.state === 'ready' && selectedReceiptIds.includes(receiptId)) {
+      clearReceiptPrefillFromUrl()
+      prefilledReceiptRef.current = null
+      setReceiptPrefillStatus(null)
+      setSelectedReceiptIds((current) => current.filter((id) => id !== receiptId))
+      return
+    }
     setSelectedReceiptIds((current) => current.includes(receiptId)
       ? current.filter((id) => id !== receiptId)
       : [...current, receiptId])
@@ -444,6 +555,7 @@ export function FinancialOutflowsPage() {
   }
 
   function changeOutflowType(value: OutflowType | '') {
+    if (receiptPrefillStatus?.state === 'ready' && value !== 'purchase') continueWithoutReceiptLink()
     setOutflowType(value)
     setFormError(null)
     if (value !== 'purchase') setSelectedReceiptIds([])
@@ -453,6 +565,23 @@ export function FinancialOutflowsPage() {
       setOrderOptions([])
       setOrdersError(null)
     }
+  }
+
+  function applyRecentOutflowSuggestion(outflow: OutflowView) {
+    setOutflowType(outflow.outflow_type)
+    setDescription(outflow.description)
+    setCategory(outflow.category ?? '')
+    setCounterpartyName(outflow.counterparty_name ?? '')
+    setAmount('')
+    setPaidOnOverride(null)
+    setSelectedOrder(null)
+    setOrderSearch('')
+    setSelectedReceiptIds([])
+    setNotes('')
+    setFormError(null)
+    setReceiptPrefillStatus(null)
+    prefilledReceiptRef.current = null
+    clearReceiptPrefillFromUrl()
   }
 
   function openVoidForm(outflow: OutflowView, trigger: HTMLButtonElement) {
@@ -519,6 +648,12 @@ export function FinancialOutflowsPage() {
   const startRow = historyTotal === 0 ? 0 : historyPage * PAGE_SIZE + 1
   const endRow = Math.min((historyPage + 1) * PAGE_SIZE, historyTotal)
   const pageCount = Math.max(1, Math.ceil(historyTotal / PAGE_SIZE))
+  const recentOutflowSuggestions = Array.from(new Map<string, OutflowView>(outflows
+    .filter((outflow) => !outflow.void_event)
+    .map((outflow): [string, OutflowView] => [
+      `${outflow.outflow_type}|${outflow.description}|${outflow.category ?? ''}|${outflow.counterparty_name ?? ''}`,
+      outflow,
+    ])).values()).slice(0, 4)
 
   return (
     <div className="page-stack">
@@ -539,14 +674,27 @@ export function FinancialOutflowsPage() {
         <form className="surface-panel record-form" onSubmit={handleSubmit}>
           <div className="section-heading section-heading-compact">
             <div><p className="eyebrow">LANÇAMENTOS</p><h2 ref={formHeadingRef} tabIndex={-1}>Registrar gasto já pago</h2></div>
-            <button className="text-button" disabled={saving || uncertain} onClick={() => setShowForm(false)} type="button">Fechar</button>
+            <button className="text-button" disabled={saving || uncertain} onClick={() => { setShowForm(false); clearReceiptPrefillFromUrl(); prefilledReceiptRef.current = null; setReceiptPrefillStatus(null) }} type="button">Fechar</button>
           </div>
           <p className="section-footnote">Cada registro representa um valor que você já pagou. Esta tela não acompanha contas que ainda não foram pagas.</p>
+          {receiptPrefillStatus && <div className={`form-message ${receiptPrefillStatus.state === 'error' ? 'form-message-warning' : receiptPrefillStatus.state === 'ready' ? 'form-message-success' : ''}`} role={receiptPrefillStatus.state === 'error' ? 'alert' : 'status'}>
+            <p>{receiptPrefillStatus.message}</p>
+            {receiptPrefillStatus.state === 'error' && <button className="text-button" disabled={saving} onClick={continueWithoutReceiptLink} type="button">Continuar sem vincular recebimento</button>}
+          </div>}
+          {!receiptPrefillStatus && recentOutflowSuggestions.length > 0 && <div className="record-field record-field-wide">
+            <span className="field-label">Atalhos de gastos recentes <span className="field-optional">preenche descrição, categoria e favorecido</span></span>
+            <div className="record-form-actions">
+              {recentOutflowSuggestions.map((outflow) => <button className="button button-secondary" key={`${outflow.id}-${outflow.description}`} onClick={() => applyRecentOutflowSuggestion(outflow)} type="button">
+                {outflowTypeLabel(outflow.outflow_type)} · {outflow.description}{outflow.counterparty_name ? ` · ${outflow.counterparty_name}` : ''}
+              </button>)}
+            </div>
+            <small className="field-optional">O valor fica em branco e a data volta para hoje. Confira antes de salvar.</small>
+          </div>}
 
           <div className="record-form-grid">
             <label className="record-field">
               <span className="field-label">Tipo de gasto <span aria-hidden="true">*</span></span>
-              <select className="text-input" disabled={saving || uncertain} onChange={(event) => changeOutflowType(event.target.value as OutflowType | '')} required value={outflowType}>
+              <select className="text-input" disabled={saving || uncertain || receiptPrefillBlocked || receiptPrefillStatus?.state === 'ready'} onChange={(event) => changeOutflowType(event.target.value as OutflowType | '')} required value={outflowType}>
                 <option value="">Selecione o tipo de gasto</option>
                 <option value="purchase">Compra de produtos para revenda</option>
                 <option value="operating_expense">Gasto da empresa</option>
@@ -558,28 +706,28 @@ export function FinancialOutflowsPage() {
             </label>
             <label className="record-field">
               <span className="field-label">Valor pago (R$) <span aria-hidden="true">*</span></span>
-              <input className="text-input" disabled={saving || uncertain} inputMode="decimal" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" required value={amount} />
+              <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} inputMode="decimal" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" ref={amountInputRef} required value={amount} />
             </label>
             <label className="record-field">
               <span className="field-label">Descrição <span aria-hidden="true">*</span></span>
-              <input className="text-input" disabled={saving || uncertain} maxLength={200} onChange={(event) => setDescription(event.target.value)} required value={description} />
+              <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={200} onChange={(event) => setDescription(event.target.value)} required value={description} />
             </label>
             <label className="record-field">
               <span className="field-label">Categoria <span className="field-optional">opcional, texto livre</span></span>
-              <input className="text-input" disabled={saving || uncertain} maxLength={120} onChange={(event) => setCategory(event.target.value)} value={category} />
+              <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={120} onChange={(event) => setCategory(event.target.value)} value={category} />
             </label>
             <label className="record-field">
               <span className="field-label">{outflowType === 'purchase' ? 'Fornecedor' : outflowType === 'delivery_cost' ? 'Entregador / prestador' : 'Favorecido'} <span className="field-optional">opcional</span></span>
-              <input className="text-input" disabled={saving || uncertain} maxLength={160} onChange={(event) => setCounterpartyName(event.target.value)} value={counterpartyName} />
+              <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={160} onChange={(event) => setCounterpartyName(event.target.value)} value={counterpartyName} />
             </label>
             <label className="record-field">
               <span className="field-label">Pago em <span aria-hidden="true">*</span></span>
-              <input className="text-input" disabled={saving || uncertain} max={today} onChange={(event) => setPaidOnOverride(event.target.value)} required type="date" value={paidOn} />
+              <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} max={today} onChange={(event) => setPaidOnOverride(event.target.value)} required type="date" value={paidOn} />
             </label>
 
             {outflowType === 'purchase' && <div className="record-field record-field-wide">
               <span className="field-label">Recebimentos de estoque vinculados <span className="field-optional">opcional</span></span>
-              <p className="section-footnote">O vínculo serve apenas para conferência. Ele não altera o estoque nem registra outro pagamento.</p>
+              <p className="section-footnote">Este gasto ficará ligado ao recebimento para consulta. O saldo de estoque já foi atualizado quando a mercadoria foi recebida.</p>
               {receiptLoading && <p className="inline-state">Carregando recebimentos físicos…</p>}
               {receiptError && <div className="form-message form-message-warning" role="status"><p>{receiptError}</p><button className="text-button" disabled={saving || uncertain} onClick={() => void loadReceiptOptions()} type="button">Tentar carregar novamente</button></div>}
               {!receiptLoading && !receiptError && receiptOptions.length === 0 && <p className="inline-state">Nenhum recebimento físico disponível para vincular. A compra ainda pode ser registrada sem vínculo.</p>}
@@ -589,7 +737,7 @@ export function FinancialOutflowsPage() {
                     const supplier = receipt.supplier_name?.trim() || 'Fornecedor não informado'
                     const reference = receipt.purchase_reference?.trim()
                     return <label className="record-checkbox" key={receipt.id}>
-                      <input checked={selectedReceiptIds.includes(receipt.id)} disabled={saving || uncertain} onChange={() => toggleReceipt(receipt.id)} type="checkbox" />
+                      <input checked={selectedReceiptIds.includes(receipt.id)} disabled={saving || uncertain || receiptPrefillBlocked} onChange={() => toggleReceipt(receipt.id)} type="checkbox" />
                       <span>{supplier}{reference ? ` · Ref. ${reference}` : ''} · {formatBusinessDate(receipt.received_on)}</span>
                     </label>
                   })}
@@ -621,14 +769,14 @@ export function FinancialOutflowsPage() {
 
             <label className="record-field record-field-wide">
               <span className="field-label">Observações <span className="field-optional">opcional</span></span>
-              <textarea className="text-input record-textarea" disabled={saving || uncertain} maxLength={2000} onChange={(event) => setNotes(event.target.value)} rows={2} value={notes} />
+              <textarea className="text-input record-textarea" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={2000} onChange={(event) => setNotes(event.target.value)} rows={2} value={notes} />
             </label>
           </div>
 
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
           <div className="record-form-actions">
-            <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Registrando…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Registrar valor pago'}</button>
-            <button className="text-button" disabled={saving || uncertain} onClick={() => setShowForm(false)} type="button">Descartar</button>
+            <button className="button button-primary" disabled={saving || receiptPrefillStatus?.state === 'loading' || receiptPrefillStatus?.state === 'error'} type="submit">{saving ? 'Registrando…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Registrar valor pago'}</button>
+            <button className="text-button" disabled={saving || uncertain} onClick={() => { setShowForm(false); clearReceiptPrefillFromUrl(); prefilledReceiptRef.current = null; setReceiptPrefillStatus(null) }} type="button">Descartar</button>
           </div>
         </form>
       )}

@@ -435,6 +435,8 @@ export function WhatsAppInboxPage() {
     : null
   const [customerDraft, setCustomerDraft] = useState('')
   const [orderDraft, setOrderDraft] = useState('')
+  const conversationContextNeedsSave = customerDraft !== (selectedLink?.customer_id ?? '')
+    || orderDraft !== (selectedLink?.order_id ?? '')
 
   useEffect(() => {
     setCustomerDraft(selectedLink?.customer_id ?? '')
@@ -669,6 +671,11 @@ export function WhatsAppInboxPage() {
             <label className="whatsapp-context-field"><span>Cliente</span><select disabled={!currentConversation || linkLoading || role !== 'owner'} onChange={(event) => { setCustomerDraft(event.target.value); setOrderDraft('') }} value={customerDraft}><option value="">Sem cliente associado</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
             <label className="whatsapp-context-field"><span>Pedido relacionado</span><select disabled={!currentConversation || !customerDraft || role !== 'owner'} onChange={(event) => setOrderDraft(event.target.value)} value={orderDraft}><option value="">Sem pedido associado</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
             {role === 'owner' ? <button className="button button-secondary" disabled={!currentConversation || linkSaving || linkLoading} type="submit">{linkSaving ? 'Salvando…' : 'Salvar vínculo'}</button> : <p className="section-footnote">Somente a gestão pode alterar vínculos de atendimento.</p>}
+            {customerDraft && role === 'owner'
+              ? conversationContextNeedsSave
+                ? <p className="section-footnote whatsapp-match-hint">Salve o vínculo do cliente acima para manter a associação nesta conversa. Depois, você poderá criar o rascunho do pedido.</p>
+                : <><Link className="button button-primary" to={`/pedidos/novo?cliente=${encodeURIComponent(customerDraft)}`}>Criar rascunho de pedido</Link><p className="section-footnote whatsapp-match-hint">O cliente e os dados do pedido anterior podem ser reaproveitados. O pedido só será salvo quando você revisar e confirmar no formulário.</p></>
+              : <p className="section-footnote whatsapp-match-hint">{role === 'owner' ? 'Vincule um cliente acima para preparar um pedido sem sair desta conversa.' : 'Somente a gestão pode criar pedidos.'}</p>}
           </form>
         </>}
       </section>
