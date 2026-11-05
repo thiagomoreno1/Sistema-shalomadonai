@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { Icon } from '../components/Icon'
 import { supabaseClient } from '../lib/supabase'
@@ -57,7 +57,45 @@ function statusLabel(status: DriverDelivery['status']) {
 
 function phoneHref(value: string) { return `tel:${value.replace(/[^+\d]/g, '')}` }
 
-export function DeliveryDriverPortalPage() {
+function dateOffset(days: number) {
+  const date = new Date()
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+const demoContext: DriverContext = {
+  business_id: 'demo-business',
+  worker_id: 'demo-driver',
+  worker_name: 'Carlos · demonstração',
+  business_name: 'Shalom Adonai',
+  is_active: true,
+}
+
+const demoDeliveries: DriverDelivery[] = [
+  {
+    delivery_id: 'demo-ready', order_id: 'demo-order-ready', status: 'ready',
+    scheduled_on: dateOffset(0), time_window: '14h–16h', dispatched_at: null, delivered_at: null,
+    customer_name: 'Marina Souza · exemplo', customer_phone: '(21) 90000-0001',
+    delivery_address: 'Rua de Demonstração, 123 · Centro, Niterói/RJ', order_created_at: new Date().toISOString(),
+    items: [{ name: 'Kit de limpeza', quantity: 1, unit: 'un' }, { name: 'Sabão líquido', quantity: 2, unit: 'un' }],
+  },
+  {
+    delivery_id: 'demo-dispatched', order_id: 'demo-order-dispatched', status: 'dispatched',
+    scheduled_on: dateOffset(0), time_window: '16h–18h', dispatched_at: new Date().toISOString(), delivered_at: null,
+    customer_name: 'Rafael Lima · exemplo', customer_phone: '(21) 90000-0002',
+    delivery_address: 'Avenida de Exemplo, 45 · Icaraí, Niterói/RJ', order_created_at: new Date().toISOString(),
+    items: [{ name: 'Amaciante concentrado', quantity: 3, unit: 'un' }],
+  },
+  {
+    delivery_id: 'demo-delivered', order_id: 'demo-order-delivered', status: 'delivered',
+    scheduled_on: dateOffset(-1), time_window: '10h–12h', dispatched_at: new Date().toISOString(), delivered_at: new Date().toISOString(),
+    customer_name: 'Joana Martins · exemplo', customer_phone: '(21) 90000-0003',
+    delivery_address: 'Rua das Amostras, 80 · Santa Rosa, Niterói/RJ', order_created_at: new Date().toISOString(),
+    items: [{ name: 'Cesta doméstica', quantity: 1, unit: 'un' }],
+  },
+]
+
+export function DeliveryDriverPortalPage({ preview = false }: { preview?: boolean }) {
   const { session } = useAuth()
   const navigate = useNavigate()
   const [context, setContext] = useState<DriverContext | null>(null)
@@ -77,6 +115,13 @@ export function DeliveryDriverPortalPage() {
   const confirmationWasOpenRef = useRef(false)
 
   const loadPortal = useCallback(async (showLoading = true) => {
+    if (preview) {
+      setContext(demoContext)
+      setDeliveries(demoDeliveries)
+      setError(null)
+      setLoading(false)
+      return
+    }
     if (!supabaseClient) {
       setError('A conexão do painel não está configurada.')
       setLoading(false)
@@ -112,7 +157,7 @@ export function DeliveryDriverPortalPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [preview])
 
   useEffect(() => { void loadPortal() }, [loadPortal])
 
@@ -134,7 +179,7 @@ export function DeliveryDriverPortalPage() {
   const visibleDeliveries = filter === 'active' ? activeDeliveries : completedDeliveries
 
   async function confirmStatusChange() {
-    if (!supabaseClient || !confirmation || savingDeliveryId) return
+    if (preview || !supabaseClient || !confirmation || savingDeliveryId) return
     const requestKey = `${confirmation.deliveryId}:${confirmation.status}`
     const requestId = requestIdsRef.current.get(requestKey) ?? newRequestId()
     requestIdsRef.current.set(requestKey, requestId)
@@ -187,11 +232,12 @@ export function DeliveryDriverPortalPage() {
         </div>
         <div className="driver-portal-account">
           <span>{context?.worker_name ?? session?.user.email}</span>
-          <button className="signout-button" onClick={() => void signOut()} type="button">Sair</button>
+          {preview ? <Link className="signout-button" to="/equipe">Voltar</Link> : <button className="signout-button" onClick={() => void signOut()} type="button">Sair</button>}
         </div>
       </header>
 
       <div className="driver-portal-content">
+        {preview && <div className="driver-portal-preview-banner" role="status"><Icon name="shield" /><span><strong>Prévia do painel</strong> Dados fictícios; nenhuma entrega ou alteração será salva.</span></div>}
         <div className="driver-portal-heading">
           <div><p className="eyebrow">ENTREGAS ATRIBUÍDAS</p><h1>Minhas entregas</h1><p>Endereços, itens e atualizações dos seus pedidos.</p></div>
           <button className="button button-secondary" disabled={loading} onClick={() => void loadPortal()} type="button">{loading ? 'Atualizando…' : 'Atualizar'}</button>
@@ -216,7 +262,7 @@ export function DeliveryDriverPortalPage() {
               const awaitingConfirmation = confirmation?.deliveryId === delivery.delivery_id
               const deliveredAt = formatTimestamp(delivery.delivered_at)
               const dispatchedAt = formatTimestamp(delivery.dispatched_at)
-              const mapsUrl = delivery.delivery_address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(delivery.delivery_address)}` : null
+              const mapsUrl = !preview && delivery.delivery_address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(delivery.delivery_address)}` : null
               return <li className="driver-delivery-card surface-panel" key={delivery.delivery_id}>
                 <div className="driver-delivery-heading">
                   <div><p className="eyebrow">{formatDate(delivery.scheduled_on)}{delivery.time_window ? ` · ${delivery.time_window}` : ''}</p><p className="driver-delivery-order-reference">Pedido registrado em {formatTimestamp(delivery.order_created_at)}</p><h2>{delivery.customer_name}</h2></div>
@@ -224,13 +270,16 @@ export function DeliveryDriverPortalPage() {
                 </div>
                 {delivery.delivery_address && <div className="driver-delivery-address"><strong>Endereço</strong><p>{delivery.delivery_address}</p>{mapsUrl && <a className="quiet-link" href={mapsUrl} rel="noreferrer" target="_blank">Abrir no mapa <Icon name="arrow" /></a>}</div>}
                 {!delivery.delivery_address?.trim() && <p className="driver-delivery-missing-address" role="alert">Endereço não informado. Fale com a gestão antes de sair.</p>}
-                {delivery.customer_phone && <a className="driver-delivery-phone" href={phoneHref(delivery.customer_phone)}><Icon name="phone" /> Ligar para {delivery.customer_name}</a>}
+                {delivery.customer_phone && (preview
+                  ? <span className="driver-delivery-phone is-preview-contact"><Icon name="phone" /> Contato de exemplo</span>
+                  : <a className="driver-delivery-phone" href={phoneHref(delivery.customer_phone)}><Icon name="phone" /> Ligar para {delivery.customer_name}</a>)}
                 <div className="driver-delivery-items"><strong>Itens do pedido</strong><ul>{delivery.items.map((item, index) => <li key={`${delivery.delivery_id}-${index}`}><span>{item.name}</span><span>{item.quantity}{item.unit ? ` ${item.unit}` : ''}</span></li>)}</ul></div>
                 {delivery.status === 'awaiting_separation' && <p className="driver-delivery-note">A loja ainda está separando este pedido. A opção de saída aparecerá quando estiver pronto.</p>}
                 {delivery.status === 'dispatched' && dispatchedAt && <p className="driver-delivery-note">Saiu para entrega em {dispatchedAt}.</p>}
                 {delivery.status === 'delivered' && deliveredAt && <p className="driver-delivery-note">Entrega confirmada em {deliveredAt}.</p>}
-                {delivery.status === 'ready' && <button className="button button-primary driver-delivery-action" disabled={Boolean(savingDeliveryId) || !delivery.delivery_address?.trim()} onClick={(event) => { focusReturnRef.current = event.currentTarget; setNotice(null); setConfirmation({ deliveryId: delivery.delivery_id, status: 'dispatched' }); setActionError(null) }} type="button"><Icon name="truck" /> Confirmar saída para entrega</button>}
-                {delivery.status === 'dispatched' && <button className="button button-primary driver-delivery-action" disabled={Boolean(savingDeliveryId)} onClick={(event) => { focusReturnRef.current = event.currentTarget; setNotice(null); setConfirmation({ deliveryId: delivery.delivery_id, status: 'delivered' }); setActionError(null) }} type="button"><Icon name="check" /> Confirmar entrega</button>}
+                {delivery.status === 'ready' && <button className="button button-primary driver-delivery-action" disabled={preview || Boolean(savingDeliveryId) || !delivery.delivery_address?.trim()} onClick={(event) => { focusReturnRef.current = event.currentTarget; setNotice(null); setConfirmation({ deliveryId: delivery.delivery_id, status: 'dispatched' }); setActionError(null) }} type="button"><Icon name="truck" /> Confirmar saída para entrega</button>}
+                {delivery.status === 'dispatched' && <button className="button button-primary driver-delivery-action" disabled={preview || Boolean(savingDeliveryId)} onClick={(event) => { focusReturnRef.current = event.currentTarget; setNotice(null); setConfirmation({ deliveryId: delivery.delivery_id, status: 'delivered' }); setActionError(null) }} type="button"><Icon name="check" /> Confirmar entrega</button>}
+                {preview && ['ready', 'dispatched'].includes(delivery.status) && <p className="section-footnote">As confirmações ficam disponíveis no acesso real do entregador.</p>}
                 {awaitingConfirmation && <div className="driver-delivery-confirmation" ref={confirmationRef} role="group" aria-label="Confirmar atualização">
                   <p>{confirmation.status === 'dispatched' ? 'Confirma que este pedido saiu para entrega?' : 'Confirma que este pedido foi entregue ao cliente?'}</p>
                   <button className="button button-primary" disabled={savingDeliveryId === delivery.delivery_id} onClick={() => void confirmStatusChange()} type="button">{savingDeliveryId === delivery.delivery_id ? 'Salvando…' : 'Sim, confirmar'}</button>

@@ -42,6 +42,11 @@
   padding: 34px 24px max(42px, env(safe-area-inset-bottom));
 }
 
+.driver-portal-preview-banner { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: var(--paper); font-size: 12px; line-height: 1.45; }
+.driver-portal-preview-banner svg { width: 18px; height: 18px; flex: 0 0 auto; color: var(--accent); }
+.driver-portal-preview-banner strong { margin-right: 5px; color: var(--ink); }
+.driver-delivery-phone.is-preview-contact { color: var(--muted); background: var(--canvas); }
+
 .driver-portal-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .driver-portal-heading h1 { margin: 5px 0 4px; color: var(--ink); font-size: clamp(27px, 4vw, 36px); letter-spacing: -0.045em; line-height: 1.1; }
 .driver-portal-heading p:last-child { margin: 0; color: var(--muted); font-size: 13px; }

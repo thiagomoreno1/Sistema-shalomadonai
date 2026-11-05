@@ -15,6 +15,9 @@ export function TeamPage() {
   const [showForm, setShowForm] = useState(false)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [accountWorkerId, setAccountWorkerId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [linkWorkerId, setLinkWorkerId] = useState<string | null>(null)
   const [linkEmail, setLinkEmail] = useState('')
@@ -51,27 +54,80 @@ export function TeamPage() {
     if (!supabaseClient || saving || role !== 'owner') return
     const cleanName = name.trim()
     const cleanPhone = phone.trim()
-    if (cleanName.length < 2 || cleanName.length > 120 || cleanPhone.length > 64) {
-      setError('Confira o nome e o telefone do entregador.')
+    const cleanEmail = email.trim().toLowerCase()
+    if ((!accountWorkerId && (cleanName.length < 2 || cleanName.length > 120)) || cleanPhone.length > 64 || !cleanEmail || password.length < 8 || password.length > 128) {
+      setError('Confira o nome, o e-mail e a senha. A senha precisa ter pelo menos 8 caracteres.')
       return
     }
     setSaving(true)
     setError(null)
     setNotice(null)
     try {
-      const { error: insertError } = await supabaseClient.from('delivery_workers').insert({
-        business_id: businessId,
-        name: cleanName,
-        phone: cleanPhone || null,
+      let workerId = accountWorkerId
+      if (!workerId) {
+        const { data: workerData, error: insertError } = await supabaseClient.from('delivery_workers').insert({
+          business_id: businessId,
+          name: cleanName,
+          phone: cleanPhone || null,
+        }).select('id').single()
+        if (insertError || !workerData?.id) {
+          setError('Não foi possível cadastrar o entregador. Tente novamente.')
+          return
+        }
+        workerId = workerData.id
+        setAccountWorkerId(workerId)
+      }
+
+      const { error: accountError } = await supabaseClient.functions.invoke('create-delivery-driver', {
+        body: { business_id: businessId, worker_id: workerId, email: cleanEmail, password },
       })
-      if (insertError) {
-        setError('Não foi possível cadastrar o entregador. Tente novamente.')
+      if (accountError) {
+        const response = (accountError as unknown as { context?: Response }).context
+        let failureCode: string | null = null
+        if (response && typeof response.clone === 'function') {
+          const failure = await response.clone().json().catch(() => null) as { error?: string } | null
+          failureCode = failure?.error ?? null
+        }
+        if (failureCode === 'email_already_exists') {
+          setShowForm(false)
+          setAccountWorkerId(null)
+          setPassword('')
+          setLinkWorkerId(workerId)
+          setLinkEmail(cleanEmail)
+          await loadWorkers()
+          setError('Esse e-mail já tem uma conta. Confira se é a conta do entregador e vincule-a abaixo.')
+          return
+        }
+        if (failureCode === 'email_has_management_access') {
+          setShowForm(false)
+          setAccountWorkerId(null)
+          setPassword('')
+          await loadWorkers()
+          setError('Este e-mail já tem acesso à gestão. Use outro e-mail para criar o acesso do entregador.')
+          return
+        }
+        if (failureCode === 'account_created_unlinked') {
+          setShowForm(false)
+          setAccountWorkerId(null)
+          setPassword('')
+          setLinkWorkerId(workerId)
+          setLinkEmail(cleanEmail)
+          await loadWorkers()
+          setError('A conta foi criada, mas ainda não foi vinculada. Use “Vincular conta existente” para concluir o acesso.')
+          return
+        }
+        await loadWorkers()
+        setError('O cadastro do entregador foi salvo, mas não foi possível criar o acesso. Tente novamente; a pessoa não será cadastrada em duplicidade.')
         return
       }
+
       setName('')
       setPhone('')
+      setEmail('')
+      setPassword('')
+      setAccountWorkerId(null)
       setShowForm(false)
-      setNotice('Entregador cadastrado. Agora você pode conectar o painel dele.')
+      setNotice(`Acesso criado para ${cleanName || workers.find((worker) => worker.id === workerId)?.name || 'o entregador'}. A pessoa já pode entrar pelo mesmo botão “Entrar” do sistema.`)
       await loadWorkers()
     } catch {
       setError('Não foi possível cadastrar o entregador. Tente novamente.')
@@ -93,7 +149,9 @@ export function TeamPage() {
         p_email: linkEmail.trim().toLowerCase(),
       })
       if (linkError) {
-        setError('Não foi possível conectar. Confira se o entregador já criou a conta e confirmou o e-mail.')
+        setError(linkError.message.toLowerCase().includes('already has business access')
+          ? 'Este e-mail já tem acesso à gestão. Use outro e-mail para o entregador.'
+          : 'Não foi possível conectar. Confira se o entregador já criou a conta e confirmou o e-mail.')
         return
       }
       setLinkWorkerId(null)
@@ -153,23 +211,13 @@ export function TeamPage() {
     }
   }
 
-  async function copySignupLink() {
-    const signupUrl = new URL('/criar-conta-entregador', window.location.origin).toString()
-    try {
-      await navigator.clipboard.writeText(signupUrl)
-      setNotice('Link de cadastro copiado. Envie ao entregador para ele criar a própria conta.')
-    } catch {
-      setNotice(`Envie este link ao entregador: ${signupUrl}`)
-    }
-  }
-
   const activeCount = workers.filter((worker) => worker.is_active).length
 
   return (
     <div className="page-stack team-page">
       <header className="page-heading">
-        <div><p className="eyebrow">GESTÃO DE ACESSOS</p><h1>Equipe</h1><p className="page-description">Cadastre entregadores e conecte cada pessoa ao próprio painel.</p></div>
-        {role === 'owner' && <button className="button button-primary" onClick={() => { setShowForm((open) => !open); setError(null); setNotice(null) }} type="button"><Icon name="plus" /> Novo entregador</button>}
+        <div><p className="eyebrow">GESTÃO DE ACESSOS</p><h1>Equipe</h1><p className="page-description">Crie o acesso do entregador aqui. Depois, ele entra pelo mesmo login e vê apenas as entregas atribuídas.</p></div>
+        {role === 'owner' && <div className="team-heading-actions"><Link className="button button-secondary" to="/entregador/visualizar"><Icon name="truck" /> Visualizar painel</Link><button className="button button-primary" onClick={() => { setShowForm((open) => !open); setAccountWorkerId(null); setName(''); setPhone(''); setEmail(''); setPassword(''); setError(null); setNotice(null) }} type="button"><Icon name="plus" /> Novo entregador</button></div>}
       </header>
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
@@ -177,35 +225,39 @@ export function TeamPage() {
 
       {role !== 'owner' ? <section className="surface-panel team-state"><h2>Acesso da equipe</h2><p>A gestão da equipe é feita pela pessoa proprietária da empresa.</p></section> : <>
         {showForm && <form className="surface-panel record-form" onSubmit={(event) => void createWorker(event)}>
-          <div className="section-heading section-heading-compact"><div><p className="eyebrow">CADASTRO</p><h2>Novo entregador</h2></div><button className="text-button" disabled={saving} onClick={() => setShowForm(false)} type="button">Fechar</button></div>
-          <p className="section-footnote">Cadastre os dados básicos. A conta e a senha são criadas pelo próprio entregador no link de cadastro.</p>
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">ACESSO DO ENTREGADOR</p><h2>{accountWorkerId ? `Criar acesso para ${workers.find((worker) => worker.id === accountWorkerId)?.name ?? 'entregador'}` : 'Novo entregador'}</h2></div><button className="text-button" disabled={saving} onClick={() => { setShowForm(false); setAccountWorkerId(null); setPassword('') }} type="button">Fechar</button></div>
+          <p className="section-footnote">O acesso fica ligado a este cadastro. O entregador usa o mesmo endereço de login da gestão.</p>
           <div className="record-form-grid">
-            <label className="record-field"><span className="field-label">Nome</span><input autoComplete="name" className="text-input" maxLength={120} onChange={(event) => setName(event.target.value)} required value={name} /></label>
-            <label className="record-field"><span className="field-label">Telefone <span className="field-optional">opcional</span></span><input autoComplete="tel" className="text-input" maxLength={64} onChange={(event) => setPhone(event.target.value)} type="tel" value={phone} /></label>
+            {!accountWorkerId && <label className="record-field"><span className="field-label">Nome</span><input autoComplete="name" className="text-input" maxLength={120} onChange={(event) => setName(event.target.value)} required value={name} /></label>}
+            {!accountWorkerId && <label className="record-field"><span className="field-label">Telefone <span className="field-optional">opcional</span></span><input autoComplete="tel" className="text-input" maxLength={64} onChange={(event) => setPhone(event.target.value)} type="tel" value={phone} /></label>}
+            <label className="record-field"><span className="field-label">E-mail de acesso</span><input autoComplete="email" autoCapitalize="none" className="text-input" maxLength={320} onChange={(event) => setEmail(event.target.value)} required type="email" value={email} /></label>
+            <label className="record-field"><span className="field-label">Senha inicial</span><input autoComplete="new-password" className="text-input" minLength={8} maxLength={128} onChange={(event) => setPassword(event.target.value)} required type="password" value={password} /></label>
           </div>
-          <div className="record-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar entregador'}</button></div>
+          <p className="section-footnote">A senha inicial não será enviada por e-mail. Compartilhe-a diretamente com o entregador.</p>
+          <div className="record-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Criando acesso…' : 'Cadastrar e criar acesso'}</button></div>
         </form>}
 
         <section className="surface-panel record-panel" aria-labelledby="team-drivers-title">
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTREGAS</p><h2 id="team-drivers-title">Entregadores</h2></div><span className="neutral-status">{loading ? 'Carregando…' : `${activeCount} ativos`}</span></div>
           {loading ? <p className="inline-state" aria-live="polite">Carregando equipe…</p> : workers.length === 0 ? <p className="inline-state">Nenhum entregador cadastrado.</p> : <ul className="worker-list team-worker-list">{workers.map((worker) => <li className={worker.is_active ? '' : 'record-inactive'} key={worker.id}>
-            <span><strong>{worker.name}</strong><small>{worker.phone || 'Telefone não informado'} · {worker.is_active ? 'Ativo' : 'Inativo'} · {worker.user_id ? 'Painel conectado' : 'Painel não conectado'}</small></span>
+            <span><strong>{worker.name}</strong><small>{worker.phone || 'Telefone não informado'} · {worker.is_active ? 'Ativo' : 'Inativo'} · {worker.user_id ? 'Acesso ativo' : 'Sem acesso ao painel'}</small></span>
             <div className="record-form-actions">
-              {role === 'owner' && worker.is_active && !worker.user_id && <button className="text-button" onClick={() => { setLinkWorkerId(linkWorkerId === worker.id ? null : worker.id); setLinkEmail(''); setError(null) }} type="button">{linkWorkerId === worker.id ? 'Fechar' : 'Conectar painel'}</button>}
+              {role === 'owner' && worker.is_active && !worker.user_id && <><button className="text-button" onClick={() => { setAccountWorkerId(worker.id); setName(worker.name); setPhone(worker.phone ?? ''); setEmail(''); setPassword(''); setShowForm(true); setError(null); setNotice(null) }} type="button">Criar acesso</button><button className="text-button" onClick={() => { setLinkWorkerId(linkWorkerId === worker.id ? null : worker.id); setLinkEmail(''); setError(null) }} type="button">{linkWorkerId === worker.id ? 'Fechar' : 'Vincular conta existente'}</button></>}
               {role === 'owner' && worker.user_id && <button className="text-button" onClick={() => setConfirmUnlinkWorkerId(confirmUnlinkWorkerId === worker.id ? null : worker.id)} type="button">{confirmUnlinkWorkerId === worker.id ? 'Cancelar' : 'Remover acesso'}</button>}
+              {role === 'owner' && worker.user_id && <Link className="text-button" to="/entregador/visualizar">Prévia do painel</Link>}
               <button className="text-button" disabled={actionWorkerId !== null} onClick={() => void setWorkerActive(worker)} type="button">{actionWorkerId === worker.id ? 'Salvando…' : worker.is_active ? 'Desativar' : 'Reativar'}</button>
             </div>
             {linkWorkerId === worker.id && <form className="worker-access-form" onSubmit={(event) => void connectDriver(event, worker)}>
               <label className="record-field"><span className="field-label">E-mail da conta do entregador</span><input autoComplete="off" className="text-input" onChange={(event) => setLinkEmail(event.target.value)} required type="email" value={linkEmail} /></label>
-              <p className="section-footnote">A conta precisa ter sido criada pelo entregador. Não use a conta da gestão.</p>
-              <button className="button button-secondary" disabled={actionWorkerId !== null} type="submit">{actionWorkerId === worker.id ? 'Conectando…' : 'Conectar ao painel'}</button>
+              <p className="section-footnote">Use esta opção se o entregador já tem uma conta criada neste sistema.</p>
+              <button className="button button-secondary" disabled={actionWorkerId !== null} type="submit">{actionWorkerId === worker.id ? 'Vinculando…' : 'Vincular conta existente'}</button>
             </form>}
             {confirmUnlinkWorkerId === worker.id && <div className="worker-access-form" role="group" aria-label={`Remover o painel de ${worker.name}`}>
               <p className="section-footnote">O entregador perderá acesso ao painel; o cadastro e o histórico de entregas permanecem.</p>
               <button className="button button-secondary" disabled={actionWorkerId !== null} onClick={() => void unlinkDriver(worker)} type="button">{actionWorkerId === worker.id ? 'Removendo…' : 'Confirmar remoção'}</button>
             </div>}
           </li>)}</ul>}
-          <div className="team-driver-signup"><span>Envie o link para o entregador criar a própria conta.</span><button className="text-button" onClick={() => void copySignupLink()} type="button">Copiar link de cadastro</button></div>
+          <div className="team-driver-signup"><span>O entregador entra pelo mesmo endereço do sistema. A conta dele abre somente o painel de entregas.</span></div>
         </section>
 
         <section className="surface-panel record-panel team-help-panel" aria-labelledby="team-orders-title">

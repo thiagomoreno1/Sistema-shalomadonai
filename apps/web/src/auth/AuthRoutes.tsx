@@ -39,10 +39,17 @@ function DemoPreviewRoute() {
   return <Outlet />
 }
 
+function DeliveryDriverPreviewRoute() {
+  const { role } = useBusiness()
+  if (role !== 'owner') return <Navigate replace to="/" />
+  return <DeliveryDriverPortalPage preview />
+}
+
 export function AuthRoutes() {
   const { configured, loading, session, sessionError } = useAuth()
   const { search } = useLocation()
-  const nextAfterSignIn = new URLSearchParams(search).get('next') === '/entregador' ? '/entregador' : '/'
+  const nextPath = new URLSearchParams(search).get('next')
+  const signedInDestination = nextPath === '/entregador/visualizar' ? nextPath : '/'
 
   if (!configured) return <SetupPage />
   if (loading) return <LoadingScreen />
@@ -54,9 +61,10 @@ export function AuthRoutes() {
         <Routes>
           <Route path="/redefinir-senha" element={<PasswordRecoveryPage />} />
           <Route path="/criar-conta" element={<SignUpPage />} />
-          <Route path="/criar-conta-entregador" element={<SignUpPage />} />
+          <Route path="/criar-conta-entregador" element={<Navigate replace to="/entrar" />} />
           <Route path="/referencias-central" element={<DashboardDesignReferencesPage />} />
-          <Route path="/entrar" element={session ? <Navigate replace to={nextAfterSignIn} /> : <SignInPage />} />
+          <Route path="/entrar" element={session ? <Navigate replace to={signedInDestination} /> : <SignInPage />} />
+          <Route path="/entregador/visualizar" element={session ? <BusinessProvider><DeliveryDriverPreviewRoute /></BusinessProvider> : <Navigate replace to="/entrar?next=%2Fentregador%2Fvisualizar" />} />
           <Route path="/entregador" element={session ? <DeliveryDriverPortalPage /> : <Navigate replace to="/entrar?next=%2Fentregador" />} />
           <Route element={session ? <BusinessProvider><AppShell /></BusinessProvider> : <Navigate replace to="/entrar" />}>
             <Route path="financeiro/bancos" element={<Navigate replace to="/financeiro" />} />

@@ -61,7 +61,7 @@ export function SignInPage() {
           </span>
         </div>
         <div className="auth-intro-copy">
-          <p className="eyebrow">ACESSO DO PROPRIETÁRIO</p>
+          <p className="eyebrow">ACESSO À OPERAÇÃO</p>
           <h1>Uma visão clara do que precisa de atenção.</h1>
           <p>Clientes, pedidos, estoque e compromissos da operação em um só lugar.</p>
         </div>
@@ -80,7 +80,7 @@ export function SignInPage() {
           <p className="auth-description">
             {isRecovery
               ? 'Informe o e-mail cadastrado para receber as instruções de recuperação.'
-              : 'Use o e-mail e a senha fornecidos para acessar sua conta.'}
+              : 'Entre com seu e-mail e senha. A gestão ou o painel de entregas abrirá conforme o seu acesso.'}
           </p>
 
           <form className="form-stack" onSubmit={handleSubmit}>
@@ -135,11 +135,9 @@ export function SignInPage() {
               {isRecovery ? 'Voltar para entrar' : 'Esqueci minha senha'}
             </button>
 
-            {!isRecovery && <Link className="auth-mode-toggle" to="/criar-conta">Criar conta e pedir acesso</Link>}
-            {!isRecovery && <Link className="auth-mode-toggle" to="/criar-conta-entregador">Criar acesso de entregador</Link>}
-            {!isRecovery && <Link className="auth-mode-toggle" to="/entregador">Entrar no painel do entregador</Link>}
+            {!isRecovery && <Link className="auth-mode-toggle" to="/criar-conta">Solicitar acesso à operação</Link>}
           </div>
-          <p className="auth-support">A gestão aprova novos pedidos antes de liberar os dados da empresa.</p>
+          <p className="auth-support">A gestão cria os acessos dos entregadores. Outros pedidos de acesso precisam ser aprovados.</p>
         </div>
       </section>
     </main>

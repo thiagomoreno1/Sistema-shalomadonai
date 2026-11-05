@@ -1513,6 +1513,7 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .team-worker-list > li { align-items: flex-start; }
 .team-worker-list > li > span { flex: 1 1 200px; }
 .team-worker-list .record-form-actions { flex-wrap: wrap; }
+.team-heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .team-driver-signup { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 14px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .team-help-panel { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; }
 .team-help-panel h2 { margin: 4px 0; color: var(--ink); font-size: 15px; }
@@ -1541,6 +1542,8 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
   .team-worker-list > li { flex-direction: column; }
   .team-worker-list .record-form-actions { width: 100%; }
   .team-worker-list .record-form-actions .text-button { flex: 1 1 auto; }
+  .team-heading-actions { width: 100%; }
+  .team-heading-actions > * { flex: 1 1 auto; justify-content: center; }
   .team-help-panel { align-items: stretch; flex-direction: column; }
   .team-help-panel .button { width: 100%; }
 }
