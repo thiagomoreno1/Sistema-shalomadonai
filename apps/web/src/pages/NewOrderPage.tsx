@@ -4,6 +4,7 @@ import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { CustomerSearchSelect } from '../components/CustomerSearchSelect'
 import { formatBRL, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
+import { isDiscreteInventoryUnit } from '../lib/inventoryUnits'
 import { supabaseClient } from '../lib/supabase'
 
 type Customer = { id: string; name: string; phone: string | null; whatsapp_phone: string | null; delivery_address: string | null }
@@ -70,6 +71,11 @@ function quantityDecimal(value: string) {
   const mills = quantityInThousandths(value)
   if (mills === null) return null
   return formatQuantityMills(mills)
+}
+
+function wholeCountQuantity(value: string) {
+  const mills = quantityInThousandths(value)
+  return mills !== null && mills % 1000 === 0
 }
 
 function formatQuantityMills(mills: number) {
@@ -969,6 +975,15 @@ export function NewOrderPage() {
       setFormError('Cada produto deve aparecer uma única vez. Ajuste a quantidade na linha correspondente.')
       return
     }
+    for (const item of items) {
+      const product = productById.get(item.productId)
+      if ((product?.is_combo || isDiscreteInventoryUnit(product?.inventory_unit))
+        && quantityInThousandths(item.quantity) !== null && !wholeCountQuantity(item.quantity)) {
+        setFormError(`Informe um número inteiro para ${product?.name ?? 'este produto'}; a quantidade é contada por unidade.`)
+        return
+      }
+    }
+    const stockProductById = new Map(stockProducts.map((product) => [product.id, product]))
     const stockProductIds = new Set(stockProducts.map((product) => product.id))
     for (const item of items) {
       const product = productById.get(item.productId)
@@ -989,9 +1004,14 @@ export function NewOrderPage() {
         return
       }
       const componentIds = components.map((component) => component.productId)
-      if (new Set(componentIds).size !== componentIds.length
-        || components.some((component) => !stockProductIds.has(component.productId) || quantityInThousandths(component.quantityPerCombo) === null)) {
-        setFormError('Confira os produtos e as quantidades da composição da cesta. Use quantidades positivas com até três casas decimais.')
+      const invalidComponentQuantity = components.some((component) => {
+        const componentProduct = stockProductById.get(component.productId)
+        return !stockProductIds.has(component.productId)
+          || quantityInThousandths(component.quantityPerCombo) === null
+          || Boolean(componentProduct && isDiscreteInventoryUnit(componentProduct.inventory_unit) && !wholeCountQuantity(component.quantityPerCombo))
+      })
+      if (new Set(componentIds).size !== componentIds.length || invalidComponentQuantity) {
+        setFormError('Confira a composição da cesta. Componentes contados por unidade precisam de quantidades inteiras; kg e outras medidas aceitam até 3 casas decimais.')
         return
       }
       if (customComboOrderCapability !== 'available' && item.components && !sameComposition(item.components, comboDefaults[item.productId] ?? [])) {
@@ -1175,6 +1195,9 @@ export function NewOrderPage() {
               <div className="order-draft-list">
                 {items.map((item, index) => {
                   const product = productById.get(item.productId)
+                  const quantityMustBeWhole = Boolean(product?.is_combo || isDiscreteInventoryUnit(product?.inventory_unit))
+                  const itemQuantityIsFractional = quantityMustBeWhole && item.quantity.trim() !== ''
+                    && quantityInThousandths(item.quantity) !== null && !wholeCountQuantity(item.quantity)
                   const lineCents = safeLineTotal(product?.sale_price_cents ?? null, quantityInThousandths(item.quantity))
                   return (
                     <div className="order-draft-item" key={item.key}>
@@ -1187,8 +1210,9 @@ export function NewOrderPage() {
                           })}
                         </select>
                       </label>
-                      <label className="record-field order-quantity-field"><span className="field-label">Quantidade <span aria-hidden="true">*</span></span>
-                        <input className="text-input" disabled={disabled} inputMode="decimal" maxLength={16} onChange={(event) => updateItem(item.key, { quantity: event.target.value })} placeholder="1" value={item.quantity} />
+                      <label className="record-field order-quantity-field"><span className="field-label">Quantidade{product?.is_combo ? ' · cesta' : product?.inventory_unit ? ' · ' + product.inventory_unit : ''} <span aria-hidden="true">*</span></span>
+                        <input aria-invalid={itemQuantityIsFractional} className="text-input" disabled={disabled} inputMode={quantityMustBeWhole ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => updateItem(item.key, { quantity: event.target.value })} placeholder="1" value={item.quantity} />
+                        {itemQuantityIsFractional && <small className="form-message form-message-error">Use um número inteiro para este produto.</small>}
                       </label>
                       <div className="order-line-total"><span className="field-label">Valor do item</span><strong>{lineCents === null ? '—' : formatBRL(lineCents)}</strong></div>
                       <button aria-label={`Remover item ${index + 1}`} className="text-button order-remove-button" disabled={disabled || items.length === 1} onClick={() => { customerPrefillManualRef.current.items = true; setLegacyCompositionReviewConfirmed(false); setItems((current) => current.filter((row) => row.key !== item.key)) }} type="button">Remover</button>
@@ -1218,6 +1242,9 @@ export function NewOrderPage() {
                               const otherComponents = composition.filter((_, candidateIndex) => candidateIndex !== componentIndex)
                               const selectableProducts = stockProducts.filter((candidate) => candidate.id === component.productId || !otherComponents.some((other) => other.productId === candidate.id))
                               const totalQuantity = quantityProduct(item.quantity, component.quantityPerCombo)
+                              const componentQuantityMustBeWhole = isDiscreteInventoryUnit(currentStockProduct?.inventory_unit)
+                              const componentQuantityIsFractional = componentQuantityMustBeWhole && component.quantityPerCombo.trim() !== ''
+                                && quantityInThousandths(component.quantityPerCombo) !== null && !wholeCountQuantity(component.quantityPerCombo)
                               return <div className="combo-component-row" key={`${item.key}-${componentIndex}`}>
                                 <label className="record-field"><span className="field-label">Produto {componentIndex + 1}</span>
                                   <select aria-label={`Produto ${componentIndex + 1} da cesta ${index + 1}`} className="text-input" disabled={disabled || customComboOrderCapability !== 'available'} onChange={(event) => updateComboComponent(item.key, componentIndex, { productId: event.target.value })} required value={component.productId}>
@@ -1226,8 +1253,9 @@ export function NewOrderPage() {
                                     {selectableProducts.map((option) => <option key={option.id} value={option.id}>{option.name}{option.inventory_unit ? ` · ${option.inventory_unit}` : ''}</option>)}
                                   </select>
                                 </label>
-                                <label className="record-field"><span className="field-label">Por cesta</span>
-                                  <input aria-label={`Quantidade por cesta de ${currentStockProduct?.name ?? `produto ${componentIndex + 1}`}`} className="text-input" disabled={disabled || customComboOrderCapability !== 'available'} inputMode="decimal" maxLength={16} onChange={(event) => updateComboComponent(item.key, componentIndex, { quantityPerCombo: event.target.value })} placeholder="1" required value={component.quantityPerCombo} />
+                                <label className="record-field"><span className="field-label">Por cesta{currentStockProduct?.inventory_unit ? ' · ' + currentStockProduct.inventory_unit : ''}</span>
+                                  <input aria-invalid={componentQuantityIsFractional} aria-label={`Quantidade por cesta de ${currentStockProduct?.name ?? `produto ${componentIndex + 1}`}`} className="text-input" disabled={disabled || customComboOrderCapability !== 'available'} inputMode={componentQuantityMustBeWhole ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => updateComboComponent(item.key, componentIndex, { quantityPerCombo: event.target.value })} placeholder="1" required value={component.quantityPerCombo} />
+                                  {componentQuantityIsFractional && <small className="form-message form-message-error">Use um número inteiro para este produto.</small>}
                                 </label>
                                 <div className="order-line-total"><span className="field-label">Total neste pedido</span><strong>{totalQuantity === null ? '—' : `${totalQuantity}${currentStockProduct?.inventory_unit ? ` ${currentStockProduct.inventory_unit}` : ''}`}</strong></div>
                                 <button aria-label={`Remover produto ${componentIndex + 1} da cesta ${index + 1}`} className="text-button order-remove-button" disabled={disabled || customComboOrderCapability !== 'available' || composition.length <= 1} onClick={() => removeComboComponent(item.key, componentIndex)} type="button">Remover</button>

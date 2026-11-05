@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { businessLocalDateTimeToIso, businessToday } from '../lib/formatters'
+import { isDiscreteInventoryUnit } from '../lib/inventoryUnits'
 import { supabaseClient } from '../lib/supabase'
 
 const PAGE_SIZE = 40
@@ -26,18 +27,20 @@ function isCalendarDate(value: string) {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }
 
-function parseQuantity(value: string) {
+function parseQuantity(value: string, unit?: string | null) {
   const cleaned = value.trim().replace(',', '.')
   if (!/^\d+(?:\.\d{1,3})?$/.test(cleaned)) return null
   const quantity = Number(cleaned)
-  return Number.isFinite(quantity) && quantity > 0 && quantity <= 99999999.999 ? quantity : null
+  if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 99999999.999) return null
+  return isDiscreteInventoryUnit(unit) && !Number.isSafeInteger(quantity) ? null : quantity
 }
 
-function parseCountQuantity(value: string) {
+function parseCountQuantity(value: string, unit?: string | null) {
   const cleaned = value.trim().replace(',', '.')
   if (!/^\d+(?:\.\d{1,3})?$/.test(cleaned)) return null
   const quantity = Number(cleaned)
-  return Number.isFinite(quantity) && quantity >= 0 && quantity <= 99999999.999 ? quantity : null
+  if (!Number.isFinite(quantity) || quantity < 0 || quantity > 99999999.999) return null
+  return isDiscreteInventoryUnit(unit) && !Number.isSafeInteger(quantity) ? null : quantity
 }
 
 function formatQuantity(value: number) {
@@ -195,6 +198,9 @@ export function InventoryPage() {
   const productMap = new Map(products.map((product) => [product.id, product]))
   const filteredBalances = balances.filter((balance) => `${balance.product_name} ${balance.inventory_unit}`.toLocaleLowerCase('pt-BR').includes(balanceSearch.trim().toLocaleLowerCase('pt-BR')))
   const selectedReturnableItem = returnableItems.find((item) => item.product_id === movementProductId) ?? null
+  const selectedMovementUnit = movementKind === 'return'
+    ? selectedReturnableItem?.inventory_unit
+    : trackedProducts.find((product) => product.id === movementProductId)?.inventory_unit
 
   function startReceipt() {
     setNotice(null)
@@ -402,9 +408,12 @@ export function InventoryPage() {
       setFormError('Informe uma data de recebimento válida, hoje ou anterior.')
       return
     }
-    const itemPayload = receiptLines.map((line) => ({ product_id: line.productId, quantity: parseQuantity(line.quantity) }))
+    const itemPayload = receiptLines.map((line) => ({
+      product_id: line.productId,
+      quantity: parseQuantity(line.quantity, trackedProducts.find((product) => product.id === line.productId)?.inventory_unit),
+    }))
     if (itemPayload.length === 0 || itemPayload.some((item) => !item.product_id || item.quantity === null)) {
-      setFormError('Escolha um produto controlado e informe uma quantidade positiva em cada linha.')
+      setFormError('Escolha um produto e informe a quantidade recebida. Produtos por unidade precisam de números inteiros.')
       return
     }
     if (new Set(itemPayload.map((item) => item.product_id)).size !== itemPayload.length) {
@@ -454,9 +463,9 @@ export function InventoryPage() {
   async function handleMovementSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!supabaseClient || saving) return
-    const quantity = parseQuantity(movementQuantity)
+    const quantity = parseQuantity(movementQuantity, selectedMovementUnit)
     if (!trackedProducts.some((product) => product.id === movementProductId) || quantity === null) {
-      setFormError('Escolha um produto com estoque configurado e informe uma quantidade positiva.')
+      setFormError('Escolha um produto com estoque e informe a quantidade. Produtos por unidade precisam de números inteiros.')
       return
     }
     if (!movementReason.trim() || movementReason.trim().length > 1000) {
@@ -535,10 +544,10 @@ export function InventoryPage() {
     if (!supabaseClient || saving || !countSnapshotId || countDrafts.length === 0) return
     const itemPayload = countDrafts.map((draft) => ({
       product_id: draft.productId,
-      counted_quantity: parseCountQuantity(draft.quantity),
+      counted_quantity: parseCountQuantity(draft.quantity, draft.inventoryUnit),
     }))
     if (itemPayload.length !== countDrafts.length || itemPayload.some((item) => !item.product_id || item.counted_quantity === null)) {
-      setFormError('Informe uma quantidade contada, inclusive zero, para cada produto da lista iniciada.')
+      setFormError('Informe a quantidade contada para cada produto. Peças e unidades precisam ser números inteiros; zero também vale.')
       return
     }
 
@@ -624,12 +633,12 @@ export function InventoryPage() {
         {!countStarting && countSnapshotId && countDrafts.length > 0 && <div className="inventory-line-list">
           {countDrafts.map((draft) => {
             const quantityText = draft.quantity
-            const counted = parseCountQuantity(quantityText)
+            const counted = parseCountQuantity(quantityText, draft.inventoryUnit)
             const difference = counted === null ? null : Math.round((counted - draft.expectedQuantity) * 1000) / 1000
             const differenceClass = difference === null || difference === 0 ? '' : difference < 0 ? ' stock-state-low' : ''
             return <div className="inventory-line-row" key={draft.productId}>
               <span className="inventory-balance-copy"><strong>{draft.productName}</strong><small>Saldo no início da contagem: {formatQuantity(draft.expectedQuantity)} {draft.inventoryUnit}</small></span>
-              <label className="record-field"><span className="field-label">Quantidade contada</span><input aria-invalid={quantityText !== '' && counted === null} aria-label={'Quantidade contada de ' + draft.productName} className="text-input" disabled={saving || uncertain} inputMode="decimal" onChange={(event) => setCountDrafts((current) => current.map((item) => item.productId === draft.productId ? { ...item, quantity: event.target.value } : item))} placeholder="0" value={quantityText} /></label>
+              <label className="record-field"><span className="field-label">Quantidade contada · {draft.inventoryUnit}</span><input aria-invalid={quantityText !== '' && counted === null} aria-label={'Quantidade contada de ' + draft.productName} className="text-input" disabled={saving || uncertain} inputMode={isDiscreteInventoryUnit(draft.inventoryUnit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setCountDrafts((current) => current.map((item) => item.productId === draft.productId ? { ...item, quantity: event.target.value } : item))} placeholder="0" value={quantityText} /></label>
               <span className="inventory-balance-value"><strong>{difference === null ? '—' : `${difference > 0 ? '+' : ''}${formatQuantity(difference)}`} <small>{draft.inventoryUnit}</small></strong><span className={'stock-state' + differenceClass}>{difference === null ? quantityText ? 'Valor inválido' : 'Informe o contado' : difference === 0 ? 'Sem diferença' : 'Diferença'}</span></span>
             </div>
           })}
@@ -647,7 +656,7 @@ export function InventoryPage() {
       {showReceiptForm && <form className="surface-panel record-form" onSubmit={(event) => void handleReceiptSubmit(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA FÍSICA</p><h2 ref={receiptHeadingRef} tabIndex={-1}>Registrar compra recebida</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowReceiptForm(false)} type="button">Fechar</button></div>
         <p className="section-footnote inventory-form-hint">Some ao estoque os itens que chegaram. Esta ação não registra pagamento.</p>
-        {trackedProducts.length === 0 ? <p className="inline-state">Ative o estoque e informe o saldo inicial de pelo menos um produto no <Link to="/catalogo">Catálogo</Link> para registrar compras recebidas.</p> : <>
+        {trackedProducts.length === 0 ? <p className="inline-state">Edite um produto no <Link to="/catalogo">Catálogo</Link> e informe sua unidade e quantidade física para registrar compras recebidas.</p> : <>
           <div className="record-form-grid">
             <label className="record-field"><span className="field-label">Fornecedor <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={160} onChange={(event) => setReceiptSupplier(event.target.value)} value={receiptSupplier} /></label>
             <label className="record-field"><span className="field-label">Referência da compra <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || uncertain} maxLength={120} onChange={(event) => setReceiptReference(event.target.value)} value={receiptReference} /></label>
@@ -659,7 +668,7 @@ export function InventoryPage() {
               const selected = trackedProducts.find((product) => product.id === line.productId)
               return <div className="inventory-line-row" key={line.key}>
                 <label className="record-field"><span className="field-label">Produto {index + 1}</span><select className="text-input" disabled={saving || uncertain} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, productId: event.target.value } : row))} required value={line.productId}><option value="">Selecione um produto</option>{trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
-                <label className="record-field"><span className="field-label">Quantidade recebida{selected?.inventory_unit ? ' · ' + selected.inventory_unit : ''}</span><input className="text-input" disabled={saving || uncertain} inputMode="decimal" onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required value={line.quantity} /></label>
+                <label className="record-field"><span className="field-label">Quantidade recebida{selected?.inventory_unit ? ' · ' + selected.inventory_unit : ''}</span><input className="text-input" disabled={saving || uncertain} inputMode={isDiscreteInventoryUnit(selected?.inventory_unit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required value={line.quantity} /></label>
                 <button aria-label={'Remover produto ' + (index + 1)} className="text-button order-remove-button" disabled={saving || uncertain || receiptLines.length === 1} onClick={() => setReceiptLines((current) => current.filter((row) => row.key !== line.key))} type="button">Remover</button>
               </div>
             })}
@@ -677,7 +686,7 @@ export function InventoryPage() {
           <label className="record-field"><span className="field-label">O que aconteceu? <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { setMovementKind(event.target.value as MovementKind); setMovementOrderId(''); setMovementProductId(''); setReturnableItems([]); setFormError(null) }} value={movementKind}><option value="adjustment">Corrigir quantidade</option><option value="loss">Registrar perda ou avaria</option><option value="return">Registrar retorno conferido</option></select></label>
           {movementKind === 'return' && <label className="record-field"><span className="field-label">Pedido associado <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { const orderId = event.target.value; setMovementOrderId(orderId); setMovementProductId(''); setReturnableItems([]); if (orderId) void loadReturnableItems(orderId) }} required value={movementOrderId}><option value="">Selecione um pedido enviado</option>{returnCandidates.map((order) => <option key={order.id} value={order.id}>{order.customer_name_snapshot} · {order.fulfillment_type === 'pickup' ? 'Retirada' : 'Entrega'} · {order.id.slice(0, 8)}</option>)}</select></label>}
           <label className="record-field"><span className="field-label">Produto <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain || (movementKind === 'return' && (returnItemsLoading || !movementOrderId))} onChange={(event) => setMovementProductId(event.target.value)} required value={movementProductId}><option value="">{movementKind === 'return' ? returnItemsLoading ? 'Conferindo itens do pedido…' : 'Selecione um item enviado' : 'Selecione um produto com estoque'}</option>{movementKind === 'return' ? returnableItems.map((item) => <option key={item.product_id} value={item.product_id}>{item.product_name} · ainda enviado {formatQuantity(item.remaining_quantity)} {item.inventory_unit}</option>) : trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
-          <label className="record-field"><span className="field-label">Quantidade <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || uncertain} inputMode="decimal" onChange={(event) => setMovementQuantity(event.target.value)} placeholder="0" required value={movementQuantity} /></label>
+          <label className="record-field"><span className="field-label">Quantidade{movementProductId && selectedMovementUnit ? ' · ' + selectedMovementUnit : ''} <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || uncertain} inputMode={isDiscreteInventoryUnit(selectedMovementUnit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setMovementQuantity(event.target.value)} placeholder="0" required value={movementQuantity} /></label>
           {movementKind === 'adjustment' && <label className="record-field"><span className="field-label">Direção do ajuste <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => setMovementDirection(event.target.value as 'increase' | 'decrease')} value={movementDirection}><option value="increase">Adicionar ao saldo</option><option value="decrease">Retirar do saldo</option></select></label>}
           <label className="record-field"><span className="field-label">Data e hora <span className="field-optional">Brasília · vazio = agora</span></span><input className="text-input" disabled={saving || uncertain} onChange={(event) => setMovementDate(event.target.value)} type="datetime-local" value={movementDate} /></label>
           <label className="record-field record-field-wide"><span className="field-label">Motivo ou conferência <span aria-hidden="true">*</span></span><textarea className="text-input record-textarea" disabled={saving || uncertain} maxLength={1000} onChange={(event) => setMovementReason(event.target.value)} required rows={2} value={movementReason} /></label>

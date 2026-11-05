@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { formatBRL, parseBrazilianCurrency } from '../lib/formatters'
+import { INVENTORY_UNIT_OPTIONS, isDiscreteInventoryUnit, isKnownInventoryUnit, OTHER_INVENTORY_UNIT_OPTION } from '../lib/inventoryUnits'
 import { supabaseClient } from '../lib/supabase'
 
 type ProductCategory = { id: string; name: string; is_active: boolean }
@@ -52,6 +53,11 @@ function parseQuantity(value: string, allowZero = false) {
   const mills = Number(match[1]) * 1000 + Number((match[2] ?? '').padEnd(3, '0'))
   if (!Number.isSafeInteger(mills) || mills > 99999999999 || (allowZero ? mills < 0 : mills <= 0)) return null
   return mills / 1000
+}
+
+function parseStockQuantity(value: string, unit: string | null | undefined, allowZero = false) {
+  const quantity = parseQuantity(value, allowZero)
+  return isDiscreteInventoryUnit(unit) && quantity !== null && !Number.isSafeInteger(quantity) ? null : quantity
 }
 
 function quantityInput(value: number) {
@@ -201,6 +207,8 @@ export function ProductsPage() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [productIsActive, setProductIsActive] = useState(true)
   const [comboEnabled, setComboEnabled] = useState(false)
+  const [inventoryUnitChoice, setInventoryUnitChoice] = useState('un')
+  const [customInventoryUnit, setCustomInventoryUnit] = useState('')
   const [openingQuantity, setOpeningQuantity] = useState('')
   const [minimumStock, setMinimumStock] = useState('')
   const [comboDraft, setComboDraft] = useState<ComboDraft[]>([{ key: newKey(), componentProductId: '', quantity: '1' }])
@@ -368,11 +376,16 @@ export function ProductsPage() {
     })
   }, [products, categories, search, selectedCategoryId])
 
+  const chosenInventoryUnit = inventoryUnitChoice === OTHER_INVENTORY_UNIT_OPTION ? customInventoryUnit.trim() : inventoryUnitChoice
+  const formInventoryUnit = editingProduct?.inventory_tracked ? editingProduct.inventory_unit ?? '' : chosenInventoryUnit
+
   function startCreate() {
     setNotice(null)
     setEditingProduct(null)
     setShowForm(true)
     setProductIsActive(true)
+    setInventoryUnitChoice('un')
+    setCustomInventoryUnit('')
     setFormError(null)
     setPhotoError(null)
     selectProductPhoto(null)
@@ -388,6 +401,9 @@ export function ProductsPage() {
     setEditingProduct(product)
     setShowForm(true)
     setProductIsActive(product.is_active)
+    const productUnit = product.inventory_unit ?? 'un'
+    setInventoryUnitChoice(isKnownInventoryUnit(productUnit) ? productUnit : OTHER_INVENTORY_UNIT_OPTION)
+    setCustomInventoryUnit(isKnownInventoryUnit(productUnit) ? '' : productUnit)
     setFormError(null)
     setPhotoError(product.image_path && !product.image_url ? 'A foto está cadastrada, mas a prévia não carregou. Tente atualizar a foto.' : null)
     selectProductPhoto(null)
@@ -414,9 +430,9 @@ export function ProductsPage() {
       ? ''
       : editingProduct?.inventory_tracked
         ? editingProduct.inventory_unit ?? ''
-        : String(form.get('inventory_unit') ?? '').trim()
-    const opening = parseQuantity(openingQuantity, true)
-    const minimum = minimumStock.trim() ? parseQuantity(minimumStock, true) : null
+        : chosenInventoryUnit
+    const opening = parseStockQuantity(openingQuantity, inventoryUnit, true)
+    const minimum = minimumStock.trim() ? parseStockQuantity(minimumStock, inventoryUnit, true) : null
     if (!name) {
       setFormError('Informe o nome do produto.')
       return
@@ -431,11 +447,16 @@ export function ProductsPage() {
     }
 
     if (!isCombo && !editingProduct?.inventory_tracked && (!inventoryUnit || opening === null)) {
-      setFormError('Informe a unidade e a quantidade que você tem agora. Use 0 se não houver saldo.')
+      const quantityGuidance = isDiscreteInventoryUnit(inventoryUnit)
+        ? `Para ${inventoryUnit || 'unidade/peça'}, use um número inteiro.`
+        : 'Para medidas como kg e litros, use até 3 casas decimais.'
+      setFormError(`Escolha a unidade e informe a quantidade atual. ${quantityGuidance} Use 0 se estiver sem saldo.`)
       return
     }
     if (!isCombo && minimumStock.trim() && minimum === null) {
-      setFormError('Confira o limite mínimo. Use uma quantidade com até três casas decimais.')
+      setFormError(isDiscreteInventoryUnit(inventoryUnit)
+        ? 'O estoque mínimo para essa unidade precisa ser um número inteiro.'
+        : 'Confira o estoque mínimo. Use até 3 casas decimais.')
       return
     }
     if (editingProduct?.inventory_tracked && inventoryUnit !== editingProduct.inventory_unit) {
@@ -445,10 +466,13 @@ export function ProductsPage() {
 
     const recipe = comboDraft
       .filter((component) => component.componentProductId)
-      .map((component) => ({ component_product_id: component.componentProductId, quantity_per_combo: parseQuantity(component.quantity) }))
+      .map((component) => ({
+        component_product_id: component.componentProductId,
+        quantity_per_combo: parseStockQuantity(component.quantity, products.find((product) => product.id === component.componentProductId)?.inventory_unit),
+      }))
     if (isCombo) {
       if (recipe.length === 0 || recipe.length !== comboDraft.length || recipe.some((component) => component.quantity_per_combo === null)) {
-        setFormError('Inclua pelo menos um componente e informe uma quantidade positiva com até três casas decimais.')
+        setFormError('Inclua os componentes. Para unidade/peça, informe quantidades inteiras; para kg e outras medidas, até 3 casas decimais.')
         return
       }
       if (new Set(recipe.map((component) => component.component_product_id)).size !== recipe.length) {
@@ -667,6 +691,8 @@ export function ProductsPage() {
     setFormError(null)
     setPhotoError(null)
     setProductIsActive(true)
+    setInventoryUnitChoice('un')
+    setCustomInventoryUnit('')
     selectProductPhoto(null)
     setComboEnabled(false)
   }
@@ -775,13 +801,18 @@ export function ProductsPage() {
             <section className="product-stock-settings record-field-wide" hidden={comboEnabled} aria-labelledby="product-stock-heading">
               <div className="section-heading section-heading-compact"><div><p className="eyebrow">ESTOQUE AUTOMÁTICO</p><h3 id="product-stock-heading">Saldo do produto</h3></div></div>
               <p className="section-footnote">{editingProduct?.inventory_tracked
-                ? 'O saldo baixa ao despachar ou registrar uma retirada e sobe ao confirmar uma compra. Para ajustar a quantidade, use Estoque.'
-                : 'O saldo baixa ao despachar ou registrar uma retirada e sobe ao confirmar uma compra. Informe a quantidade física atual; use 0 se não houver saldo.'}</p>
+                ? 'Ex.: televisão por unidade/peça; pão por peso em kg. O saldo muda em despachos e recebimentos; para corrigir a quantidade, use Estoque.'
+                : 'Ex.: televisão → unidade/peça, 2; pão por peso → kg, 15. Unidade/peça e unidades personalizadas usam inteiros; kg e outras medidas aceitam até 3 casas. Informe o saldo físico atual.'}</p>
               <div className="record-form-grid product-stock-grid">
-                <label className="record-field"><span className="field-label">Unidade <span aria-hidden="true">*</span></span><input className="text-input" defaultValue={editingProduct?.inventory_unit ?? 'un'} disabled={saving || comboEnabled || Boolean(editingProduct?.inventory_tracked)} maxLength={32} name="inventory_unit" placeholder="Ex.: un, kg" required={!comboEnabled} /></label>
-                {!editingProduct?.inventory_tracked && <label className="record-field"><span className="field-label">Quantidade inicial <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || comboEnabled} inputMode="decimal" onChange={(event) => setOpeningQuantity(event.target.value)} placeholder="0" required={!comboEnabled} value={openingQuantity} />
-                </label>}
-                <label className="record-field"><span className="field-label">Estoque mínimo <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || comboEnabled} inputMode="decimal" onChange={(event) => setMinimumStock(event.target.value)} placeholder="Sem alerta" value={minimumStock} /></label>
+                <label className="record-field"><span className="field-label">Unidade de contagem <span aria-hidden="true">*</span></span>
+                  <select className="text-input" disabled={saving || comboEnabled || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => setInventoryUnitChoice(event.target.value)} required={!comboEnabled} value={inventoryUnitChoice}>
+                    {INVENTORY_UNIT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    <option value={OTHER_INVENTORY_UNIT_OPTION}>Outra unidade…</option>
+                  </select>
+                </label>
+                {inventoryUnitChoice === OTHER_INVENTORY_UNIT_OPTION && <label className="record-field"><span className="field-label">Especifique a unidade <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || comboEnabled || Boolean(editingProduct?.inventory_tracked)} maxLength={32} onChange={(event) => setCustomInventoryUnit(event.target.value)} placeholder="Ex.: fardo, bandeja" required={!comboEnabled} value={customInventoryUnit} /></label>}
+                {!editingProduct?.inventory_tracked && <label className="record-field"><span className="field-label">Quantidade inicial{chosenInventoryUnit ? ` · ${chosenInventoryUnit}` : ''} <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || comboEnabled} inputMode={isDiscreteInventoryUnit(chosenInventoryUnit) ? 'numeric' : 'decimal'} max={999999999.999} min={0} onChange={(event) => setOpeningQuantity(event.target.value)} placeholder="0" required={!comboEnabled} step={isDiscreteInventoryUnit(chosenInventoryUnit) ? 1 : 0.001} value={openingQuantity} /></label>}
+                <label className="record-field"><span className="field-label">Estoque mínimo{formInventoryUnit ? ` · ${formInventoryUnit}` : ''} <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || comboEnabled} inputMode={isDiscreteInventoryUnit(formInventoryUnit) ? 'numeric' : 'decimal'} max={999999999.999} min={0} onChange={(event) => setMinimumStock(event.target.value)} placeholder="Sem alerta" step={isDiscreteInventoryUnit(formInventoryUnit) ? 1 : 0.001} value={minimumStock} /></label>
               </div>
             </section>
             <label className="record-checkbox record-field-wide"><input checked={comboEnabled} disabled={saving || Boolean(editingProduct?.is_combo) || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => setComboEnabled(event.target.checked)} name="is_combo" type="checkbox" /><span><strong>Este produto é um combo</strong><small>O combo usa o saldo dos produtos da composição; não precisa de saldo próprio.</small></span></label>
@@ -791,7 +822,7 @@ export function ProductsPage() {
               {comboDraft.map((component, index) => (
                 <div className="combo-component-row" key={component.key}>
                   <label className="record-field"><span className="field-label">Componente {index + 1}</span><select className="text-input" onChange={(event) => setComboDraft((current) => current.map((row) => row.key === component.key ? { ...row, componentProductId: event.target.value } : row))} required value={component.componentProductId}><option value="">Selecione um produto com estoque</option>{products.filter((product) => product.is_active && product.inventory_tracked && !product.is_combo && product.id !== editingProduct?.id).map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
-                  <label className="record-field"><span className="field-label">Quantidade por combo</span><input className="text-input" inputMode="decimal" onChange={(event) => setComboDraft((current) => current.map((row) => row.key === component.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required value={component.quantity} /></label>
+                  <label className="record-field"><span className="field-label">Quantidade por combo{products.find((product) => product.id === component.componentProductId)?.inventory_unit ? ` · ${products.find((product) => product.id === component.componentProductId)?.inventory_unit}` : ''}</span><input className="text-input" inputMode={isDiscreteInventoryUnit(products.find((product) => product.id === component.componentProductId)?.inventory_unit) ? 'numeric' : 'decimal'} onChange={(event) => setComboDraft((current) => current.map((row) => row.key === component.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required step={isDiscreteInventoryUnit(products.find((product) => product.id === component.componentProductId)?.inventory_unit) ? 1 : 0.001} value={component.quantity} /></label>
                   <button aria-label={'Remover componente ' + (index + 1)} className="text-button order-remove-button" disabled={saving || comboDraft.length === 1} onClick={() => setComboDraft((current) => current.filter((row) => row.key !== component.key))} type="button">Remover</button>
                 </div>
               ))}
