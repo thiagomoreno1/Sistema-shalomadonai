@@ -9,6 +9,7 @@ import { supabaseClient } from '../lib/supabase'
 
 type Customer = { id: string; name: string; phone: string | null; whatsapp_phone: string | null; delivery_address: string | null }
 type CustomerAddress = { id: string; label: string; address: string; is_default: boolean }
+type DeliveryWorkerChoice = { id: string; name: string; user_id: string | null }
 type Product = { id: string; name: string; inventory_unit: string | null; sale_price_cents: number | null; is_combo: boolean }
 type StockProduct = { id: string; name: string; inventory_unit: string; inventory_tracked: true }
 type ComboComponentDraft = { productId: string; quantityPerCombo: string }
@@ -172,12 +173,14 @@ function centsToInput(cents: bigint) {
 }
 
 export function NewOrderPage() {
-  const { id: businessId, timezone } = useBusiness()
+  const { id: businessId, timezone, role } = useBusiness()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const requestedCustomerId = searchParams.get('cliente') ?? ''
   const sourceOrderId = searchParams.get('origem') ?? ''
   const [customers, setCustomers] = useState<Customer[]>([])
+  const [deliveryWorkers, setDeliveryWorkers] = useState<DeliveryWorkerChoice[]>([])
+  const [deliveryWorkersLoadError, setDeliveryWorkersLoadError] = useState(false)
   const [products, setProducts] = useState<Product[]>([])
   const [stockProducts, setStockProducts] = useState<StockProduct[]>([])
   const [comboDefaults, setComboDefaults] = useState<Record<string, ComboComponentDraft[]>>({})
@@ -200,6 +203,7 @@ export function NewOrderPage() {
   const [customerAddressesError, setCustomerAddressesError] = useState<string | null>(null)
   const [selectedAddressId, setSelectedAddressId] = useState('')
   const [requiresDelivery, setRequiresDelivery] = useState(false)
+  const [deliveryWorkerId, setDeliveryWorkerId] = useState('')
   const [deliveryAddress, setDeliveryAddress] = useState('')
   const [deliveryFee, setDeliveryFee] = useState('')
   const [discount, setDiscount] = useState('')
@@ -240,7 +244,10 @@ export function NewOrderPage() {
     setOrderCopyWarning(null)
     setLegacyCompositionReviewConfirmed(false)
     try {
-      const [customersResult, productsResult, stockProductsResult, customComboOrderSupport] = await Promise.all([
+      const deliveryWorkersRequest = role === 'owner'
+        ? supabaseClient.from('delivery_workers').select('id, name, user_id').eq('business_id', businessId).eq('is_active', true).not('user_id', 'is', null).order('name', { ascending: true })
+        : Promise.resolve({ data: [] as DeliveryWorkerChoice[], error: null })
+      const [customersResult, productsResult, stockProductsResult, customComboOrderSupport, deliveryWorkersResult] = await Promise.all([
         supabaseClient.from('customers').select('id, name, phone, whatsapp_phone, delivery_address')
           .eq('business_id', businessId).eq('is_active', true).order('name', { ascending: true }),
         supabaseClient.from('products').select('id, name, inventory_unit, sale_price_cents, is_combo')
@@ -250,6 +257,7 @@ export function NewOrderPage() {
           .eq('business_id', businessId).eq('is_active', true).eq('inventory_tracked', true)
           .eq('is_combo', false).not('inventory_unit', 'is', null).order('name', { ascending: true }),
         detectCustomComboOrderCapability(businessId),
+        deliveryWorkersRequest,
       ])
       let loadedTemplates: ScheduleTemplate[] = []
       let templatesUnavailable = false
@@ -291,6 +299,9 @@ export function NewOrderPage() {
       setCustomers(activeCustomers)
       setProducts(activeProducts)
       setStockProducts(activeStockProducts)
+      setDeliveryWorkers((deliveryWorkersResult.data ?? []) as DeliveryWorkerChoice[])
+      setDeliveryWorkersLoadError(Boolean(deliveryWorkersResult.error))
+      setDeliveryWorkerId('')
       setComboDefaults(defaults)
       if (templatesUnavailable) {
         setScheduleTemplates([])
@@ -407,7 +418,7 @@ export function NewOrderPage() {
     } finally {
       if (requestId === choicesRequestIdRef.current) setLoadingChoices(false)
     }
-  }, [businessId, requestedCustomerId, sourceOrderId])
+  }, [businessId, requestedCustomerId, role, sourceOrderId])
 
   async function recheckCustomComboOrderCapability() {
     setCustomComboCapabilityChecking(true)
@@ -1100,7 +1111,30 @@ export function NewOrderPage() {
         setFormError('A resposta do pedido não chegou completa. Seus dados foram preservados; tente novamente sem alterar o formulário.')
         return
       }
-      navigate(`/pedidos/${data}`, { replace: true, state: { successMessage: 'Pedido criado. Nenhum recebimento foi registrado; se já recebeu, registre-o manualmente nesta tela.' } })
+      let successMessage = 'Pedido criado. Nenhum recebimento foi registrado; se já recebeu, registre-o manualmente nesta tela.'
+      if (requiresDelivery && deliveryWorkerId) {
+        try {
+          const { data: delivery, error: deliveryError } = await supabaseClient.from('deliveries')
+            .select('id').eq('business_id', businessId).eq('order_id', data).maybeSingle()
+          if (deliveryError || !delivery) {
+            successMessage += ' Não foi possível confirmar a atribuição do entregador; confira a entrega na fila.'
+          } else {
+            const { error: planError } = await supabaseClient.rpc('update_delivery_plan', {
+              p_business_id: businessId,
+              p_delivery_id: delivery.id,
+              p_delivery_worker_id: deliveryWorkerId,
+              p_scheduled_on: null,
+              p_time_window: null,
+              p_notes: null,
+              p_request_id: newKey(),
+            })
+            if (planError) successMessage += ' O pedido foi salvo, mas a atribuição do entregador não foi confirmada; confira a fila de entregas.'
+          }
+        } catch {
+          successMessage += ' O pedido foi salvo, mas não foi possível confirmar a atribuição do entregador; confira a fila de entregas.'
+        }
+      }
+      navigate(`/pedidos/${data}`, { replace: true, state: { successMessage } })
     } catch {
       setUncertain(true)
       setFormError('Não foi possível confirmar se o pedido foi salvo. Seus dados foram preservados; tente novamente sem alterar o formulário.')
@@ -1171,6 +1205,17 @@ export function NewOrderPage() {
                   {customerAddressesError && <span className="customer-whatsapp-hint" role="status">{customerAddressesError}</span>}
                 </label>}
                 <label className="record-checkbox record-field-wide order-delivery-toggle"><input checked={requiresDelivery} disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.delivery = true; setRequiresDelivery(event.target.checked) }} type="checkbox" /><span><strong>Este pedido precisa ser entregue</strong><small>Só pedidos marcados aqui entram na fila de entregas.</small></span></label>
+                {requiresDelivery && <label className="record-field record-field-wide"><span className="field-label">Entregador responsável <span className="field-optional">opcional</span></span>
+                  <select className="text-input" disabled={disabled || deliveryWorkersLoadError} onChange={(event) => setDeliveryWorkerId(event.target.value)} value={deliveryWorkerId}>
+                    <option value="">Definir depois em Entregas</option>
+                    {deliveryWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
+                  </select>
+                  {deliveryWorkersLoadError
+                    ? <span className="customer-whatsapp-hint">Não foi possível carregar os entregadores com acesso ao painel. Você pode atribuir depois em Entregas.</span>
+                    : deliveryWorkers.length === 0
+                      ? <span className="customer-whatsapp-hint">Nenhum entregador com acesso ao painel. Cadastre e vincule um acesso em Entregas.</span>
+                      : <span className="customer-whatsapp-hint">A atribuição aparece no painel do entregador quando o pedido é salvo.</span>}
+                </label>}
                 <label className="record-field record-field-wide"><span className="field-label">Endereço registrado para este pedido <span className="field-optional">{requiresDelivery ? 'obrigatório para entrega' : 'opcional'}</span></span>
                   <textarea className="text-input record-textarea" disabled={disabled} maxLength={1000} onChange={(event) => { customerPrefillManualRef.current.address = true; setSelectedAddressId(''); setDeliveryAddress(event.target.value) }} placeholder="Pode ajustar ou deixar em branco" required={requiresDelivery} rows={2} value={deliveryAddress} />
                   <span className="customer-whatsapp-hint">O pedido guarda uma cópia deste endereço; alterações futuras no cadastro não mudam pedidos anteriores.</span>

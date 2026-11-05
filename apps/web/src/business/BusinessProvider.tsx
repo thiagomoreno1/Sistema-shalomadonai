@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { BusinessContext, type BusinessContextValue } from './BusinessContext'
 import { useAuth } from '../auth/AuthContext'
 import { LoadingScreen } from '../pages/SetupPage'
@@ -9,7 +9,7 @@ import { Icon } from '../components/Icon'
 type BusinessLoadState = {
   business: BusinessContextValue | null
   loading: boolean
-  issue: 'missing' | 'ambiguous' | 'unavailable' | null
+  issue: 'missing' | 'ambiguous' | 'unavailable' | 'driver' | null
 }
 
 export function BusinessProvider({ children }: { children: ReactNode }) {
@@ -42,8 +42,11 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
 
         if (membershipError) throw membershipError
         if (!memberships?.length) {
+          const driverContext = await supabaseClient.rpc('get_my_delivery_worker_context')
+          const assignedDriver = !driverContext.error
+            && Boolean((Array.isArray(driverContext.data) ? driverContext.data[0] : driverContext.data))
           resolved = true
-          if (active) setState({ business: null, loading: false, issue: 'missing' })
+          if (active) setState({ business: null, loading: false, issue: assignedDriver ? 'driver' : 'missing' })
           return
         }
         if (memberships.length > 1) {
@@ -109,7 +112,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   return <BusinessContext.Provider value={state.business}>{children}</BusinessContext.Provider>
 }
 
-function BusinessUnavailable({ issue, onRetry, userId }: { issue: 'missing' | 'ambiguous' | 'unavailable'; onRetry: () => void; userId: string }) {
+function BusinessUnavailable({ issue, onRetry, userId }: { issue: 'missing' | 'ambiguous' | 'unavailable' | 'driver'; onRetry: () => void; userId: string }) {
   const navigate = useNavigate()
   const [requestingAccess, setRequestingAccess] = useState(false)
   const [requestError, setRequestError] = useState<string | null>(null)
@@ -152,6 +155,8 @@ function BusinessUnavailable({ issue, onRetry, userId }: { issue: 'missing' | 'a
       navigate('/entrar', { replace: true })
     }
   }
+
+  if (issue === 'driver') return <Navigate replace to="/entregador" />
 
   return (
     <main className="setup-screen">

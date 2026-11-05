@@ -649,6 +649,10 @@
 .order-delivery-history { margin-top: 12px; }
 .form-message-warning ul { margin: 8px 0; padding-left: 20px; }
 .worker-list { border-top: 1px solid var(--line); }
+.worker-list > li { flex-wrap: wrap; }
+.worker-access-form { display: grid; flex: 1 0 100%; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; margin-top: 5px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.worker-access-form .record-field, .worker-access-form .section-footnote { grid-column: 1 / -1; }
+.worker-access-form .section-footnote { margin: 0; }
 .worker-list > li > span { min-width: 0; }
 
 @media (max-width: 680px) {

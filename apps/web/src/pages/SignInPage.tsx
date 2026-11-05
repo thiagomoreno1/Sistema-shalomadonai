@@ -136,6 +136,8 @@ export function SignInPage() {
             </button>
 
             {!isRecovery && <Link className="auth-mode-toggle" to="/criar-conta">Criar conta e pedir acesso</Link>}
+            {!isRecovery && <Link className="auth-mode-toggle" to="/criar-conta-entregador">Criar acesso de entregador</Link>}
+            {!isRecovery && <Link className="auth-mode-toggle" to="/entregador">Entrar no painel do entregador</Link>}
           </div>
           <p className="auth-support">A gestão aprova novos pedidos antes de liberar os dados da empresa.</p>
         </div>

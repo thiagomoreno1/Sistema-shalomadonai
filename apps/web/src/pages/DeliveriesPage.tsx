@@ -8,7 +8,7 @@ import { supabaseClient } from '../lib/supabase'
 type DeliveryStatus = 'awaiting_separation' | 'ready' | 'dispatched' | 'delivered' | 'attempted' | 'rescheduled' | 'returned'
 type Delivery = { id: string; order_id: string; status: DeliveryStatus; delivery_worker_id: string | null; scheduled_on: string | null; time_window: string | null; notes: string | null; canceled_at: string | null; dispatched_at: string | null; delivered_at: string | null; attempted_at: string | null; returned_at: string | null; created_at: string }
 type Order = { id: string; customer_id: string; customer_name_snapshot: string; delivery_address_snapshot: string | null; status: 'open' | 'cancelled'; delivery_fee_cents: number; notes: string | null; created_at: string }
-type Worker = { id: string; name: string; phone: string | null; is_active: boolean }
+type Worker = { id: string; name: string; phone: string | null; is_active: boolean; user_id: string | null }
 type OrderComponent = { order_id: string; product_id: string; product_name_snapshot: string; inventory_unit_snapshot: string | null; quantity_snapshot: number; inventory_tracked_snapshot: boolean }
 type InventoryMovement = { order_id: string | null; product_id: string; movement_type: string; quantity_delta: number }
 type Balance = { product_id: string; quantity_on_hand: number; inventory_unit: string }
@@ -49,7 +49,7 @@ function statusActions(status: DeliveryStatus): DeliveryStatus[] {
 }
 
 export function DeliveriesPage() {
-  const { id: businessId } = useBusiness()
+  const { id: businessId, role } = useBusiness()
   const [deliveries, setDeliveries] = useState<Delivery[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [workers, setWorkers] = useState<Worker[]>([])
@@ -67,6 +67,12 @@ export function DeliveriesPage() {
   const [workerPhone, setWorkerPhone] = useState('')
   const [savingWorker, setSavingWorker] = useState(false)
   const [workerError, setWorkerError] = useState<string | null>(null)
+  const [linkWorkerId, setLinkWorkerId] = useState<string | null>(null)
+  const [linkWorkerEmail, setLinkWorkerEmail] = useState('')
+  const [linkingWorker, setLinkingWorker] = useState(false)
+  const [unlinkWorkerId, setUnlinkWorkerId] = useState<string | null>(null)
+  const [unlinkingWorker, setUnlinkingWorker] = useState(false)
+  const [workerAccessError, setWorkerAccessError] = useState<string | null>(null)
   const [editingPlanId, setEditingPlanId] = useState<string | null>(null)
   const [planWorkerId, setPlanWorkerId] = useState('')
   const [planDate, setPlanDate] = useState('')
@@ -103,7 +109,7 @@ export function DeliveriesPage() {
       const [deliveryResult, workerResult, balanceResult] = await Promise.all([
         supabaseClient.from('deliveries').select('id, order_id, status, delivery_worker_id, scheduled_on, time_window, notes, canceled_at, dispatched_at, delivered_at, attempted_at, returned_at, created_at')
           .eq('business_id', businessId).is('canceled_at', null).order('scheduled_on', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false }).range(0, 999),
-        supabaseClient.from('delivery_workers').select('id, name, phone, is_active')
+        supabaseClient.from('delivery_workers').select('id, name, phone, is_active, user_id')
           .eq('business_id', businessId).order('is_active', { ascending: false }).order('name', { ascending: true }),
         supabaseClient.from('inventory_balances').select('product_id, quantity_on_hand, inventory_unit').eq('business_id', businessId),
       ])
@@ -233,12 +239,67 @@ export function DeliveriesPage() {
       setShowWorkerForm(false)
       setWorkerName('')
       setWorkerPhone('')
-      setNotice('Entregador cadastrado como registro da operação, sem conta de acesso.')
+      setNotice('Entregador cadastrado. Crie a conta dele e vincule o e-mail para liberar o painel.')
       await loadQueue()
     } catch {
       setWorkerError('Não foi possível salvar o entregador. Tente novamente.')
     } finally {
       setSavingWorker(false)
+    }
+  }
+
+  async function handleLinkWorkerSubmit(event: FormEvent<HTMLFormElement>, worker: Worker) {
+    event.preventDefault()
+    if (!supabaseClient || linkingWorker || role !== 'owner' || error) return
+    const email = linkWorkerEmail.trim().toLowerCase()
+    if (!email || email.length > 320) {
+      setWorkerError('Informe o e-mail da conta do entregador.')
+      return
+    }
+    setLinkingWorker(true)
+    setWorkerAccessError(null)
+    try {
+      const { error: linkError } = await supabaseClient.rpc('link_delivery_worker_account', {
+        p_business_id: businessId,
+        p_worker_id: worker.id,
+        p_email: email,
+      })
+      if (linkError) {
+        setWorkerAccessError('Não foi possível vincular. Confirme que a pessoa já criou a conta e verificou o e-mail.')
+        return
+      }
+      setLinkWorkerId(null)
+      setLinkWorkerEmail('')
+      setWorkerAccessError(null)
+      setNotice(`A conta de ${worker.name} foi conectada ao painel.`)
+      await loadQueue()
+    } catch {
+      setWorkerAccessError('Não foi possível confirmar o vínculo. Atualize a fila e confira o acesso antes de tentar novamente.')
+    } finally {
+      setLinkingWorker(false)
+    }
+  }
+
+  async function unlinkWorkerAccount(worker: Worker) {
+    if (!supabaseClient || unlinkingWorker || role !== 'owner' || error) return
+    setUnlinkingWorker(true)
+    setWorkerAccessError(null)
+    try {
+      const { error: unlinkError } = await supabaseClient.rpc('unlink_delivery_worker_account', {
+        p_business_id: businessId,
+        p_worker_id: worker.id,
+      })
+      if (unlinkError) {
+        setWorkerAccessError('Não foi possível remover o acesso. Atualize a página e tente novamente.')
+        return
+      }
+      setUnlinkWorkerId(null)
+      setNotice(`O acesso ao painel de ${worker.name} foi removido.`)
+      await loadQueue()
+    } catch {
+      setWorkerAccessError('Não foi possível confirmar a remoção. Atualize a fila antes de tentar novamente.')
+    } finally {
+      setUnlinkingWorker(false)
     }
   }
 
@@ -411,7 +472,7 @@ export function DeliveriesPage() {
 
       {showWorkerForm && <form className="surface-panel record-form worker-create-form" onSubmit={(event) => void handleWorkerSubmit(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">CADASTRO DE APOIO</p><h2>Novo entregador</h2></div><button className="text-button" disabled={savingWorker} onClick={() => setShowWorkerForm(false)} type="button">Fechar</button></div>
-        <p className="section-footnote">O registro serve para organizar atribuições. Entregadores não recebem login nem acessam este sistema.</p>
+        <p className="section-footnote">Peça ao entregador para criar a conta no próprio aparelho em /criar-conta-entregador. Depois, vincule o e-mail aqui para liberar somente o painel dele.</p>
         <div className="record-form-grid"><label className="record-field"><span className="field-label">Nome <span aria-hidden="true">*</span></span><input className="text-input" maxLength={120} onChange={(event) => setWorkerName(event.target.value)} required value={workerName} /></label><label className="record-field"><span className="field-label">Telefone <span className="field-optional">opcional</span></span><input className="text-input" maxLength={64} onChange={(event) => setWorkerPhone(event.target.value)} value={workerPhone} /></label></div>
         {workerError && <p className="form-message form-message-error" role="alert">{workerError}</p>}
         <div className="record-form-actions"><button className="button button-primary" disabled={savingWorker} type="submit">{savingWorker ? 'Salvando…' : 'Salvar entregador'}</button></div>
@@ -419,7 +480,24 @@ export function DeliveriesPage() {
 
       <section className="surface-panel record-panel" aria-labelledby="delivery-workers-heading">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">ATRIBUIÇÃO</p><h2 id="delivery-workers-heading">Entregadores cadastrados</h2></div><span className="neutral-status">{workers.filter((worker) => worker.is_active).length} ativos</span></div>
-        {loading ? <p className="inline-state" aria-live="polite">Carregando entregadores…</p> : workers.length === 0 ? <p className="inline-state">Nenhum entregador cadastrado. É possível manter a fila sem atribuição.</p> : <ul className="worker-list">{workers.map((worker) => <li key={worker.id} className={worker.is_active ? '' : 'record-inactive'}><span><strong>{worker.name}</strong><small>{worker.phone || 'Telefone não informado'} · {worker.is_active ? 'Ativo' : 'Inativo'}</small></span><button className="text-button" disabled={Boolean(error)} onClick={() => void toggleWorker(worker)} type="button">{worker.is_active ? 'Desativar' : 'Reativar'}</button></li>)}</ul>}
+        {workerAccessError && <p className="form-message form-message-error" role="alert">{workerAccessError}</p>}
+        {loading ? <p className="inline-state" aria-live="polite">Carregando entregadores…</p> : workers.length === 0 ? <p className="inline-state">Nenhum entregador cadastrado. É possível manter a fila sem atribuição.</p> : <ul className="worker-list">{workers.map((worker) => <li key={worker.id} className={worker.is_active ? '' : 'record-inactive'}>
+          <span><strong>{worker.name}</strong><small>{worker.phone || 'Telefone não informado'} · {worker.is_active ? 'Ativo' : 'Inativo'} · {worker.user_id ? 'Painel conectado' : 'Sem acesso ao painel'}</small></span>
+          <div className="record-form-actions">
+            {role === 'owner' && worker.is_active && !worker.user_id && <button className="text-button" disabled={Boolean(error)} onClick={() => { setLinkWorkerId(linkWorkerId === worker.id ? null : worker.id); setLinkWorkerEmail(''); setWorkerAccessError(null) }} type="button">{linkWorkerId === worker.id ? 'Fechar vínculo' : 'Vincular conta'}</button>}
+            {role === 'owner' && worker.user_id && <button className="text-button" disabled={Boolean(error) || unlinkingWorker} onClick={() => { setUnlinkWorkerId(unlinkWorkerId === worker.id ? null : worker.id); setWorkerAccessError(null) }} type="button">{unlinkWorkerId === worker.id ? 'Cancelar' : 'Desvincular painel'}</button>}
+            <button className="text-button" disabled={Boolean(error)} onClick={() => void toggleWorker(worker)} type="button">{worker.is_active ? 'Desativar' : 'Reativar'}</button>
+          </div>
+          {linkWorkerId === worker.id && <form className="worker-access-form" onSubmit={(event) => void handleLinkWorkerSubmit(event, worker)}>
+            <label className="record-field"><span className="field-label">E-mail da conta do entregador</span><input autoComplete="off" className="text-input" disabled={linkingWorker} onChange={(event) => setLinkWorkerEmail(event.target.value)} required type="email" value={linkWorkerEmail} /></label>
+            <p className="section-footnote">Use uma conta própria do entregador, já criada e com e-mail confirmado. A conta da gestão não pode ser usada. Se ainda não tiver conta, peça para abrir /criar-conta-entregador no próprio aparelho.</p>
+            <button className="button button-secondary" disabled={linkingWorker} type="submit">{linkingWorker ? 'Vinculando…' : 'Conectar ao painel'}</button>
+          </form>}
+          {unlinkWorkerId === worker.id && <div className="worker-access-form" role="group" aria-label={`Remover acesso de ${worker.name}`}>
+            <p className="section-footnote">Essa conta perderá acesso ao painel. O histórico das entregas será mantido.</p>
+            <button className="button button-secondary" disabled={unlinkingWorker} onClick={() => void unlinkWorkerAccount(worker)} type="button">{unlinkingWorker ? 'Removendo acesso…' : 'Confirmar remoção de acesso'}</button>
+          </div>}
+        </li>)}</ul>}
       </section>
 
       <section className="surface-panel record-panel" aria-labelledby="delivery-queue-heading">
@@ -456,7 +534,7 @@ export function DeliveriesPage() {
                   <div className="section-heading section-heading-compact"><div><p className="eyebrow">PLANEJAMENTO</p><h3 ref={planHeadingRef} tabIndex={-1}>Atribuição e horário</h3></div></div>
                   <div className="record-form-grid">
                     {previousPlan && <div className="record-field record-field-wide"><span className="field-label">Entrega anterior deste cliente</span><div className="record-form-actions"><button className="button button-secondary" disabled={planSaving || planUncertain} onClick={() => { setPlanWorkerId(previousWorker?.id ?? ''); setPlanWindow(previousPlan.time_window ?? ''); setPlanDate(businessToday()); setPlanScheduleEnabled(Boolean(previousPlan.time_window)) }} type="button">Reutilizar {previousWorker ? previousWorker.name : 'horário'}{previousPlan.time_window ? ` · ${previousPlan.time_window}` : ''}</button></div><span className="section-footnote">Carrega entregador e período da última entrega concluída. Confira antes de salvar.</span></div>}
-                    <label className="record-field"><span className="field-label">Entregador <span className="field-optional">opcional</span></span><select className="text-input" disabled={planSaving || planUncertain} onChange={(event) => setPlanWorkerId(event.target.value)} value={planWorkerId}><option value="">Sem atribuição</option>{workers.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+                    <label className="record-field"><span className="field-label">Entregador <span className="field-optional">opcional</span></span><select className="text-input" disabled={planSaving || planUncertain} onChange={(event) => setPlanWorkerId(event.target.value)} value={planWorkerId}><option value="">Sem atribuição</option>{workers.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}{item.user_id ? '' : ' · sem painel'}</option>)}</select></label>
                     <div className="record-field"><span className="field-label">Data agendada <span className="field-optional">opcional · {delivery.scheduled_on ? 'data salva' : 'padrão: hoje · alterável'}</span></span><label className="field-label"><input checked={planScheduleEnabled} disabled={planSaving || planUncertain} onChange={(event) => setPlanScheduleEnabled(event.target.checked)} type="checkbox" /> Agendar entrega para esta data</label><input className="text-input" disabled={planSaving || planUncertain || !planScheduleEnabled} onChange={(event) => { setPlanDate(event.target.value); setPlanScheduleEnabled(true) }} type="date" value={planDate} /></div>
                     <div className="record-field record-field-wide"><span className="field-label">Janela rápida <span className="field-optional">opcional</span></span><div className="record-form-actions" aria-label="Escolher janela de entrega">{deliveryWindowPresets.map((window) => <button aria-pressed={planWindow === window} className="button button-secondary" disabled={planSaving || planUncertain} key={window} onClick={() => { setPlanWindow(window); setPlanScheduleEnabled(true) }} type="button">{window}</button>)}</div></div>
                     <label className="record-field"><span className="field-label">Personalizar janela ou horário <span className="field-optional">opcional</span></span><input className="text-input" disabled={planSaving || planUncertain} maxLength={120} onChange={(event) => { setPlanWindow(event.target.value); if (event.target.value.trim()) setPlanScheduleEnabled(true) }} placeholder="Ex.: manhã, 14h–16h" value={planWindow} /></label>

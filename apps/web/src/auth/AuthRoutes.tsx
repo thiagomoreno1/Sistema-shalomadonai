@@ -28,6 +28,7 @@ const MorePage = lazy(async () => ({ default: (await import('../pages/ModulePage
 const SettingsPage = lazy(async () => ({ default: (await import('../pages/SettingsPage')).SettingsPage }))
 const SignInPage = lazy(async () => ({ default: (await import('../pages/SignInPage')).SignInPage }))
 const SignUpPage = lazy(async () => ({ default: (await import('../pages/SignUpPage')).SignUpPage }))
+const DeliveryDriverPortalPage = lazy(async () => ({ default: (await import('../pages/DeliveryDriverPortalPage')).DeliveryDriverPortalPage }))
 const PasswordRecoveryPage = lazy(async () => ({ default: (await import('../pages/SignInPage')).PasswordRecoveryPage }))
 const DemoPreviewPage = lazy(async () => ({ default: (await import('../pages/DemoPreviewPage')).DemoPreviewPage }))
 
@@ -40,6 +41,8 @@ function DemoPreviewRoute() {
 
 export function AuthRoutes() {
   const { configured, loading, session, sessionError } = useAuth()
+  const { search } = useLocation()
+  const nextAfterSignIn = new URLSearchParams(search).get('next') === '/entregador' ? '/entregador' : '/'
 
   if (!configured) return <SetupPage />
   if (loading) return <LoadingScreen />
@@ -51,8 +54,10 @@ export function AuthRoutes() {
         <Routes>
           <Route path="/redefinir-senha" element={<PasswordRecoveryPage />} />
           <Route path="/criar-conta" element={<SignUpPage />} />
+          <Route path="/criar-conta-entregador" element={<SignUpPage />} />
           <Route path="/referencias-central" element={<DashboardDesignReferencesPage />} />
-          <Route path="/entrar" element={session ? <Navigate replace to="/" /> : <SignInPage />} />
+          <Route path="/entrar" element={session ? <Navigate replace to={nextAfterSignIn} /> : <SignInPage />} />
+          <Route path="/entregador" element={session ? <DeliveryDriverPortalPage /> : <Navigate replace to="/entrar?next=%2Fentregador" />} />
           <Route element={session ? <BusinessProvider><AppShell /></BusinessProvider> : <Navigate replace to="/entrar" />}>
             <Route element={<DemoPreviewRoute />}>
               <Route index element={<DashboardPage />} />

@@ -1,0 +1,107 @@
+.driver-portal-screen {
+  min-height: 100vh;
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+.driver-portal-header {
+  position: sticky;
+  z-index: 5;
+  top: 0;
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px clamp(18px, 4vw, 48px);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.driver-portal-brand,
+.driver-portal-account {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+}
+
+.driver-portal-brand span,
+.driver-portal-brand strong,
+.driver-portal-brand small { display: block; }
+.driver-portal-brand strong { color: var(--ink); font-size: 14px; }
+.driver-portal-brand small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.driver-portal-account > span { max-width: 250px; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
+.driver-portal-content {
+  display: flex;
+  width: min(100%, 900px);
+  flex-direction: column;
+  gap: 18px;
+  margin: 0 auto;
+  padding: 34px 24px max(42px, env(safe-area-inset-bottom));
+}
+
+.driver-portal-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.driver-portal-heading h1 { margin: 5px 0 4px; color: var(--ink); font-size: clamp(27px, 4vw, 36px); letter-spacing: -0.045em; line-height: 1.1; }
+.driver-portal-heading p:last-child { margin: 0; color: var(--muted); font-size: 13px; }
+
+.driver-portal-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: var(--paper); }
+.driver-portal-tabs button { display: flex; min-height: 46px; align-items: center; justify-content: center; gap: 8px; border: 1px solid transparent; border-radius: 8px; color: var(--muted); background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+.driver-portal-tabs button span { display: inline-grid; min-width: 23px; min-height: 23px; place-items: center; padding: 0 5px; border-radius: 999px; color: var(--muted); background: var(--accent-wash); font-size: 10px; font-weight: 650; }
+.driver-portal-tabs button.is-selected { border-color: var(--line); color: var(--ink); background: var(--canvas); font-weight: 650; }
+.driver-portal-tabs button:focus-visible,
+.driver-portal-screen a:focus-visible,
+.driver-portal-screen button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+.driver-delivery-list { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.driver-delivery-card { display: grid; gap: 16px; padding: clamp(17px, 3vw, 23px); }
+.driver-delivery-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.driver-delivery-heading h2 { margin: 5px 0 0; color: var(--ink); font-size: 20px; letter-spacing: -0.025em; }
+.driver-delivery-order-reference { margin: 5px 0 0; color: var(--quiet); font-size: 11px; }
+.driver-delivery-status { display: inline-flex; min-height: 29px; flex: 0 0 auto; align-items: center; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--canvas); font-size: 11px; font-weight: 620; }
+.driver-delivery-status.is-ready,
+.driver-delivery-status.is-dispatched { border-color: color-mix(in srgb, var(--accent) 28%, var(--line)); color: var(--accent); background: var(--accent-wash); }
+
+.driver-delivery-address { padding-top: 14px; border-top: 1px solid var(--line); }
+.driver-delivery-address > strong,
+.driver-delivery-items > strong { color: var(--ink); font-size: 12px; }
+.driver-delivery-address p { margin: 5px 0 2px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.driver-delivery-address .quiet-link { min-height: 44px; }
+.driver-delivery-missing-address { margin: 0; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--ink); background: var(--accent-wash); font-size: 12px; line-height: 1.45; }
+.driver-delivery-phone { display: inline-flex; width: fit-content; min-height: 44px; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--accent); font-size: 12px; font-weight: 650; text-decoration: none; }
+.driver-delivery-phone svg { width: 17px; height: 17px; }
+
+.driver-delivery-items { padding-top: 14px; border-top: 1px solid var(--line); }
+.driver-delivery-items ul { display: grid; gap: 0; margin: 8px 0 0; padding: 0; list-style: none; }
+.driver-delivery-items li { display: flex; min-height: 39px; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.driver-delivery-items li span:last-child { color: var(--ink); font-weight: 620; text-align: right; }
+.driver-delivery-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.driver-delivery-action { width: 100%; min-height: 52px; justify-content: center; font-size: 14px; }
+.driver-delivery-action svg { width: 19px; height: 19px; }
+.driver-delivery-confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 13px; border: 1px solid var(--line); border-radius: 9px; background: var(--canvas); }
+.driver-delivery-confirmation p { flex: 1 1 100%; margin: 0 0 4px; color: var(--ink); font-size: 13px; font-weight: 620; }
+.driver-delivery-confirmation .button { min-height: 44px; }
+.driver-delivery-confirmation .text-button { min-height: 44px; padding: 0 12px; }
+
+.driver-portal-message { display: grid; justify-items: center; gap: 10px; padding: 32px 24px; text-align: center; }
+.driver-portal-message .empty-icon { margin-bottom: 2px; }
+.driver-portal-message h2 { margin: 0; color: var(--ink); font-size: 18px; }
+.driver-portal-message p { max-width: 560px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.driver-portal-message .quiet-link { min-height: 44px; }
+
+@media (max-width: 600px) {
+  .driver-portal-header { min-height: 62px; padding: 8px 14px; }
+  .driver-portal-header .brand-image { width: 36px; height: 36px; }
+  .driver-portal-brand { gap: 8px; }
+  .driver-portal-brand strong { font-size: 12px; }
+  .driver-portal-account { gap: 7px; }
+  .driver-portal-account > span { max-width: 118px; font-size: 10px; }
+  .driver-portal-account .signout-button { min-width: 48px; min-height: 44px; padding: 0 9px; }
+  .driver-portal-content { gap: 15px; padding: 25px 14px max(30px, env(safe-area-inset-bottom)); }
+  .driver-portal-heading { align-items: flex-start; }
+  .driver-portal-heading .button { min-height: 44px; padding: 0 10px; font-size: 11px; }
+  .driver-delivery-heading { flex-direction: column; gap: 8px; }
+  .driver-delivery-card { gap: 13px; }
+  .driver-delivery-status { min-height: 27px; }
+}
