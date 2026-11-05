@@ -1,6 +1,6 @@
 # Evolution API para teste local
 
-Este Compose prepara uma instância local e isolada da Evolution API. Ela mantém PostgreSQL, Redis e sessões em volumes próprios. A porta `8080` fica disponível apenas em `127.0.0.1`; banco e Redis não são publicados no computador.
+Este Compose prepara uma instância local e isolada da Evolution API. Ela mantém PostgreSQL, Redis e sessões em volumes próprios. A porta `8081` fica disponível apenas em `127.0.0.1`; banco e Redis não são publicados no computador. O CORS aceita qualquer origem neste perfil local para permitir abrir a página inicial diretamente, mas a API não fica exposta na rede e exige chave.
 
 ## Iniciar
 
@@ -13,7 +13,7 @@ docker compose up -d
 
 Antes de iniciar, `docker version` deve mostrar informações de `Client` e `Server`. Se mostrar apenas `Client` ou erro de conexão, o Docker Engine ainda não está pronto.
 
-Abra `http://127.0.0.1:8080` para conferir a API e ver a documentação interativa disponível pela instalação. Para acompanhar a inicialização:
+Abra `http://127.0.0.1:8081` para conferir a API e ver a documentação interativa disponível pela instalação. Para acompanhar a inicialização:
 
 ```powershell
 docker compose logs -f evolution-api
