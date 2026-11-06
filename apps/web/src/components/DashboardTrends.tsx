@@ -4,7 +4,7 @@ import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
 import type { DashboardRevenueTrendDay } from '../lib/dashboardRevenueTrends'
 import { Icon } from './Icon'
 
-export type DashboardTrendPeriod = 'week' | 'last_7' | 'month' | 'last_30' | 'year'
+export type DashboardTrendPeriod = 'today' | 'week' | 'last_7' | 'month' | 'last_30' | 'year'
 
 export type DashboardTrendDay = {
   business_date: string

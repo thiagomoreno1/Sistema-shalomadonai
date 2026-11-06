@@ -6,6 +6,7 @@ import { DashboardTrends, type DashboardTrendDay, type DashboardTrendPeriod } fr
 import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
 import { createDemoRevenueTrendDays, loadDashboardRevenueTrendDays, type DashboardRevenueTrendDay } from '../lib/dashboardRevenueTrends'
 import { useBusinessToday } from '../lib/useBusinessToday'
+import { useVisibleAutoRefresh } from '../lib/useVisibleAutoRefresh'
 import { isDemoPreviewEnabled } from '../lib/demoPreview'
 import { supabaseClient } from '../lib/supabase'
 import './DashboardDesignReferencesPage.css'
@@ -67,6 +68,7 @@ const actionFilters: Array<{ value: ActionFilter; label: string }> = [
 ]
 
 const trendPeriodOptions: Array<{ value: DashboardTrendPeriod; label: string }> = [
+  { value: 'today', label: 'Hoje' },
   { value: 'week', label: 'Esta semana' },
   { value: 'last_7', label: 'Últimos 7 dias' },
   { value: 'month', label: 'Este mês' },
@@ -201,9 +203,11 @@ function shiftCalendarDate(value: string, offset: number) {
 function getTrendDateRange(today: string, period: DashboardTrendPeriod) {
   const date = new Date(`${today}T12:00:00Z`)
   const weekday = date.getUTCDay()
-  const startOn = period === 'week'
-    ? shiftCalendarDate(today, -((weekday + 6) % 7))
-    : period === 'last_7'
+  const startOn = period === 'today'
+    ? today
+    : period === 'week'
+      ? shiftCalendarDate(today, -((weekday + 6) % 7))
+      : period === 'last_7'
       ? shiftCalendarDate(today, -6)
       : period === 'month'
         ? `${today.slice(0, 7)}-01`
@@ -287,13 +291,13 @@ export function DashboardPage() {
     ? financialSummaryState
     : { loading: true, error: false, data: null }
 
-  const loadTrends = useCallback(async () => {
+  const loadTrends = useCallback(async (silent = false) => {
     const requestId = ++trendRequestId.current
     if (role !== 'owner') {
       setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: [] })
       return
     }
-    setTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
+    if (!silent) setTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
     try {
       if (demoPreview) {
         setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: createDemoTrends(trendStartOn, trendDayCount) })
@@ -315,17 +319,17 @@ export function DashboardPage() {
       if (days.length !== trendDayCount) throw new Error('Incomplete daily series.')
       if (requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days })
     } catch {
-      if (requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
+      if (!silent && requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
     }
   }, [businessId, demoPreview, role, today, trendDayCount, trendScopeKey, trendStartOn])
 
-  const loadRevenueTrends = useCallback(async () => {
+  const loadRevenueTrends = useCallback(async (silent = false) => {
     const requestId = ++revenueTrendRequestId.current
     if (role !== 'owner') {
       setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: [] })
       return
     }
-    setRevenueTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
+    if (!silent) setRevenueTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
     try {
       if (demoPreview) {
         setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: createDemoRevenueTrendDays(trendStartOn, trendDayCount) })
@@ -343,14 +347,14 @@ export function DashboardPage() {
       })
       if (requestId === revenueTrendRequestId.current) setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days })
     } catch {
-      if (requestId === revenueTrendRequestId.current) setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
+      if (!silent && requestId === revenueTrendRequestId.current) setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
     }
   }, [businessId, demoPreview, role, trendDayCount, trendScopeKey, trendStartOn])
 
-  const loadFinancialSummary = useCallback(async () => {
+  const loadFinancialSummary = useCallback(async (silent = false) => {
     const requestId = ++financialSummaryRequestId.current
     if (role !== 'owner') return
-    setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: true, error: false, data: null })
+    if (!silent) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: true, error: false, data: null })
     try {
       if (demoPreview) {
         setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: createDemoFinancialSummary(createDemoTrends(trendStartOn, trendDayCount)) })
@@ -366,17 +370,17 @@ export function DashboardPage() {
       const summary = data as DashboardFinancialSummary
       if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: summary })
     } catch {
-      if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: true, data: null })
+      if (!silent && requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: true, data: null })
     }
   }, [businessId, demoPreview, financialSummaryScopeKey, role, today, trendDayCount, trendStartOn])
 
-  const loadPriorities = useCallback(async () => {
+  const loadPriorities = useCallback(async (silent = false) => {
     const requestId = ++prioritiesRequestId.current
     if (role !== 'owner') {
       setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data: null })
       return
     }
-    setPriorityState({ scopeKey: prioritiesScopeKey, loading: true, error: false, data: null })
+    if (!silent) setPriorityState({ scopeKey: prioritiesScopeKey, loading: true, error: false, data: null })
     try {
       if (demoPreview) {
         setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data: createDemoPriorities(today) })
@@ -390,17 +394,17 @@ export function DashboardPage() {
       if (error || !data) throw error
       if (requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data: data as DashboardPriorities })
     } catch {
-      if (requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: true, data: null })
+      if (!silent && requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: true, data: null })
     }
   }, [businessId, demoPreview, role, today, prioritiesScopeKey])
 
-  const loadRecentOrders = useCallback(async () => {
+  const loadRecentOrders = useCallback(async (silent = false) => {
     const requestId = ++recentOrdersRequestId.current
     if (role !== 'owner') {
       setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: false, orders: [] })
       return
     }
-    setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: true, error: false, orders: [] })
+    if (!silent) setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: true, error: false, orders: [] })
     try {
       if (demoPreview) {
         setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: false, orders: createDemoRecentOrders(today) })
@@ -416,9 +420,20 @@ export function DashboardPage() {
       if (error) throw error
       if (requestId === recentOrdersRequestId.current) setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: false, orders: (data ?? []) as RecentOrder[] })
     } catch {
-      if (requestId === recentOrdersRequestId.current) setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: true, orders: [] })
+      if (!silent && requestId === recentOrdersRequestId.current) setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: true, orders: [] })
     }
   }, [businessId, demoPreview, role, recentOrdersScopeKey, today])
+
+  const refreshDashboard = useCallback(async () => {
+    await Promise.allSettled([
+      loadPriorities(true),
+      loadRecentOrders(true),
+      loadTrends(true),
+      loadRevenueTrends(true),
+      loadFinancialSummary(true),
+    ])
+  }, [loadFinancialSummary, loadPriorities, loadRecentOrders, loadRevenueTrends, loadTrends])
+  useVisibleAutoRefresh(refreshDashboard)
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
@@ -624,7 +639,7 @@ export function DashboardPage() {
             <div>
               <p className="eyebrow">{trendPeriodLabel.toUpperCase()}</p>
           <h2 id="dashboard-financial-title">Dashboard de faturamento</h2>
-              <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)}</p>
+              <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)} · atualização automática a cada minuto</p>
             </div>
             <Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link>
           </div>

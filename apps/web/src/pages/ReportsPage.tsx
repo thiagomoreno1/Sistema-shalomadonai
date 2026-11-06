@@ -187,6 +187,15 @@ function csvMoney(value: string | bigint) {
   return `${sign}${absolute / 100n},${(absolute % 100n).toString().padStart(2, '0')}`
 }
 
+function getCompletedBilling(summary: Summary) {
+  const result = summary.managerial_result
+  const grossCents = BigInt(result.product_subtotal_cents) + BigInt(result.customer_delivery_fee_cents)
+  const netBillingCents = result.available && result.item_cost_cents !== null
+    ? BigInt(result.sales_cents) - BigInt(result.item_cost_cents)
+    : null
+  return { grossCents, netBillingCents }
+}
+
 function statusLabel(order: OrderRow) {
   if (order.status === 'cancelled') return order.cancelled_at ? `Cancelado em ${reportDate(order.cancelled_at)}` : 'Cancelado'
   return 'Ativo'
@@ -552,25 +561,29 @@ export function ReportsPage() {
 
   const reportMatchesPeriod = Boolean(summary && summary.start_on === startOn && summary.end_on === endOn)
   const reportCanBeUsed = reportMatchesPeriod && !loading && !error && !reconciliationWarning
+  const completedBilling = summary ? getCompletedBilling(summary) : null
 
   function exportCsv() {
-    if (!summary) return
+    if (!summary || !completedBilling) return
     const rows: string[][] = [
       ['Relatório financeiro', `${formatBusinessDate(summary.start_on)} a ${formatBusinessDate(summary.end_on)}`],
       ['Escopo', 'Este arquivo inclui pedidos, pagamentos recebidos registrados manualmente, parcelas ainda não pagas, gastos pagos, entradas menos gastos registrados e lucro estimado antes de impostos. Lançamentos anulados por erro ficam visíveis na lista, mas são excluídos dos totais. Não representa saldo bancário nem inclui conferência do extrato. Reembolsos e ajustes financeiros não são registrados neste módulo.'],
       ['Nota sobre pagamentos recebidos', 'Os pagamentos são registrados manualmente pelo proprietário; o sistema não processa nem verifica pagamentos ou créditos bancários.'],
       ['Nota sobre saídas', 'Compras, despesas e custos de entrega aparecem somente quando pagos e são informados manualmente. Compra de estoque afeta o caixa; o resultado reconhece o custo congelado nos itens vendidos.'],
-      ['Como o lucro estimado é calculado', 'Faturamento líquido dos pedidos concluídos − custo dos produtos vendidos − gastos da empresa pagos − pagamentos de entrega.'],
+      ['Como o faturamento líquido é calculado', 'Vendas concluídas após descontos − custo dos produtos vendidos. Os pedidos entram pela data de entrega ou retirada.'],
+      ['Como o resultado estimado é calculado', 'Faturamento líquido − gastos da empresa pagos − pagamentos de entrega.'],
       ['Datas usadas no cálculo do lucro', 'Pedidos e custo dos produtos: data de entrega concluída ou retirada pelo cliente. Gastos e pagamentos de entrega: data do pagamento informado.'],
       ['Lucro estimado antes de impostos (R$)', summary.managerial_result.result_cents === null ? 'Indisponível; falta o custo de algum produto ou há devolução sem ajuste financeiro.' : csvMoney(summary.managerial_result.result_cents)],
       ['Itens sem custo congelado', String(summary.managerial_result.missing_cost_line_count)],
       ['Pedidos concluídos com devolução registrada', String(summary.managerial_result.returned_order_count)],
       ['Pagamentos recebidos menos gastos pagos (R$)', csvMoney(summary.cash_movement.net_recorded_cents)],
-      ['Pedidos ativos no período', String(summary.sales.active_order_count)],
-      ['Faturamento bruto (R$)', csvMoney((BigInt(summary.sales.active_subtotal_cents) + BigInt(summary.sales.active_delivery_fee_cents)).toString())],
-      ['Taxas de entrega cobradas (R$)', csvMoney(summary.sales.active_delivery_fee_cents)],
-      ['Descontos nos pedidos (R$)', csvMoney(summary.sales.active_discount_cents)],
-      ['Faturamento líquido (R$)', csvMoney(summary.sales.active_total_cents)],
+      ['Pedidos concluídos (entrega ou retirada)', String(summary.managerial_result.completed_order_count)],
+      ['Faturamento bruto das vendas concluídas (R$)', csvMoney(completedBilling.grossCents)],
+      ['Descontos nas vendas concluídas (R$)', csvMoney(summary.managerial_result.discount_cents)],
+      ['Vendas concluídas após descontos (R$)', csvMoney(summary.managerial_result.sales_cents)],
+      ['Custo dos produtos vendidos (R$)', summary.managerial_result.item_cost_cents === null ? 'Indisponível' : csvMoney(summary.managerial_result.item_cost_cents)],
+      ['Faturamento líquido (R$)', completedBilling.netBillingCents === null ? 'Indisponível' : csvMoney(completedBilling.netBillingCents)],
+      ['Pedidos ainda em andamento criados no período', String(summary.sales.active_order_count)],
       ['Pedidos criados no período atualmente cancelados', String(summary.sales.cancelled_order_count)],
       ['Total originalmente registrado nesses pedidos atualmente cancelados (R$)', csvMoney(summary.sales.cancelled_total_cents)],
       ['Pagamentos recebidos no período (R$)', csvMoney(summary.receipts.amount_cents)],
@@ -638,10 +651,10 @@ export function ReportsPage() {
       {!loading && reportMatchesPeriod && summary && !error && <>
         {reconciliationWarning && <div className="form-message form-message-warning report-reconciliation-warning" role="alert"><span>O resumo e os lançamentos detalhados não coincidem neste carregamento. Confira novamente antes de usar estes valores.</span><button className="text-button" disabled={loading} onClick={() => void loadReport()} type="button">Reconciliar novamente</button></div>}
         {!reconciliationWarning && <>
-        <p className="section-footnote report-scope-note">Faturamento pela data do pedido. Lucro pela data da entrega ou retirada.</p>
+        <p className="section-footnote report-scope-note">Faturamento pela data da entrega ou retirada. Pedidos em andamento não entram no faturamento.</p>
         <section className="report-summary-grid" aria-label="Resumo do período">
-          <article className="surface-panel report-summary-card"><span>Faturamento bruto</span><strong>{formatBRLExact((BigInt(summary.sales.active_subtotal_cents) + BigInt(summary.sales.active_delivery_fee_cents)).toString())}</strong><small>{summary.sales.active_order_count} pedidos não cancelados · antes dos descontos</small></article>
-          <article className="surface-panel report-summary-card"><span>Faturamento líquido</span><strong>{formatBRLExact(summary.sales.active_total_cents)}</strong><small>Pedidos não cancelados após descontos · inclui os ainda em andamento</small></article>
+          <article className="surface-panel report-summary-card"><span>Faturamento bruto</span><strong>{formatBRLExact(completedBilling?.grossCents ?? 0n)}</strong><small>{summary.managerial_result.completed_order_count} entregas ou retiradas · antes dos descontos</small></article>
+          <article className="surface-panel report-summary-card"><span>Faturamento líquido</span><strong>{completedBilling?.netBillingCents === null ? 'A conferir' : formatBRLExact(completedBilling?.netBillingCents ?? 0n)}</strong><small>Vendas após descontos − custo dos produtos</small></article>
           <article className="surface-panel report-summary-card"><span>Pagamentos recebidos</span><strong>{formatBRLExact(summary.receipts.amount_cents)}</strong><small>{summary.receipts.record_count} pagamentos registrados</small></article>
           <article className="surface-panel report-summary-card"><span>Saldo a receber</span><strong>{formatBRLExact(summary.receivables.open_balance_cents)}</strong><small>{summary.receivables.installment_count} parcelas pendentes</small></article>
           <article className="surface-panel report-summary-card"><span>Pagamentos atrasados</span><strong>{formatBRLExact(summary.receivables.overdue_balance_cents)}</strong><small>Parcelas fora do prazo</small></article>
@@ -652,10 +665,13 @@ export function ReportsPage() {
           <div>
             <p className="eyebrow">LUCRO ESTIMADO · ANTES DE IMPOSTOS</p>
             <h2 id="report-result-title">{summary.managerial_result.available && summary.managerial_result.result_cents !== null ? formatBRLExact(summary.managerial_result.result_cents) : 'Não foi possível calcular o lucro deste período'}</h2>
-            <p className="report-result-formula">Faturamento líquido − custo dos produtos vendidos − gastos pagos − entregas pagas.</p>
+            <p className="report-result-formula">Faturamento líquido − gastos pagos − entregas pagas.</p>
             <div className="report-breakdown report-result-breakdown" aria-label="Valores usados no lucro estimado">
-              <div><span>Faturamento líquido</span><strong>{formatBRLExact(summary.managerial_result.sales_cents)}</strong></div>
+              <div><span>Faturamento bruto</span><strong>{formatBRLExact(completedBilling?.grossCents ?? 0n)}</strong></div>
+              <div><span>Descontos</span><strong>− {formatBRLExact(summary.managerial_result.discount_cents)}</strong></div>
+              <div><span>Vendas após descontos</span><strong>{formatBRLExact(summary.managerial_result.sales_cents)}</strong></div>
               <div><span>Custo dos produtos</span><strong>{summary.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(summary.managerial_result.item_cost_cents)}</strong></div>
+              <div><span>Faturamento líquido</span><strong>{completedBilling?.netBillingCents === null ? 'A conferir' : formatBRLExact(completedBilling?.netBillingCents ?? 0n)}</strong></div>
               <div><span>Gastos</span><strong>{formatBRLExact(summary.managerial_result.operating_expense_cents)}</strong></div>
               <div><span>Entregas</span><strong>{formatBRLExact(summary.managerial_result.delivery_cost_cents)}</strong></div>
             </div>

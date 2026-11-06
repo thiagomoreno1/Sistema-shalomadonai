@@ -7,8 +7,10 @@ import { isDemoPreviewEnabled } from '../lib/demoPreview'
 import { createDemoRevenueTrendDays, loadDashboardRevenueTrendDays, type DashboardRevenueTrendDay } from '../lib/dashboardRevenueTrends'
 import { supabaseClient } from '../lib/supabase'
 import { useBusinessToday } from '../lib/useBusinessToday'
+import { useVisibleAutoRefresh } from '../lib/useVisibleAutoRefresh'
 
 const periodOptions: Array<{ value: DashboardTrendPeriod; label: string }> = [
+  { value: 'today', label: 'Hoje' },
   { value: 'week', label: 'Esta semana' },
   { value: 'last_7', label: 'Últimos 7 dias' },
   { value: 'month', label: 'Este mês' },
@@ -27,9 +29,11 @@ function shiftCalendarDate(value: string, offset: number) {
 function getDateRange(today: string, period: DashboardTrendPeriod) {
   const date = new Date(`${today}T12:00:00Z`)
   const weekday = date.getUTCDay()
-  const startOn = period === 'week'
-    ? shiftCalendarDate(today, -((weekday + 6) % 7))
-    : period === 'last_7'
+  const startOn = period === 'today'
+    ? today
+    : period === 'week'
+      ? shiftCalendarDate(today, -((weekday + 6) % 7))
+      : period === 'last_7'
       ? shiftCalendarDate(today, -6)
       : period === 'month'
         ? `${today.slice(0, 7)}-01`
@@ -100,7 +104,7 @@ export function FinancialChartsPanel() {
   const trends = trendState.scopeKey === scopeKey ? trendState : { loading: true, error: false, days: [] }
   const revenue = revenueState.scopeKey === scopeKey ? revenueState : { loading: true, error: false, days: [] }
 
-  const loadTrends = useCallback(async () => {
+  const loadTrends = useCallback(async (silent = false) => {
     const requestId = ++trendRequestId.current
     try {
       if (demoPreview) {
@@ -123,11 +127,11 @@ export function FinancialChartsPanel() {
       if (days.length !== dayCount) throw new Error('Incomplete daily series.')
       if (requestId === trendRequestId.current) setTrendState({ scopeKey, loading: false, error: false, days })
     } catch {
-      if (requestId === trendRequestId.current) setTrendState({ scopeKey, loading: false, error: true, days: [] })
+      if (!silent && requestId === trendRequestId.current) setTrendState({ scopeKey, loading: false, error: true, days: [] })
     }
   }, [businessId, dayCount, demoPreview, scopeKey, startOn])
 
-  const loadRevenue = useCallback(async () => {
+  const loadRevenue = useCallback(async (silent = false) => {
     const requestId = ++revenueRequestId.current
     try {
       if (demoPreview) {
@@ -148,9 +152,14 @@ export function FinancialChartsPanel() {
       })
       if (requestId === revenueRequestId.current) setRevenueState({ scopeKey, loading: false, error: false, days })
     } catch {
-      if (requestId === revenueRequestId.current) setRevenueState({ scopeKey, loading: false, error: true, days: [] })
+      if (!silent && requestId === revenueRequestId.current) setRevenueState({ scopeKey, loading: false, error: true, days: [] })
     }
   }, [businessId, dayCount, demoPreview, scopeKey, startOn])
+
+  const refreshFinancialCharts = useCallback(async () => {
+    await Promise.allSettled([loadTrends(true), loadRevenue(true)])
+  }, [loadRevenue, loadTrends])
+  useVisibleAutoRefresh(refreshFinancialCharts)
 
   useEffect(() => {
     const scheduledRequestId = trendRequestId.current
@@ -181,7 +190,7 @@ export function FinancialChartsPanel() {
           </select>
         </label>
       </header>
-      <p className="financial-charts-range">{formatBusinessDate(startOn)} a {formatBusinessDate(today)}</p>
+      <p className="financial-charts-range">{formatBusinessDate(startOn)} a {formatBusinessDate(today)} · atualização automática a cada minuto</p>
       <DashboardTrends
         days={trends.days}
         embedded

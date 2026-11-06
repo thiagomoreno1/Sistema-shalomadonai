@@ -4,6 +4,7 @@ import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
 import { createDemoProductRevenueSummary, formatQuantityMilli, loadDashboardProductRevenue, type DashboardProductRevenueSummary } from '../lib/dashboardProductRevenue'
 import { isDemoPreviewEnabled } from '../lib/demoPreview'
 import { supabaseClient } from '../lib/supabase'
+import { useVisibleAutoRefresh } from '../lib/useVisibleAutoRefresh'
 
 function dayCountBetween(startOn: string, endOn: string) {
   return Math.floor((Date.parse(`${endOn}T00:00:00Z`) - Date.parse(`${startOn}T00:00:00Z`)) / 86_400_000) + 1
@@ -17,7 +18,7 @@ export function DashboardProductRevenue({ startOn, endOn }: { startOn: string; e
   const [state, setState] = useState<{ scopeKey: string; loading: boolean; error: boolean; summary: DashboardProductRevenueSummary | null }>({ scopeKey: '', loading: true, error: false, summary: null })
   const current = state.scopeKey === scopeKey ? state : { loading: true, error: false, summary: null }
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     const currentRequestId = ++requestId.current
     try {
       if (demoPreview) {
@@ -37,9 +38,10 @@ export function DashboardProductRevenue({ startOn, endOn }: { startOn: string; e
       })
       if (currentRequestId === requestId.current) setState({ scopeKey, loading: false, error: false, summary })
     } catch {
-      if (currentRequestId === requestId.current) setState({ scopeKey, loading: false, error: true, summary: null })
+      if (!silent && currentRequestId === requestId.current) setState({ scopeKey, loading: false, error: true, summary: null })
     }
   }, [businessId, demoPreview, endOn, scopeKey, startOn])
+  useVisibleAutoRefresh(() => load(true))
 
   useEffect(() => {
     const scheduledRequestId = requestId.current
