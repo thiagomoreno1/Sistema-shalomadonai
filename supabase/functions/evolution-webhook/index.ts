@@ -68,11 +68,26 @@ function digitsOnly(value: string): string {
 }
 
 function phoneFromJid(value: string | null): string | null {
-  if (!value || value.toLowerCase().includes('@lid') || value.includes('@g.us')) return null
+  if (!value || value.toLowerCase().includes('@lid') || isGroupJid(value)) return null
   const localPart = value.split('@', 1)[0].split(':', 1)[0]
   const digits = digitsOnly(localPart)
   if (digits.length === 10 || digits.length === 11) return `+55${digits}`
   if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) return `+${digits}`
+  return null
+}
+
+function isGroupJid(value: string | null): boolean {
+  return Boolean(value && /@g\.us$/i.test(value))
+}
+
+function evolutionContactName(row: JsonRecord, isGroup: boolean): string | null {
+  const candidates = isGroup
+    ? [row.subject, row.name, row.verifiedName]
+    : [row.name, row.notify, row.verifiedName, row.pushName]
+  for (const candidate of candidates) {
+    const name = stringValue(candidate, 160)
+    if (name) return name
+  }
   return null
 }
 
@@ -159,6 +174,16 @@ function messagePayload(value: unknown): JsonRecord | null {
   if (fileLength !== null && fileLength >= 0) mediaMetadata.file_size = fileLength
 
   const fromMe = key?.fromMe === true
+  const isGroup = isGroupJid(remoteJid)
+  const senderName = stringValue(value.pushName, 160)
+  const participantJid = stringValue(key?.participant ?? key?.participantAlt, 256)
+  if (isGroup && senderName) mediaMetadata.sender_name = senderName
+  if (participantJid) mediaMetadata.participant_jid = participantJid
+  if (kind === 'reaction') {
+    const targetKey = isRecord(contentObject.key) ? contentObject.key : null
+    const targetMessageId = stringValue(targetKey?.id, 256)
+    if (targetMessageId) mediaMetadata.reaction_to_message_id = targetMessageId
+  }
   const deliveryStatus = stringValue(value.status, 24)?.toLowerCase()
   const validStatus = ['pending', 'sent', 'delivered', 'read', 'played', 'failed', 'deleted'].includes(deliveryStatus ?? '')
     ? deliveryStatus
@@ -168,8 +193,10 @@ function messagePayload(value: unknown): JsonRecord | null {
     id: messageId,
     remote_jid: remoteJid,
     remote_jid_alt: remoteJidAlt,
-    contact_name: stringValue(value.pushName, 160),
-    contact_phone: phoneFromJid(remoteJidAlt) ?? phoneFromJid(remoteJid),
+    // pushName is a useful fallback only for individual chats. In groups it is
+    // the participant's name, never the group title.
+    contact_name: isGroup ? null : senderName,
+    contact_phone: isGroup ? null : phoneFromJid(remoteJidAlt) ?? phoneFromJid(remoteJid),
     direction: fromMe ? 'outgoing' : 'incoming',
     message_kind: kind,
     content,
@@ -232,9 +259,12 @@ async function upsertConversation(
   phone: string | null,
   activityAt: string,
   unreadCount?: number,
+  authoritativeName = false,
 ) {
+  const isGroup = isGroupJid(remoteJid)
+  const safePhone = isGroup ? null : phone
   const { data: existing, error: lookupError } = await admin.from('whatsapp_conversations')
-    .select('id, remote_jid_alt, contact_phone')
+    .select('id, remote_jid_alt, contact_phone, contact_name')
     .eq('business_id', businessId)
     .eq('instance_name', instanceName)
     .eq('remote_jid', remoteJid)
@@ -243,21 +273,28 @@ async function upsertConversation(
 
   if (existing?.id) {
     const update: JsonRecord = {}
-    if (name) update.contact_name = name
-    if (phone) update.contact_phone = phone
+    if (name && (authoritativeName || !stringValue(existing.contact_name, 160))) update.contact_name = name
+    if (isGroup) update.contact_phone = null
+    else if (safePhone) update.contact_phone = safePhone
     if (remoteJidAlt) update.remote_jid_alt = remoteJidAlt
     const existingPhone = stringValue(existing.contact_phone, 64)
     const existingJidAlt = stringValue(existing.remote_jid_alt, 256)
-    const matchingPhone = phone
+    const matchingPhone = isGroup ? null : safePhone
       ?? phoneFromJid(remoteJidAlt ?? existingJidAlt)
       ?? existingPhone
-    if (matchingPhone && !phone) update.contact_phone = matchingPhone
+    if (matchingPhone && !safePhone) update.contact_phone = matchingPhone
     if (Object.keys(update).length) {
       const { error } = await admin.from('whatsapp_conversations').update(update)
         .eq('business_id', businessId).eq('id', existing.id)
       if (error) throw new Error('conversation_update_failed')
     }
-    await resolvePhoneMatch(admin, businessId, matchingPhone, existing.id)
+    if (isGroup) {
+      const { error: staleMatchError } = await admin.from('whatsapp_conversation_contexts')
+        .delete().eq('business_id', businessId).eq('conversation_id', existing.id).eq('match_method', 'phone')
+      if (staleMatchError) throw new Error('group_phone_match_clear_failed')
+    } else {
+      await resolvePhoneMatch(admin, businessId, matchingPhone, existing.id)
+    }
     return existing.id as string
   }
 
@@ -267,7 +304,7 @@ async function upsertConversation(
     remote_jid: remoteJid,
     remote_jid_alt: remoteJidAlt,
     contact_name: name,
-    contact_phone: phone,
+    contact_phone: safePhone,
     last_activity_at: activityAt,
   }
   if (unreadCount !== undefined) row.unread_count = unreadCount
@@ -284,7 +321,13 @@ async function upsertConversation(
     if (raceLookupError || !raced?.id) throw new Error('conversation_save_failed')
     conversationId = raced.id as string
   }
-  await resolvePhoneMatch(admin, businessId, phone, conversationId)
+  if (isGroup) {
+    const { error: staleMatchError } = await admin.from('whatsapp_conversation_contexts')
+      .delete().eq('business_id', businessId).eq('conversation_id', conversationId).eq('match_method', 'phone')
+    if (staleMatchError) throw new Error('group_phone_match_clear_failed')
+  } else {
+    await resolvePhoneMatch(admin, businessId, safePhone, conversationId)
+  }
   return conversationId
 }
 
@@ -419,23 +462,32 @@ async function processChatOrContactEvent(
   event: string,
   value: unknown,
 ) {
-  const rows = eventRows(value, event.startsWith('CONTACTS_') ? 'contacts' : 'chats')
+  const collectionKey = event.startsWith('CONTACTS_') ? 'contacts'
+    : event.startsWith('GROUP') ? 'groups' : 'chats'
+  const rows = eventRows(value, collectionKey)
   for (const row of rows) {
     if (!isRecord(row)) continue
-    const jid = stringValue(row.remoteJid ?? row.id ?? row.wuid, 256)
+    const isGroupEvent = event === 'GROUPS_UPSERT' || event === 'GROUP_UPDATE' || event === 'GROUPS_UPDATE'
+    const jid = stringValue(row.remoteJid ?? row.groupJid ?? row.jid ?? row.id ?? row.wuid, 256)
     const jidAlt = stringValue(row.remoteJidAlt ?? row.phoneNumberJid, 256)
     if (!jid) continue
     const isContactEvent = event.startsWith('CONTACTS_')
-    const name = stringValue(row.pushName ?? row.name ?? row.verifiedName, 160)
-    const phone = phoneFromJid(jidAlt) ?? phoneFromJid(jid)
-    if (event === 'CHATS_SET' || event === 'CHATS_UPSERT' || event === 'CHATS_UPDATE') {
+    const isChatEvent = event.startsWith('CHATS_') || isGroupEvent
+    const isGroup = isGroupEvent || isGroupJid(jid)
+    const hasProviderSavedName = isGroup
+      ? Boolean(stringValue(row.subject ?? row.name ?? row.verifiedName, 160))
+      : Boolean(stringValue(row.name ?? row.notify ?? row.verifiedName, 160))
+    const name = isContactEvent && !hasProviderSavedName ? null : evolutionContactName(row, isGroup)
+    const phone = isGroup ? null : phoneFromJid(jidAlt) ?? phoneFromJid(jid)
+    if (isChatEvent) {
       const unread = typeof row.unreadCount === 'number' ? row.unreadCount
         : typeof row.unreadMessages === 'number' ? row.unreadMessages : undefined
       const timestamp = row.lastMessageRecvTimestamp ?? row.conversationTimestamp
-      await upsertConversation(admin, businessId, instanceName, jid, jidAlt, name, phone, isoTimestamp(timestamp), unread)
+      await upsertConversation(admin, businessId, instanceName, jid, jidAlt, name, phone, isoTimestamp(timestamp), unread, hasProviderSavedName)
       continue
     }
     if (!isContactEvent) continue
+    if (isGroup) continue
     const update: JsonRecord = {}
     if (name) update.contact_name = name
     if (phone) update.contact_phone = phone
@@ -506,7 +558,9 @@ export default {
       for (const call of eventRows(payload, 'calls')) {
         await processCallEvent(admin, businessId, configuration.instanceName, call)
       }
-    } else if (event === 'CHATS_SET' || event === 'CHATS_UPSERT' || event === 'CHATS_UPDATE' || event === 'CONTACTS_SET' || event === 'CONTACTS_UPSERT' || event === 'CONTACTS_UPDATE') {
+    } else if (event === 'CHATS_SET' || event === 'CHATS_UPSERT' || event === 'CHATS_UPDATE'
+      || event === 'GROUPS_UPSERT' || event === 'GROUP_UPDATE' || event === 'GROUPS_UPDATE'
+      || event === 'CONTACTS_SET' || event === 'CONTACTS_UPSERT' || event === 'CONTACTS_UPDATE') {
       await processChatOrContactEvent(admin, businessId, configuration.instanceName, event, payload)
     }
     return json({ received: true })

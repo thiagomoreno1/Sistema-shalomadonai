@@ -2,9 +2,13 @@ import { withSupabase } from '@supabase/server'
 
 const PAGE_SIZE = 25
 const MESSAGE_HISTORY_LIMIT = 150
+const OLDER_MESSAGE_PAGE_SIZE = 50
+const LEGACY_CHAT_PAGE_SIZE = 50
+const LEGACY_SYNC_COOLDOWN_MS = 60_000
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 const MAX_OUTBOUND_MEDIA_BYTES = 2 * 1024 * 1024
 const MAX_REQUEST_BYTES = 3_000_000
+const MAX_EVOLUTION_JSON_BYTES = 4_000_000
 const OUTBOUND_MEDIA_TYPES: Record<string, 'image' | 'audio' | 'video' | 'document'> = {
   'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image',
   'audio/aac': 'audio', 'audio/mpeg': 'audio', 'audio/mp4': 'audio', 'audio/ogg': 'audio', 'audio/wav': 'audio', 'audio/webm': 'audio',
@@ -17,6 +21,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Cache-Control': 'no-store',
 }
+const recentLegacySync = new Map<string, { at: number; result: JsonRecord }>()
 
 type JsonRecord = Record<string, unknown>
 type EvolutionConfig = {
@@ -44,6 +49,10 @@ function text(value: unknown, maximumLength: number): string | null {
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function isGroupJid(value: unknown): boolean {
+  return typeof value === 'string' && /@g\.us$/i.test(value)
 }
 
 function json(body: unknown, status = 200): Response {
@@ -97,7 +106,40 @@ function evolutionUrl(config: EvolutionConfig, path: string): URL {
   return new URL(path.replace(/^\//, ''), `${config.baseUrl.toString().replace(/\/$/, '')}/`)
 }
 
-async function evolutionRequest(config: EvolutionConfig, path: string, init?: RequestInit): Promise<unknown> {
+async function readBoundedEvolutionResponse(response: Response, maximumBytes: number): Promise<string> {
+  const declaredLength = Number(response.headers.get('Content-Length'))
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    await response.body?.cancel().catch(() => undefined)
+    throw new RequestError(502, 'evolution_response_too_large')
+  }
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      totalBytes += value.byteLength
+      if (totalBytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined)
+        throw new RequestError(502, 'evolution_response_too_large')
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const body = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    body.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(body)
+}
+
+async function evolutionRequest(config: EvolutionConfig, path: string, init?: RequestInit, maximumResponseBytes = MAX_EVOLUTION_JSON_BYTES): Promise<unknown> {
   const headers = new Headers(init?.headers)
   headers.set('apikey', config.apiKey)
   headers.set('Accept', 'application/json')
@@ -112,7 +154,7 @@ async function evolutionRequest(config: EvolutionConfig, path: string, init?: Re
     throw new RequestError(response.status === 401 || response.status === 403 ? 502 : 503, 'evolution_request_failed')
   }
   if (response.status === 204) return null
-  const raw = await response.text()
+  const raw = await readBoundedEvolutionResponse(response, maximumResponseBytes)
   if (!raw) return null
   try { return JSON.parse(raw) as unknown } catch { return raw }
 }
@@ -136,11 +178,167 @@ async function setEvolutionWebhook(config: EvolutionConfig): Promise<void> {
       enabled: true,
       url: config.webhookUrl,
       headers: { Authorization: `Bearer ${config.webhookSecret}` },
-      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
+      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
       byEvents: false,
       base64: false,
     } }),
   })
+}
+
+async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: string, providerPage: number): Promise<JsonRecord> {
+  const cacheKey = `${businessId}:${config.instanceName}:${providerPage}`
+  const cached = recentLegacySync.get(cacheKey)
+  if (cached && Date.now() - cached.at < LEGACY_SYNC_COOLDOWN_MS) {
+    return { ...cached.result, status: 'recently_synced' }
+  }
+
+  let chatRecords: JsonRecord[]
+  let contactRecords: JsonRecord[] = []
+  let chatPages = 0
+  try {
+    const [chatResult, contactResult] = await Promise.all([
+      evolutionRequest(config, `/chat/findChats/${encodeURIComponent(config.instanceName)}`, {
+        method: 'POST', body: JSON.stringify({
+          where: {}, page: providerPage, offset: LEGACY_CHAT_PAGE_SIZE,
+          // Baileys versions that expose raw take/skip still get a hard page cap.
+          take: LEGACY_CHAT_PAGE_SIZE, skip: (providerPage - 1) * LEGACY_CHAT_PAGE_SIZE,
+        }),
+      }),
+      evolutionRequest(config, `/chat/findContacts/${encodeURIComponent(config.instanceName)}`, {
+        method: 'POST', body: JSON.stringify({
+          where: {}, page: 1, offset: LEGACY_CHAT_PAGE_SIZE,
+          take: LEGACY_CHAT_PAGE_SIZE, skip: 0,
+        }),
+      }).catch(() => null),
+    ])
+    chatRecords = recordsFromEvolution(chatResult, ['chats', 'records', 'data']).slice(0, LEGACY_CHAT_PAGE_SIZE)
+    contactRecords = recordsFromEvolution(contactResult, ['contacts', 'records', 'data']).slice(0, LEGACY_CHAT_PAGE_SIZE)
+    const chatPageInfo = isRecord(chatResult) && isRecord(chatResult.chats) ? chatResult.chats : isRecord(chatResult) ? chatResult : {}
+    chatPages = Number(chatPageInfo.pages ?? chatPageInfo.totalPages) || 0
+  } catch {
+    return {
+      status: 'unavailable', synced_conversations: 0, imported_messages: 0,
+      has_more: false, provider_page: providerPage,
+      notice: 'Não foi possível consultar conversas antigas na Evolution. As conversas já sincronizadas continuam disponíveis.',
+    }
+  }
+
+  const namesByJid = new Map<string, string>()
+  for (const contact of contactRecords) {
+    const jid = text(contact.remoteJid ?? contact.id ?? contact.wuid, 256)
+    if (!jid || isGroupJid(jid)) continue
+    const name = savedContactName(contact)
+    if (name) namesByJid.set(jid, name)
+  }
+
+  let syncedConversations = 0
+  let importedMessages = 0
+  for (const chat of chatRecords) {
+    const jid = text(chat.remoteJid ?? chat.jid ?? chat.id, 256)
+    if (!jid) continue
+    const group = isGroupJid(jid)
+    const jidAlt = text(chat.remoteJidAlt ?? chat.remoteJidLid ?? chat.phoneNumberJid, 256)
+    const savedName = group
+      ? evolutionName(chat, true)
+      // Prefer the chat label, which can reflect the local WhatsApp contact
+      // name, over the contact's remote profile pushName.
+      : text(chat.name, 160) ?? namesByJid.get(jid) ?? text(chat.notify, 160) ?? text(chat.verifiedName, 160)
+    const fallbackName = group ? null : text(chat.pushName, 160)
+    const name = savedName ?? fallbackName
+    const phone = group ? null : phoneFromWhatsAppJid(jidAlt ?? jid)
+    const activity = providerTimestamp(chat.lastMessageRecvTimestamp ?? chat.conversationTimestamp ?? chat.updatedAt)
+    const unread = typeof chat.unreadCount === 'number' && Number.isInteger(chat.unreadCount) ? Math.max(0, chat.unreadCount)
+      : typeof chat.unreadMessages === 'number' && Number.isInteger(chat.unreadMessages) ? Math.max(0, chat.unreadMessages) : 0
+    const { data: existing, error: lookupError } = await admin.from('whatsapp_conversations')
+      .select('id, contact_name, last_activity_at')
+      .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('remote_jid', jid).maybeSingle()
+    if (lookupError) throw new RequestError(500, 'history_sync_failed')
+    let conversationId = typeof existing?.id === 'string' ? existing.id : null
+    if (conversationId) {
+      const update: JsonRecord = {}
+      if (savedName) update.contact_name = savedName
+      else if (!text(existing.contact_name, 160) && fallbackName) update.contact_name = fallbackName
+      if (group) update.contact_phone = null
+      else if (phone) update.contact_phone = phone
+      if (jidAlt) update.remote_jid_alt = jidAlt
+      if (!existing.last_activity_at || activity > String(existing.last_activity_at)) update.last_activity_at = activity
+      if (unread > 0) update.unread_count = unread
+      if (Object.keys(update).length) {
+        const { error } = await admin.from('whatsapp_conversations').update(update)
+          .eq('business_id', businessId).eq('id', conversationId)
+        if (error) throw new RequestError(500, 'history_sync_failed')
+      }
+    } else {
+      const { data, error } = await admin.from('whatsapp_conversations').upsert({
+        business_id: businessId,
+        instance_name: config.instanceName,
+        remote_jid: jid,
+        remote_jid_alt: jidAlt,
+        contact_name: name ?? (group ? null : text(chat.pushName, 160)),
+        contact_phone: phone,
+        last_activity_at: activity,
+        unread_count: unread,
+      }, { onConflict: 'business_id,instance_name,remote_jid', ignoreDuplicates: true }).select('id').maybeSingle()
+      if (error) throw new RequestError(500, 'history_sync_failed')
+      conversationId = typeof data?.id === 'string' ? data.id : null
+      if (!conversationId) {
+        const { data: raced } = await admin.from('whatsapp_conversations').select('id')
+          .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('remote_jid', jid).maybeSingle()
+        conversationId = typeof raced?.id === 'string' ? raced.id : null
+      }
+    }
+    if (!conversationId) continue
+    syncedConversations += 1
+
+    if (!group) await resolvePhoneMatchForInbox(admin, businessId, phone, conversationId)
+
+    if (group) {
+      const { error } = await admin.from('whatsapp_conversation_contexts').delete()
+        .eq('business_id', businessId).eq('conversation_id', conversationId).eq('match_method', 'phone')
+      if (error) throw new RequestError(500, 'history_sync_failed')
+    }
+
+    const lastMessage = providerMessagePayload(chat.lastMessage ?? chat.last_message)
+    if (lastMessage && lastMessage.remote_jid === jid) {
+      const { error } = await admin.from('whatsapp_messages').upsert({
+        business_id: businessId,
+        conversation_id: conversationId,
+        instance_name: config.instanceName,
+        provider_message_id: lastMessage.id,
+        direction: lastMessage.direction,
+        message_kind: lastMessage.message_kind,
+        content: lastMessage.content,
+        delivery_status: lastMessage.delivery_status,
+        count_as_unread: false,
+        media_metadata: lastMessage.media_metadata,
+        provider_timestamp: lastMessage.provider_timestamp,
+      }, { onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true })
+      if (error) throw new RequestError(500, 'history_sync_failed')
+      importedMessages += 1
+    }
+  }
+
+  // Contacts not present in the first chat page can still provide the saved
+  // contact label for existing conversations. Never use these rows for groups.
+  for (const [jid, name] of namesByJid) {
+    const { error } = await admin.from('whatsapp_conversations').update({ contact_name: name })
+      .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('remote_jid', jid).is('contact_name', null)
+    if (error) throw new RequestError(500, 'history_sync_failed')
+  }
+
+  const result = {
+    status: chatRecords.length === 0 && providerPage === 1 ? 'empty' : 'available',
+    synced_conversations: syncedConversations,
+    imported_messages: importedMessages,
+    page_size: LEGACY_CHAT_PAGE_SIZE,
+    provider_page: providerPage,
+    has_more: chatPages > 0 ? providerPage < chatPages : chatRecords.length >= LEGACY_CHAT_PAGE_SIZE,
+    ...(chatRecords.length === 0 && providerPage === 1
+      ? { notice: 'A Evolution não retornou conversas salvas para importar. Confira a sincronização de histórico na instância.' }
+      : {}),
+  }
+  recentLegacySync.set(cacheKey, { at: Date.now(), result })
+  return result
 }
 
 function evolutionInstanceName(entry: unknown): string | null {
@@ -157,10 +355,11 @@ function conversationResponse(row: JsonRecord, lastMessage: JsonRecord | null) {
   return {
     id: row.id,
     inbox_id: row.instance_name,
+    is_group: isGroupJid(remoteJid),
     status: row.status,
     can_reply: canReply,
     unread_count: Number(row.unread_count) || 0,
-    contact: { name: row.contact_name ?? null, phone: row.contact_phone ?? null },
+    contact: { name: row.contact_name ?? null, phone: isGroupJid(remoteJid) ? null : row.contact_phone ?? null },
     last_activity_at: row.last_activity_at,
     last_message: lastMessage ? normalizedMessage(lastMessage) : null,
     messages: [],
@@ -168,7 +367,7 @@ function conversationResponse(row: JsonRecord, lastMessage: JsonRecord | null) {
 }
 
 function phoneFromWhatsAppJid(value: string): string | null {
-  if (value.includes('@lid') || value.includes('@g.us')) return null
+  if (value.toLowerCase().includes('@lid') || isGroupJid(value)) return null
   const digits = value.split('@', 1)[0].split(':', 1)[0].replace(/\D/g, '')
   if (digits.length === 10 || digits.length === 11) return `+55${digits}`
   if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) return `+${digits}`
@@ -188,7 +387,9 @@ function normalizedMessage(row: JsonRecord) {
     message_type: row.direction === 'incoming' ? 'incoming' : row.direction === 'outgoing' ? 'outgoing' : 'activity',
     status: row.delivery_status ?? null,
     private: false,
-    sender: { name: row.direction === 'incoming' ? 'Cliente' : null },
+    sender: {
+      name: row.direction === 'incoming' ? text(mediaMetadata.sender_name, 160) : null,
+    },
     attachments: fileType ? [{
       id: row.id,
       file_type: fileType,
@@ -202,6 +403,188 @@ function normalizedMessage(row: JsonRecord) {
     message_kind: kind,
     deleted: Boolean(row.deleted_at),
   }
+}
+
+function attachMessageReactions(messages: JsonRecord[], reactionRows: JsonRecord[]): JsonRecord[] {
+  const reactionsByTarget = new Map<string, Map<string, string>>()
+  for (const reaction of reactionRows) {
+    const metadata = isRecord(reaction.media_metadata) ? reaction.media_metadata : {}
+    const targetId = text(metadata.reaction_to_message_id, 256)
+    if (!targetId) continue
+    const actor = reaction.direction === 'outgoing'
+      ? 'self'
+      : text(metadata.participant_jid, 256) ?? 'contact'
+    let reactions = reactionsByTarget.get(targetId)
+    if (!reactions) {
+      reactions = new Map()
+      reactionsByTarget.set(targetId, reactions)
+    }
+    // The caller orders newest first; the first event per sender wins.
+    if (reactions.has(actor)) continue
+    reactions.set(actor, typeof reaction.content === 'string' ? reaction.content.trim() : '')
+  }
+  return messages.filter((row) => row.message_kind !== 'reaction').map((row) => {
+    const byActor = reactionsByTarget.get(String(row.provider_message_id))
+    const counts = new Map<string, { emoji: string; count: number; from_me: boolean }>()
+    for (const [actor, emoji] of byActor ?? []) {
+      if (!emoji) continue
+      const current = counts.get(emoji)
+      if (current) {
+        current.count += 1
+        current.from_me ||= actor === 'self'
+      } else counts.set(emoji, { emoji, count: 1, from_me: actor === 'self' })
+    }
+    const normalized = normalizedMessage(row)
+    return { ...normalized, reactions: [...counts.values()] }
+  })
+}
+
+function recordsFromEvolution(value: unknown, keys: string[]): JsonRecord[] {
+  if (Array.isArray(value)) return value.filter(isRecord)
+  if (!isRecord(value)) return []
+  for (const key of keys) {
+    if (Array.isArray(value[key])) return (value[key] as unknown[]).filter(isRecord)
+    if (isRecord(value[key])) {
+      const nested = recordsFromEvolution(value[key], keys)
+      if (nested.length) return nested
+    }
+  }
+  if (isRecord(value.data)) return recordsFromEvolution(value.data, keys)
+  if (isRecord(value.result)) return recordsFromEvolution(value.result, keys)
+  return []
+}
+
+function evolutionName(row: JsonRecord, group: boolean): string | null {
+  const candidates = group
+    ? [row.subject, row.name, row.verifiedName]
+    : [row.name, row.notify, row.verifiedName, row.pushName]
+  for (const candidate of candidates) {
+    const value = text(candidate, 160)
+    if (value) return value
+  }
+  return null
+}
+
+function savedContactName(row: JsonRecord): string | null {
+  for (const candidate of [row.name, row.notify, row.verifiedName]) {
+    const value = text(candidate, 160)
+    if (value) return value
+  }
+  return null
+}
+
+async function resolvePhoneMatchForInbox(admin: any, businessId: string, phone: string | null, conversationId: string) {
+  if (!phone) return
+  const { data: matchRows, error: matchError } = await admin.rpc('resolve_whatsapp_customer_phone_match', {
+    p_business_id: businessId,
+    p_phone: phone,
+  })
+  if (matchError) throw new RequestError(500, 'history_sync_failed')
+  const match = Array.isArray(matchRows) ? matchRows[0] as JsonRecord | undefined : undefined
+  const customerId = text(match?.matched_customer_id, 64)
+  const { data: context, error: contextError } = await admin.from('whatsapp_conversation_contexts')
+    .select('customer_id, order_id, match_method')
+    .eq('business_id', businessId).eq('conversation_id', conversationId).maybeSingle()
+  if (contextError) throw new RequestError(500, 'history_sync_failed')
+  if (context?.match_method === 'manual' || context?.order_id) return
+  if (!customerId || Number(match?.matches_count) !== 1) {
+    if (context?.match_method === 'phone') {
+      const { error } = await admin.from('whatsapp_conversation_contexts').delete()
+        .eq('business_id', businessId).eq('conversation_id', conversationId).eq('match_method', 'phone')
+      if (error) throw new RequestError(500, 'history_sync_failed')
+    }
+    return
+  }
+  if (context?.customer_id === customerId && context?.match_method === 'phone') return
+  const { error } = await admin.from('whatsapp_conversation_contexts').upsert({
+    business_id: businessId,
+    conversation_id: conversationId,
+    customer_id: customerId,
+    order_id: null,
+    match_method: 'phone',
+    updated_by: null,
+  }, { onConflict: 'business_id,conversation_id' })
+  if (error) throw new RequestError(500, 'history_sync_failed')
+}
+
+function providerMessageRecord(value: unknown): JsonRecord | null {
+  if (!isRecord(value)) return null
+  if (isRecord(value.key) && isRecord(value.message)) return value
+  if (isRecord(value.lastMessage)) return providerMessageRecord(value.lastMessage)
+  if (isRecord(value.message) && isRecord(value.message.key)) return value.message
+  return null
+}
+
+function providerMessagePayload(value: unknown): JsonRecord | null {
+  const record = providerMessageRecord(value)
+  if (!record) return null
+  const key = isRecord(record.key) ? record.key : {}
+  const messageId = text(key.id, 256)
+  const remoteJid = text(key.remoteJid, 256)
+  if (!messageId || !remoteJid) return null
+  const sourceMessage = isRecord(record.message) ? record.message : {}
+  const nested = isRecord(sourceMessage.ephemeralMessage) && isRecord(sourceMessage.ephemeralMessage.message)
+    ? sourceMessage.ephemeralMessage.message
+    : isRecord(sourceMessage.viewOnceMessageV2) && isRecord(sourceMessage.viewOnceMessageV2.message)
+      ? sourceMessage.viewOnceMessageV2.message
+      : sourceMessage
+  const kindByKey: Record<string, string> = {
+    imageMessage: 'image', videoMessage: 'video', audioMessage: 'audio', documentMessage: 'document',
+    stickerMessage: 'sticker', locationMessage: 'location', liveLocationMessage: 'location',
+    contactMessage: 'contact', contactsArrayMessage: 'contact', buttonsMessage: 'interactive',
+    listMessage: 'interactive', templateMessage: 'interactive', reactionMessage: 'reaction',
+  }
+  const contentKey = Object.keys(nested).find((keyName) => kindByKey[keyName] !== undefined)
+  const kind = contentKey ? kindByKey[contentKey] : 'text'
+  const contentObject = contentKey && isRecord(nested[contentKey]) ? nested[contentKey] as JsonRecord : {}
+  const content = text(nested.conversation, 65_535)
+    ?? text(isRecord(nested.extendedTextMessage) ? nested.extendedTextMessage.text : null, 65_535)
+    ?? text(contentObject.caption, 65_535)
+    ?? text(contentObject.text, 65_535)
+    ?? text(contentObject.selectedDisplayText, 65_535)
+  const group = isGroupJid(remoteJid)
+  const metadata: JsonRecord = {}
+  const mimeType = text(contentObject.mimetype, 160)
+  const fileName = text(contentObject.fileName, 255)
+  const fileLength = Number(contentObject.fileLength)
+  if (mimeType) metadata.mime_type = mimeType
+  if (fileName) metadata.file_name = fileName
+  if (Number.isSafeInteger(fileLength) && fileLength >= 0) metadata.file_size = fileLength
+  const senderName = text(record.pushName, 160)
+  const participant = text(key.participant ?? key.participantAlt, 256)
+  if (group && senderName) metadata.sender_name = senderName
+  if (participant) metadata.participant_jid = participant
+  if (kind === 'reaction' && isRecord(contentObject.key)) {
+    const reactionTarget = text(contentObject.key.id, 256)
+    if (reactionTarget) metadata.reaction_to_message_id = reactionTarget
+  }
+  return {
+    id: messageId,
+    remote_jid: remoteJid,
+    remote_jid_alt: text(key.remoteJidAlt, 256),
+    contact_name: group ? null : senderName,
+    contact_phone: group ? null : phoneFromWhatsAppJid(text(key.remoteJidAlt, 256) ?? remoteJid),
+    direction: key.fromMe === true ? 'outgoing' : 'incoming',
+    message_kind: kind,
+    content,
+    delivery_status: key.fromMe === true ? 'sent' : null,
+    media_metadata: metadata,
+    provider_timestamp: providerTimestamp(record.messageTimestamp ?? record.messageTimestampMs),
+  }
+}
+
+function providerTimestamp(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value < 100_000_000_000 ? value * 1000 : value)
+    return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString()
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) return providerTimestamp(numeric)
+    const date = new Date(value)
+    if (!Number.isNaN(date.getTime())) return date.toISOString()
+  }
+  return new Date().toISOString()
 }
 
 function callStateLabel(value: unknown): string {
@@ -278,7 +661,7 @@ async function mediaResponse(admin: any, config: EvolutionConfig, businessId: st
   const result = await evolutionRequest(config, `/chat/getBase64FromMediaMessage/${encodeURIComponent(config.instanceName)}`, {
     method: 'POST',
     body: JSON.stringify({ message: { key }, convertToMp4: false }),
-  })
+  }, 15 * 1024 * 1024)
   const resultRecord = isRecord(result) ? result : {}
   const payload = isRecord(resultRecord.data) ? resultRecord.data : resultRecord
   const base64 = text(payload.base64, MAX_MEDIA_BYTES * 2)
@@ -286,20 +669,139 @@ async function mediaResponse(admin: any, config: EvolutionConfig, businessId: st
   const bytes = base64Bytes(base64)
   if (!bytes.length || bytes.byteLength > MAX_MEDIA_BYTES) throw new RequestError(413, 'media_too_large')
   const metadata = isRecord(message.media_metadata) ? message.media_metadata : {}
-  const mimeType = text(payload.mimetype ?? payload.mimeType ?? metadata.mime_type, 160) ?? 'application/octet-stream'
-  const disposition = message.message_kind === 'image' || message.message_kind === 'audio' || message.message_kind === 'video' ? 'inline' : 'attachment'
+  const sourceMimeType = text(payload.mimetype ?? payload.mimeType ?? metadata.mime_type, 160) ?? 'application/octet-stream'
+  const mimeType = sourceMimeType.split(';', 1)[0].trim().toLowerCase()
+  const disposition = ['image', 'audio', 'video', 'sticker'].includes(message.message_kind) ? 'inline' : 'attachment'
+  const safeMimeType = /^(?:image\/(?:jpeg|png|webp|gif)|audio\/(?:ogg|mpeg|mp4|wav|webm|aac|3gpp)|video\/mp4|application\/pdf)$/i.test(mimeType)
+    ? mimeType
+    : 'application/octet-stream'
   const responseBytes = new Uint8Array(bytes.byteLength)
   responseBytes.set(bytes)
   return new Response(responseBytes.buffer, {
     headers: {
       ...CORS_HEADERS,
       'Access-Control-Expose-Headers': 'Content-Disposition, X-Original-Content-Type',
-      'Content-Type': 'application/octet-stream',
+      'Content-Type': safeMimeType,
       'Content-Disposition': `${disposition}; filename="whatsapp-media-${message.id}"`,
-      'X-Original-Content-Type': mimeType,
+      'X-Original-Content-Type': safeMimeType,
       'X-Content-Type-Options': 'nosniff',
     },
   })
+}
+
+function historyRecords(value: unknown): JsonRecord[] {
+  if (!isRecord(value)) return recordsFromEvolution(value, ['messages', 'records', 'data'])
+  const messages = isRecord(value.messages) ? value.messages : null
+  if (messages) return recordsFromEvolution(messages, ['records', 'messages', 'data'])
+  return recordsFromEvolution(value, ['records', 'messages', 'data'])
+}
+
+function isSingleReaction(value: string): boolean {
+  if (!value || Array.from(value).length > 16 || /\s|[\u0000-\u001f\u007f]/u.test(value)) return false
+  try {
+    return /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\p{Emoji_Modifier}|\p{Emoji_Component}|\u200d|\ufe0f|\u20e3)+$/u.test(value)
+  } catch {
+    return false
+  }
+}
+
+async function olderMessagesResponse(admin: any, config: EvolutionConfig, businessId: string, conversation: JsonRecord, beforeMessageId: string) {
+  const { data: cursor, error: cursorError } = await admin.from('whatsapp_messages')
+    .select('provider_message_id, provider_timestamp, instance_name')
+    .eq('business_id', businessId).eq('conversation_id', conversation.id).eq('id', beforeMessageId).maybeSingle()
+  if (cursorError) throw new RequestError(500, 'history_cursor_lookup_failed')
+  if (!cursor) throw new RequestError(404, 'history_cursor_not_found')
+  const remoteJid = text(conversation.remote_jid, 256)
+  const cursorTime = providerTimestamp(cursor.provider_timestamp)
+  let providerRecords: JsonRecord[] = []
+  let providerPages = 0
+  let providerAvailable = true
+  try {
+    const result = await evolutionRequest(config, `/chat/findMessages/${encodeURIComponent(config.instanceName)}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        where: {
+          key: { remoteJid },
+          messageTimestamp: { gte: '2000-01-01T00:00:00.000Z', lte: cursorTime },
+        },
+        offset: OLDER_MESSAGE_PAGE_SIZE + 1,
+        page: 1,
+      }),
+    })
+    providerRecords = historyRecords(result)
+    const root = isRecord(result) ? result : {}
+    const messagePage = isRecord(root.messages) ? root.messages : root
+    providerPages = Number(messagePage.pages ?? messagePage.totalPages) || 0
+  } catch {
+    providerAvailable = false
+  }
+
+  const cursorProviderId = text(cursor.provider_message_id, 256)
+  const candidates = providerRecords
+    .map(providerMessagePayload)
+    .filter((row): row is JsonRecord => Boolean(row && row.remote_jid === remoteJid
+      && (String(row.provider_timestamp) < cursorTime
+        || (String(row.provider_timestamp) === cursorTime && String(row.id) < (cursorProviderId ?? '')))))
+    .sort((left, right) => String(right.provider_timestamp).localeCompare(String(left.provider_timestamp))
+      || String(right.id).localeCompare(String(left.id)))
+  const page = candidates.slice(0, OLDER_MESSAGE_PAGE_SIZE)
+  const providerHasMore = candidates.length > OLDER_MESSAGE_PAGE_SIZE || providerPages > 1
+
+  if (page.length) {
+    const rows = page.map((message) => ({
+      business_id: businessId,
+      conversation_id: conversation.id,
+      instance_name: config.instanceName,
+      provider_message_id: message.id,
+      direction: message.direction,
+      message_kind: message.message_kind,
+      content: message.content,
+      delivery_status: message.delivery_status,
+      count_as_unread: false,
+      media_metadata: message.media_metadata,
+      provider_timestamp: message.provider_timestamp,
+    }))
+    const { error } = await admin.from('whatsapp_messages').upsert(rows, {
+      onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true,
+    })
+    if (error) throw new RequestError(500, 'history_import_failed')
+    const providerIds = page.map((message) => String(message.id))
+    const { data: imported, error: importedError } = await admin.from('whatsapp_messages')
+      .select('id, provider_message_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
+      .eq('business_id', businessId).eq('conversation_id', conversation.id).in('provider_message_id', providerIds)
+      .order('provider_timestamp', { ascending: true })
+    if (importedError) throw new RequestError(500, 'history_import_failed')
+    const { data: reactions, error: reactionError } = await admin.from('whatsapp_messages')
+      .select('direction, content, media_metadata, provider_timestamp, id')
+      .eq('business_id', businessId).eq('conversation_id', conversation.id).eq('message_kind', 'reaction')
+      .order('provider_timestamp', { ascending: false }).order('id', { ascending: false }).limit(500)
+    if (reactionError) throw new RequestError(500, 'history_import_failed')
+    return json({ messages: attachMessageReactions(imported ?? [], reactions ?? []), meta: { has_more: providerHasMore, history_available: true } })
+  }
+
+  // Keep previously imported pages navigable if the provider has since pruned
+  // or disabled its own message database.
+  const { data: localRows, error: localError } = await admin.from('whatsapp_messages')
+    .select('id, provider_message_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
+    .eq('business_id', businessId).eq('conversation_id', conversation.id)
+    .lt('provider_timestamp', cursorTime)
+    .order('provider_timestamp', { ascending: false }).limit(OLDER_MESSAGE_PAGE_SIZE + 1)
+  if (localError) throw new RequestError(500, 'message_history_failed')
+  const { data: reactionRows, error: reactionError } = await admin.from('whatsapp_messages')
+    .select('direction, content, media_metadata, provider_timestamp, id')
+    .eq('business_id', businessId).eq('conversation_id', conversation.id).eq('message_kind', 'reaction')
+    .order('provider_timestamp', { ascending: false }).order('id', { ascending: false }).limit(500)
+  if (reactionError) throw new RequestError(500, 'message_history_failed')
+  const hasMore = providerHasMore || (localRows?.length ?? 0) > OLDER_MESSAGE_PAGE_SIZE
+  const older = (localRows ?? []).slice(0, OLDER_MESSAGE_PAGE_SIZE).reverse()
+  if (older.length === 0 && !providerAvailable) throw new RequestError(503, 'history_unavailable')
+  return json({ messages: attachMessageReactions(older, reactionRows ?? []), meta: {
+    has_more: hasMore,
+    history_available: older.length > 0,
+    ...(older.length === 0 ? { notice: providerAvailable
+      ? 'A Evolution não encontrou mensagens anteriores para esta conversa.'
+      : 'A Evolution não está acessível para carregar o histórico anterior.' } : {}),
+  } })
 }
 
 export default {
@@ -323,7 +825,7 @@ export default {
     const businessId = body.business_id
     const userId = text(context.userClaims?.id, 64)
     if (!userId || !isUuid(businessId)) return json({ error: 'invalid_request' }, 400)
-    if (!['status', 'list', 'calls', 'conversation', 'mark_read', 'send', 'send_media', 'set_status', 'attachment', 'configure_webhook', 'connect', 'disconnect'].includes(action ?? '')) {
+    if (!['status', 'list', 'calls', 'conversation', 'older_messages', 'react', 'mark_read', 'send', 'send_media', 'set_status', 'attachment', 'configure_webhook', 'connect', 'disconnect'].includes(action ?? '')) {
       return json({ error: 'invalid_action' }, 400)
     }
 
@@ -373,6 +875,7 @@ export default {
               instanceName: config.instanceName,
               integration: 'WHATSAPP-BAILEYS',
               qrcode: false,
+              syncFullHistory: true,
             }),
           })
         }
@@ -380,7 +883,7 @@ export default {
           return json({ error: 'webhook_setup_failed', instance_exists: true, connection_state: 'close' })
         }
         let result: unknown
-        try { result = await evolutionRequest(config, `/instance/connect/${encodeURIComponent(config.instanceName)}`) } catch {
+        try { result = await evolutionRequest(config, `/instance/connect/${encodeURIComponent(config.instanceName)}`, undefined, 1_600_000) } catch {
           return json({ error: 'qrcode_unavailable', instance_exists: true, connection_state: 'close' })
         }
         const outer = isRecord(result) ? result : {}
@@ -410,6 +913,8 @@ export default {
         if (page < 1 || page > 1000) return json({ error: 'invalid_page' }, 400)
         const query = body.query === undefined ? '' : (text(body.query, 120) ?? '')
         if (body.query !== undefined && body.query !== '' && !query) return json({ error: 'invalid_query' }, 400)
+        const providerChatPage = Math.ceil((page * PAGE_SIZE) / LEGACY_CHAT_PAGE_SIZE)
+        const historySync = await syncLegacyChats(admin, config, businessId, providerChatPage)
         let selection = admin.from('whatsapp_conversations')
           .select('id, instance_name, remote_jid, remote_jid_alt, contact_name, contact_phone, status, unread_count, last_activity_at', { count: 'exact' })
           .eq('business_id', businessId)
@@ -422,10 +927,10 @@ export default {
         const { data: rows, count, error } = await selection.order('last_activity_at', { ascending: false }).range(offset, offset + PAGE_SIZE - 1)
         if (error) throw new RequestError(500, 'conversation_list_failed')
         const ids = (rows ?? []).map((row: JsonRecord) => row.id)
-        let lastMessages: JsonRecord[] = []
+    let lastMessages: JsonRecord[] = []
         if (ids.length) {
           const { data: messages, error: messagesError } = await admin.from('whatsapp_messages')
-            .select('id, conversation_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
+            .select('id, provider_message_id, conversation_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
             .eq('business_id', businessId)
             .in('conversation_id', ids)
             .order('provider_timestamp', { ascending: false })
@@ -434,9 +939,17 @@ export default {
           lastMessages = messages ?? []
         }
         const latestByConversation = new Map<string, JsonRecord>()
-        for (const message of lastMessages) if (!latestByConversation.has(String(message.conversation_id))) latestByConversation.set(String(message.conversation_id), message)
+        for (const message of lastMessages) {
+          if (message.message_kind !== 'reaction' && !latestByConversation.has(String(message.conversation_id))) {
+            latestByConversation.set(String(message.conversation_id), message)
+          }
+        }
         const conversations = (rows ?? []).map((row: JsonRecord) => conversationResponse(row, latestByConversation.get(String(row.id)) ?? null))
-        return json({ conversations, meta: { page, has_more: offset + conversations.length < (count ?? 0) } })
+        return json({ conversations, meta: {
+          page,
+          has_more: offset + conversations.length < (count ?? 0) || historySync.has_more === true,
+          history_sync: historySync,
+        } })
       }
 
       if (action === 'calls') {
@@ -522,6 +1035,39 @@ export default {
         const messageId = body.messageId
         if (!isUuid(messageId)) return json({ error: 'invalid_media_reference' }, 400)
         return await mediaResponse(admin, config, businessId, conversationId, messageId)
+      }
+
+      if (action === 'older_messages') {
+        const beforeMessageId = body.beforeMessageId
+        if (!isUuid(beforeMessageId)) return json({ error: 'invalid_history_cursor' }, 400)
+        return await olderMessagesResponse(admin, config, businessId, conversation as JsonRecord, beforeMessageId)
+      }
+
+      if (action === 'react') {
+        const messageId = body.messageId
+        if (!isUuid(messageId)) return json({ error: 'invalid_reaction_target' }, 400)
+        if (typeof body.emoji !== 'string') return json({ error: 'invalid_reaction' }, 400)
+        const emoji = body.emoji.normalize('NFC')
+        if (emoji !== '' && !isSingleReaction(emoji)) return json({ error: 'invalid_reaction' }, 400)
+        const { data: target, error: targetError } = await admin.from('whatsapp_messages')
+          .select('provider_message_id, direction, message_kind, media_metadata, deleted_at')
+          .eq('business_id', businessId).eq('conversation_id', conversationId).eq('id', messageId).maybeSingle()
+        if (targetError) throw new RequestError(500, 'reaction_target_lookup_failed')
+        if (!target || target.deleted_at) return json({ error: 'reaction_target_not_found' }, 404)
+        if (conversation.remote_jid.startsWith('unknown-call:')) return json({ error: 'reaction_target_not_supported' }, 409)
+        const metadata = isRecord(target.media_metadata) ? target.media_metadata : {}
+        const key: JsonRecord = {
+          remoteJid: conversation.remote_jid,
+          fromMe: target.direction === 'outgoing',
+          id: target.provider_message_id,
+        }
+        const participant = text(metadata.participant_jid, 256)
+        if (participant) key.participant = participant
+        await evolutionRequest(config, `/message/sendReaction/${encodeURIComponent(config.instanceName)}`, {
+          method: 'POST',
+          body: JSON.stringify({ key, reaction: emoji }),
+        })
+        return json({ sent: true })
       }
 
       if (action === 'mark_read') {
@@ -623,11 +1169,18 @@ export default {
         .eq('business_id', businessId).eq('id', conversationId).single()
       if (freshError) throw new RequestError(500, 'conversation_refresh_failed')
       const { data: messageRows, error: messageError } = await admin.from('whatsapp_messages')
-        .select('id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
+        .select('id, provider_message_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
         .eq('business_id', businessId).eq('conversation_id', conversationId)
-        .order('provider_timestamp', { ascending: false }).limit(MESSAGE_HISTORY_LIMIT)
+        .order('provider_timestamp', { ascending: false }).limit(MESSAGE_HISTORY_LIMIT + 1)
       if (messageError) throw new RequestError(500, 'message_history_failed')
-      const messages = (messageRows ?? []).reverse().map((row: JsonRecord) => normalizedMessage(row))
+      const hasLocalMore = (messageRows?.length ?? 0) > MESSAGE_HISTORY_LIMIT
+      const initialRows = (messageRows ?? []).slice(0, MESSAGE_HISTORY_LIMIT).reverse()
+      const { data: reactionRows, error: reactionError } = await admin.from('whatsapp_messages')
+        .select('direction, content, media_metadata, provider_timestamp, id')
+        .eq('business_id', businessId).eq('conversation_id', conversationId).eq('message_kind', 'reaction')
+        .order('provider_timestamp', { ascending: false }).order('id', { ascending: false }).limit(500)
+      if (reactionError) throw new RequestError(500, 'message_history_failed')
+      const messages = attachMessageReactions(initialRows, reactionRows ?? [])
       const { data: callRows, error: callsError } = await admin.from('whatsapp_call_events')
         .select('id, call_state, is_video, occurred_at')
         .eq('business_id', businessId).eq('conversation_id', conversationId)
@@ -646,7 +1199,7 @@ export default {
         last_message: messages.at(-1) ?? null,
         messages,
         calls,
-      } })
+      }, meta: { has_more: hasLocalMore || messages.length > 0 } })
     } catch (error) {
       if (error instanceof RequestError) return json({ error: error.code }, error.status)
       // Provider error bodies may include credentials; keep them out of application logs.

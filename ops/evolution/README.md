@@ -34,6 +34,7 @@ O exemplo usa a rede e o Kong da instalação local atual. Se os nomes forem dif
 ## Escopo do primeiro fluxo
 
 - Conversas, texto, situação de envio, arquivos recebidos sob demanda e estado de leitura.
+- O histórico sincronizado precisa ficar salvo na base local da Evolution (`DATABASE_SAVE_DATA_HISTORIC=true`) para que mensagens antigas possam ser carregadas depois. Ativar isso agora preserva histórico futuro; não recupera mensagens que a Evolution nunca recebeu ou salvou.
 - Registro dos eventos `CALL` que a Evolution entregar, exibido junto à conversa e na aba **Chamadas**.
 - Associação automática somente por telefone brasileiro completo, normalizado e único entre os clientes ativos da mesma empresa. A caixa usa `remoteJidAlt` quando a Evolution fornece um telefone alternativo para um endereço `@lid` e reconcilia conversas antigas quando o cadastro do cliente é criado/alterado. Sem telefone confiável ou com duplicidade, a equipe escolhe manualmente.
 - A caixa não grava áudio de chamadas, não atende ligações e não inventa duração ou resultado quando a API não envia esses dados.
