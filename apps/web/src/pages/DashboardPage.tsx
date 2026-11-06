@@ -394,7 +394,12 @@ export function DashboardPage() {
       if (error || !data) throw error
       if (requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data: data as DashboardPriorities })
     } catch {
-      if (!silent && requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: true, data: null })
+      if (requestId === prioritiesRequestId.current) setPriorityState((previous) => ({
+        scopeKey: prioritiesScopeKey,
+        loading: false,
+        error: true,
+        data: previous.scopeKey === prioritiesScopeKey ? previous.data : null,
+      }))
     }
   }, [businessId, demoPreview, role, today, prioritiesScopeKey])
 
@@ -469,35 +474,31 @@ export function DashboardPage() {
   const productCostCents = financialSummary?.item_cost_cents === null || !financialSummary ? null : BigInt(financialSummary.item_cost_cents)
   const grossProfitCents = financialSummary?.available && productCostCents !== null && netSalesCents !== null ? netSalesCents - productCostCents : null
   const paidExpenseCents = financialSummary ? BigInt(financialSummary.operating_expense_cents) + BigInt(financialSummary.delivery_cost_cents) : null
-  const nextFollowUp = priorities?.follow_ups.items[0]
-  const nextReceivable = priorities?.receivables.items[0]
-  const nextDelivery = priorities?.deliveries.items[0]
-  const nextStockItem = priorities?.inventory.items[0]
   const nextActionCandidates = [
-    ...(nextFollowUp ? [{
-      dueOn: nextFollowUp.due_on,
-      severity: nextFollowUp.due_on < today ? 0 : nextFollowUp.priority === 'high' ? 1 : 2,
+    ...(priorities?.follow_ups.items.map((followUp) => ({
+      dueOn: followUp.due_on,
+      severity: followUp.due_on < today ? 0 : followUp.priority === 'high' ? 1 : 2,
       category: 0,
-      action: { href: '/atendimento', icon: 'phone' as const, title: nextFollowUp.title, detail: `${nextFollowUp.customer_name ?? 'Sem cliente vinculado'} · ${nextFollowUp.due_on < today ? 'Atrasado' : nextFollowUp.due_on === today ? 'Hoje' : formatBusinessDate(nextFollowUp.due_on)}`, state: 'Retorno' },
-    }] : []),
-    ...(nextReceivable ? [{
-      dueOn: nextReceivable.due_on,
-      severity: nextReceivable.overdue ? 0 : 2,
+      action: { href: '/atendimento', icon: 'phone' as const, title: followUp.title, detail: `${followUp.customer_name ?? 'Sem cliente vinculado'} · ${followUp.due_on < today ? 'Atrasado' : followUp.due_on === today ? 'Hoje' : formatBusinessDate(followUp.due_on)}`, state: 'Retorno' },
+    })) ?? []),
+    ...(priorities?.receivables.items.map((receivable) => ({
+      dueOn: receivable.due_on,
+      severity: receivable.overdue ? 0 : 2,
       category: 1,
-      action: { href: demoPreview ? '/financeiro' : `/pedidos/${nextReceivable.order_id}`, icon: 'coin' as const, title: nextReceivable.customer_name, detail: `Parcela ${nextReceivable.installment_number} · ${formatBusinessDate(nextReceivable.due_on)} · ${formatBRLExact(nextReceivable.balance_cents)}`, state: nextReceivable.overdue ? 'Atrasado' : 'Vence hoje' },
-    }] : []),
-    ...(nextDelivery ? [{
-      dueOn: nextDelivery.scheduled_on ?? '9999-12-31',
-      severity: nextDelivery.status === 'attempted' || (nextDelivery.scheduled_on !== null && nextDelivery.scheduled_on < today) ? 0 : nextDelivery.scheduled_on === today ? 1 : 2,
+      action: { href: demoPreview ? '/financeiro' : `/pedidos/${receivable.order_id}`, icon: 'coin' as const, title: receivable.customer_name, detail: `Parcela ${receivable.installment_number} · ${formatBusinessDate(receivable.due_on)} · ${formatBRLExact(receivable.balance_cents)}`, state: receivable.overdue ? 'Atrasado' : 'Vence hoje' },
+    })) ?? []),
+    ...(priorities?.deliveries.items.map((delivery) => ({
+      dueOn: delivery.scheduled_on ?? '9999-12-31',
+      severity: delivery.status === 'attempted' || (delivery.scheduled_on !== null && delivery.scheduled_on < today) ? 0 : delivery.scheduled_on === today ? 1 : 2,
       category: 2,
-      action: { href: demoPreview ? '/entregas' : `/pedidos/${nextDelivery.order_id}`, icon: 'truck' as const, title: nextDelivery.customer_name, detail: nextDelivery.delivery_worker_name ?? 'Entrega sem entregador definido', state: deliveryStatusLabels[nextDelivery.status] },
-    }] : []),
-    ...(nextStockItem ? [{
+      action: { href: demoPreview ? '/entregas' : `/pedidos/${delivery.order_id}`, icon: 'truck' as const, title: delivery.customer_name, detail: delivery.delivery_worker_name ?? 'Entrega sem entregador definido', state: deliveryStatusLabels[delivery.status] },
+    })) ?? []),
+    ...(priorities?.inventory.items.map((stockItem) => ({
       dueOn: '9999-12-31',
-      severity: nextStockItem.quantity_on_hand < 0 ? 0 : 3,
+      severity: stockItem.quantity_on_hand < 0 ? 0 : 3,
       category: 3,
-      action: { href: '/estoque', icon: 'box' as const, title: nextStockItem.product_name, detail: `${formatQuantity(nextStockItem.quantity_on_hand)} ${nextStockItem.inventory_unit} disponíveis`, state: nextStockItem.quantity_on_hand < 0 ? 'Estoque negativo' : 'Abaixo do mínimo' },
-    }] : []),
+      action: { href: '/estoque', icon: 'box' as const, title: stockItem.product_name, detail: `${formatQuantity(stockItem.quantity_on_hand)} ${stockItem.inventory_unit} disponíveis`, state: stockItem.quantity_on_hand < 0 ? 'Estoque negativo' : 'Abaixo do mínimo' },
+    })) ?? []),
   ]
   const nextAction = nextActionCandidates
     .sort((left, right) => left.severity - right.severity || left.dueOn.localeCompare(right.dueOn) || left.category - right.category)[0]?.action ?? null
@@ -557,7 +558,7 @@ export function DashboardPage() {
       <section className="surface-panel dashboard-next-action" aria-label="Próxima ação prioritária" aria-busy={prioritiesLoading}>
         <p className="eyebrow">PRÓXIMA AÇÃO</p>
         {prioritiesLoading ? <p className="dashboard-next-action-empty">Carregando prioridades…</p>
-          : prioritiesError ? <div className="dashboard-priority-retry" role="alert"><p>Não foi possível carregar as prioridades.</p><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>
+          : prioritiesError ? <div className="dashboard-priority-retry" role="alert"><p>{priorities ? 'Não foi possível atualizar; os indicadores podem estar desatualizados.' : 'Não foi possível carregar as prioridades.'}</p><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>
           : nextAction ? <Link to={nextAction.href}>
           <span className="dashboard-next-action-icon"><Icon name={nextAction.icon} /></span>
           <span className="dashboard-next-action-copy"><strong>{nextAction.title}</strong><small>{nextAction.detail}</small></span>
