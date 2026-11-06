@@ -1619,3 +1619,31 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 @media (max-width: 360px) {
   .dashboard-day-summary { grid-template-columns: minmax(0, 1fr); }
 }
+
+.dashboard-product-revenue { display: grid; min-width: 0; gap: 13px; }
+.dashboard-product-revenue-heading { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 7px 14px; }
+.dashboard-product-revenue-heading h2 { margin: 3px 0 0; color: var(--ink); font-size: 18px; font-weight: 650; letter-spacing: -0.025em; }
+.dashboard-product-revenue-heading p:last-child { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+.dashboard-product-order-count { color: var(--muted); font-size: 11px; }
+.dashboard-product-table-wrap { border: 1px solid var(--line); border-radius: 8px; }
+.dashboard-product-table-wrap .dashboard-product-table { min-width: 920px; }
+.dashboard-product-table tfoot th, .dashboard-product-table tfoot td { border-top: 1px solid var(--line-strong); border-bottom: 0; color: var(--ink); font-weight: 650; }
+.dashboard-product-row-note { display: block; margin-top: 3px; color: var(--quiet); font-size: 10px; font-weight: 400; }
+.dashboard-product-scroll-hint { display: none; margin: -7px 0 0; color: var(--quiet); font-size: 10px; }
+.dashboard-product-revenue-warning { margin: 0; padding: 10px 12px; border-radius: 7px; color: var(--muted); background: var(--accent-wash); font-size: 11px; line-height: 1.5; }
+.dashboard-product-revenue-state { display: grid; min-height: 100px; align-content: center; justify-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 12px; text-align: center; }
+.dashboard-product-revenue-state p { margin: 0; }
+.dashboard-product-revenue-state .text-button { min-height: 44px; }
+.dashboard-product-fee-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; margin: 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.dashboard-product-fee-summary dt { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.dashboard-product-fee-summary dd { margin: 5px 0 0; color: var(--ink); font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .dashboard-product-revenue-heading { align-items: flex-start; flex-direction: column; }
+  .dashboard-product-fee-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-product-scroll-hint { display: block; }
+}
+
+@media (max-width: 360px) {
+  .dashboard-product-fee-summary { grid-template-columns: minmax(0, 1fr); }
+}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useBusiness } from '../business/BusinessContext'
 import { DashboardTrends, type DashboardTrendDay, type DashboardTrendPeriod } from './DashboardTrends'
+import { DashboardProductRevenue } from './DashboardProductRevenue'
 import { formatBusinessDate } from '../lib/formatters'
 import { isDemoPreviewEnabled } from '../lib/demoPreview'
 import { createDemoRevenueTrendDays, loadDashboardRevenueTrendDays, type DashboardRevenueTrendDay } from '../lib/dashboardRevenueTrends'
@@ -152,18 +153,16 @@ export function FinancialChartsPanel() {
   }, [businessId, dayCount, demoPreview, scopeKey, startOn])
 
   useEffect(() => {
-    let active = true
-    queueMicrotask(() => { if (active) void loadTrends() })
+    const scheduledRequestId = trendRequestId.current
+    queueMicrotask(() => { if (trendRequestId.current === scheduledRequestId) void loadTrends() })
     return () => {
-      active = false
       trendRequestId.current += 1
     }
   }, [loadTrends])
   useEffect(() => {
-    let active = true
-    queueMicrotask(() => { if (active) void loadRevenue() })
+    const scheduledRequestId = revenueRequestId.current
+    queueMicrotask(() => { if (revenueRequestId.current === scheduledRequestId) void loadRevenue() })
     return () => {
-      active = false
       revenueRequestId.current += 1
     }
   }, [loadRevenue])
@@ -198,6 +197,7 @@ export function FinancialChartsPanel() {
         periodLabel={label}
         startOn={startOn}
       />
+      <DashboardProductRevenue endOn={today} startOn={startOn} />
     </section>
   )
 }

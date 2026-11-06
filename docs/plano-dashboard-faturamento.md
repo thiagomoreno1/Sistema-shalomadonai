@@ -1,6 +1,6 @@
 # Plano do faturamento no Dashboard
 
-**Status:** regra aplicada ao cálculo de faturamento, aos custos congelados nos pedidos, às entradas de compra e aos gráficos financeiros. Ainda falta o detalhamento de faturamento por produto e o rateio do desconto entre as linhas.
+**Status:** regra aplicada ao cálculo de faturamento, aos custos congelados nos pedidos, às entradas de compra, aos gráficos financeiros, ao rateio proporcional de descontos e ao detalhamento por produto.
 
 ## Objetivo
 
@@ -54,7 +54,7 @@ Exemplo: um produto é vendido por **R$ 200**, sem desconto nem taxa de entrega,
 ## Situação atual e próximas etapas
 
 1. Aplicados: custo médio nas entradas e fotografia do custo no pedido; combo continua com custo próprio; gráficos diários e de pizza disponíveis na Central do dia e no Dashboard financeiro.
-2. Próximo: ratear descontos entre linhas e montar totais de faturamento por produto.
-3. Depois: conferir com dados reais da empresa os casos de parcelamento, entrega, retirada, cancelamento, custos ausentes, combo e devolução.
+2. Aplicados: rateio de descontos por linha e taxa de entrega, com fechamento exato nos centavos; detalhamento de quantidade, faturamento bruto, desconto, custo e faturamento líquido por produto, usando o mesmo período selecionado.
+3. Próximo: conferir com dados reais da empresa os casos de parcelamento, entrega, retirada, cancelamento, custos ausentes, combo e devolução.
 
 Nenhuma etapa depende de extrato bancário, OFX, Open Finance ou conciliação.
