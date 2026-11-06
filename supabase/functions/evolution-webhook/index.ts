@@ -4,6 +4,7 @@ const MAX_BODY_BYTES = 1_000_000
 
 type JsonRecord = Record<string, unknown>
 type AdminClient = SupabaseContext['supabaseAdmin']
+type WebhookConfiguration = { secret: string; instanceName: string; businessId: string }
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -23,6 +24,27 @@ function eventRows(value: unknown, collectionKey: string): unknown[] {
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } })
+}
+
+async function loadWebhookConfiguration(admin: AdminClient): Promise<WebhookConfiguration | null> {
+  const fromEnvironment = {
+    secret: Deno.env.get('EVOLUTION_WEBHOOK_SECRET')?.trim() ?? '',
+    instanceName: Deno.env.get('EVOLUTION_INSTANCE_NAME')?.trim() ?? '',
+    businessId: Deno.env.get('EVOLUTION_BUSINESS_ID')?.trim() ?? '',
+  }
+  if (fromEnvironment.secret && fromEnvironment.instanceName
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fromEnvironment.businessId)) return fromEnvironment
+  try {
+    const { data, error } = await admin.rpc('get_evolution_runtime_config')
+    if (error || !isRecord(data)) return null
+    const secret = stringValue(data.evolution_webhook_secret, 4096)
+    const instanceName = stringValue(data.evolution_instance_name, 120)
+    const businessId = stringValue(data.evolution_business_id, 64)
+    if (!secret || !instanceName || !businessId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(businessId)) return null
+    return { secret, instanceName, businessId }
+  } catch {
+    return null
+  }
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -438,16 +460,14 @@ export default {
   if (request.method === 'OPTIONS') return new Response('ok')
   if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
 
-  const expectedSecret = Deno.env.get('EVOLUTION_WEBHOOK_SECRET')?.trim() ?? ''
-  const configuredInstance = Deno.env.get('EVOLUTION_INSTANCE_NAME')?.trim() ?? ''
-  const businessId = Deno.env.get('EVOLUTION_BUSINESS_ID')?.trim() ?? ''
-  if (!expectedSecret || !configuredInstance || !businessId) {
+  const configuration = await loadWebhookConfiguration(context.supabaseAdmin)
+  if (!configuration) {
     return json({ error: 'webhook_not_configured' }, 503)
   }
 
   const authorization = request.headers.get('Authorization') ?? ''
   const bearer = authorization.match(/^Bearer\s+([^\s]+)$/i)?.[1] ?? ''
-  if (!bearer || !constantTimeEqual(bearer, expectedSecret)) return json({ error: 'unauthorized' }, 401)
+  if (!bearer || !constantTimeEqual(bearer, configuration.secret)) return json({ error: 'unauthorized' }, 401)
   let rawBody: string | null
   try {
     rawBody = await readBoundedBody(request)
@@ -465,28 +485,29 @@ export default {
     return json({ error: 'invalid_payload' }, 400)
   }
 
-  if (stringValue(body.instance, 120) !== configuredInstance) return json({ error: 'instance_mismatch' }, 403)
+  if (stringValue(body.instance, 120) !== configuration.instanceName) return json({ error: 'instance_mismatch' }, 403)
   const event = normalizedEvent(body.event)
   if (!event) return json({ error: 'invalid_event' }, 400)
   const admin = context.supabaseAdmin
+  const businessId = configuration.businessId
   const payload = body.data
 
   try {
     if (event === 'MESSAGES_UPSERT' || event === 'MESSAGES_SET' || event === 'SEND_MESSAGE') {
       const messages = eventRows(payload, 'messages')
       for (const message of messages) {
-        await processMessageEvent(admin, businessId, configuredInstance, message, event !== 'MESSAGES_SET')
+        await processMessageEvent(admin, businessId, configuration.instanceName, message, event !== 'MESSAGES_SET')
       }
     } else if (event === 'MESSAGES_UPDATE') {
-      await processMessageStatus(admin, businessId, configuredInstance, payload)
+      await processMessageStatus(admin, businessId, configuration.instanceName, payload)
     } else if (event === 'MESSAGES_DELETE') {
-      await processMessageDelete(admin, businessId, configuredInstance, payload)
+      await processMessageDelete(admin, businessId, configuration.instanceName, payload)
     } else if (event === 'CALL') {
       for (const call of eventRows(payload, 'calls')) {
-        await processCallEvent(admin, businessId, configuredInstance, call)
+        await processCallEvent(admin, businessId, configuration.instanceName, call)
       }
     } else if (event === 'CHATS_SET' || event === 'CHATS_UPSERT' || event === 'CHATS_UPDATE' || event === 'CONTACTS_SET' || event === 'CONTACTS_UPSERT' || event === 'CONTACTS_UPDATE') {
-      await processChatOrContactEvent(admin, businessId, configuredInstance, event, payload)
+      await processChatOrContactEvent(admin, businessId, configuration.instanceName, event, payload)
     }
     return json({ received: true })
   } catch {

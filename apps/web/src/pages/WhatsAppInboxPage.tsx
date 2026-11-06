@@ -93,6 +93,7 @@ function connectionStateLabel(value: string | null | undefined) {
   if (normalized === 'open' || normalized === 'connected') return 'Conectado'
   if (normalized === 'connecting' || normalized === 'connecting...') return 'Conectando'
   if (normalized === 'close' || normalized === 'closed' || normalized === 'disconnected') return 'Desconectado'
+  if (normalized === 'not_created') return 'Instância ainda não criada'
   if (normalized === 'not_configured') return 'Não configurado'
   if (normalized === 'unavailable') return 'API indisponível'
   return value ? `Estado: ${value}` : 'Estado indisponível'
@@ -120,6 +121,20 @@ async function invokeInbox<T>(body: Record<string, unknown>) {
   const { data, error } = await supabaseClient.functions.invoke('evolution-inbox', { body })
   if (error) throw error
   return data as T
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      const separator = result.indexOf(',')
+      if (separator < 0) reject(new Error('invalid_file'))
+      else resolve(result.slice(separator + 1))
+    }
+    reader.onerror = () => reject(new Error('file_read_failed'))
+    reader.readAsDataURL(file)
+  })
 }
 
 const SAFE_INLINE_ATTACHMENT_TYPES = new Set([
@@ -263,6 +278,10 @@ export function WhatsAppInboxPage() {
   const [connectionChecking, setConnectionChecking] = useState(true)
   const [configured, setConfigured] = useState(false)
   const [connectionState, setConnectionState] = useState('')
+  const [instanceExists, setInstanceExists] = useState(false)
+  const [pairingLoading, setPairingLoading] = useState(false)
+  const [pairingError, setPairingError] = useState<string | null>(null)
+  const [qrImage, setQrImage] = useState<string | null>(null)
   const [webhookSaving, setWebhookSaving] = useState(false)
   const [webhookFeedback, setWebhookFeedback] = useState<string | null>(null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
@@ -286,6 +305,8 @@ export function WhatsAppInboxPage() {
   const [detailError, setDetailError] = useState<string | null>(null)
   const [messageDraft, setMessageDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const [mediaSending, setMediaSending] = useState(false)
+  const mediaPicker = useRef<HTMLInputElement>(null)
   const [statusSaving, setStatusSaving] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -420,10 +441,11 @@ export function WhatsAppInboxPage() {
       setConnectionChecking(true)
       setConnectionError(null)
       try {
-        const result = await invokeInbox<{ configured?: boolean; connection_state?: string }>({ action: 'status', business_id: businessId })
+        const result = await invokeInbox<{ configured?: boolean; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
         if (active) {
           setConfigured(result.configured === true)
           setConnectionState(result.connection_state ?? '')
+          setInstanceExists(result.instance_exists === true)
         }
       } catch {
         if (active) {
@@ -437,6 +459,24 @@ export function WhatsAppInboxPage() {
     void checkConnection()
     return () => { active = false }
   }, [businessId])
+
+  useEffect(() => {
+    if (!configured || !qrImage) return
+    const interval = window.setInterval(() => {
+      void invokeInbox<{ configured?: boolean; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
+        .then((result) => {
+          setConnectionState(result.connection_state ?? '')
+          setInstanceExists(result.instance_exists === true)
+          if (result.connection_state?.toLowerCase() === 'open') {
+            setQrImage(null)
+            setPairingError(null)
+            void refreshLoadedConversations()
+          }
+        })
+        .catch(() => undefined)
+    }, 4000)
+    return () => window.clearInterval(interval)
+  }, [businessId, configured, qrImage, refreshLoadedConversations])
 
   useEffect(() => { if (configured) void loadConversations() }, [configured, loadConversations])
   useEffect(() => { setView(searchParams.get('view') === 'calls' ? 'calls' : 'conversations') }, [searchParams])
@@ -613,6 +653,38 @@ export function WhatsAppInboxPage() {
     }
   }
 
+  async function handleSendMedia(file: File | undefined) {
+    if (!file || !currentConversation || !currentConversation.can_reply || mediaSending) return
+    const supportedTypes = new Set([
+      'image/jpeg', 'image/png', 'image/webp', 'audio/aac', 'audio/mpeg', 'audio/mp4',
+      'audio/ogg', 'audio/wav', 'audio/webm', 'video/mp4', 'application/pdf',
+    ])
+    if (!supportedTypes.has(file.type.toLowerCase())) {
+      setActionError('Tipo de arquivo não suportado. Use imagem, áudio, vídeo MP4 ou PDF.')
+      return
+    }
+    if (file.size < 1 || file.size > 2 * 1024 * 1024) {
+      setActionError('O arquivo precisa ter até 2 MiB.')
+      return
+    }
+    setMediaSending(true)
+    setActionError(null)
+    try {
+      const mediaBase64 = await fileToBase64(file)
+      await invokeInbox({
+        action: 'send_media', business_id: businessId, conversationId: currentConversation.id,
+        mediaBase64, mimeType: file.type, fileName: file.name, caption: messageDraft.trim(),
+      })
+      setMessageDraft('')
+      await refreshLoadedConversations()
+    } catch {
+      setActionError('O arquivo não foi enviado. Confira a conexão e tente novamente.')
+    } finally {
+      setMediaSending(false)
+      if (mediaPicker.current) mediaPicker.current.value = ''
+    }
+  }
+
   async function handleStatusChange(nextStatus: 'open' | 'resolved') {
     if (!currentConversation) return
     setStatusSaving(true)
@@ -639,6 +711,41 @@ export function WhatsAppInboxPage() {
       setWebhookFeedback('Não foi possível configurar o recebimento. Confira a URL e os secrets do servidor.')
     } finally {
       setWebhookSaving(false)
+    }
+  }
+
+  async function handleConnectWhatsApp() {
+    if (role !== 'owner' || pairingLoading) return
+    setPairingLoading(true)
+    setPairingError(null)
+    setQrImage(null)
+    try {
+      const result = await invokeInbox<{ qr_image?: string; connection_state?: string; instance_exists?: boolean; connected?: boolean; error?: string }>({ action: 'connect', business_id: businessId })
+      if (result.instance_exists) setInstanceExists(true)
+      if (result.connected) {
+        setQrImage(null)
+        setConnectionState(result.connection_state ?? 'open')
+        setPairingError(null)
+        setWebhookFeedback('WhatsApp já está conectado. As conversas serão atualizadas agora.')
+        await refreshLoadedConversations()
+        return
+      }
+      if (result.error === 'webhook_setup_failed') {
+        setPairingError('A instância foi criada, mas o webhook não ficou pronto. Tente novamente; o telefone ainda não foi pareado.')
+        return
+      }
+      if (result.error === 'qrcode_unavailable' || !result.qr_image) {
+        setPairingError('A instância e o webhook estão prontos, mas a Evolution ainda não forneceu o QR. Tente novamente em alguns segundos; nada será pareado sem escanear o código.')
+        return
+      }
+      setQrImage(result.qr_image)
+      setConnectionState(result.connection_state ?? 'connecting')
+      setInstanceExists(true)
+      setWebhookFeedback('Evolution pronta. Escaneie o QR Code com o WhatsApp para concluir a conexão.')
+    } catch {
+      setPairingError('Não foi possível falar com a Evolution. A instância pode ter sido criada; tente novamente. Nenhum número é pareado sem escanear o QR.')
+    } finally {
+      setPairingLoading(false)
     }
   }
 
@@ -698,7 +805,7 @@ export function WhatsAppInboxPage() {
         <li><span>2</span><div><strong>Configurar o webhook</strong><small>O Supabase precisa receber eventos por uma rede local compartilhada ou endpoint HTTPS seguro.</small></div><span className="neutral-status">Pendente</span></li>
         <li><span>3</span><div><strong>Conectar um número de teste</strong><small>Depois, validar mensagens, chamadas, arquivos e identificação por telefone.</small></div><span className="neutral-status">Pendente</span></li>
       </ol>
-      {connectionError && <button className="button button-secondary" onClick={() => { setConnectionChecking(true); setConnectionError(null); void invokeInbox<{ configured?: boolean; connection_state?: string }>({ action: 'status', business_id: businessId }).then((result) => { setConfigured(result.configured === true); setConnectionState(result.connection_state ?? '') }).catch(() => setConnectionError('Não foi possível verificar a conexão com o servidor.')).finally(() => setConnectionChecking(false)) }} type="button">Tentar novamente</button>}
+      {connectionError && <button className="button button-secondary" onClick={() => { setConnectionChecking(true); setConnectionError(null); void invokeInbox<{ configured?: boolean; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId }).then((result) => { setConfigured(result.configured === true); setConnectionState(result.connection_state ?? ''); setInstanceExists(result.instance_exists === true) }).catch(() => setConnectionError('Não foi possível verificar a conexão com o servidor.')).finally(() => setConnectionChecking(false)) }} type="button">Tentar novamente</button>}
       <Link className="quiet-link" to="/configuracoes">Ver preparação da conexão <Icon name="arrow" /></Link>
     </section>
   ) : (
@@ -707,8 +814,15 @@ export function WhatsAppInboxPage() {
         <span className={`whatsapp-connection-dot${connectionState.toLowerCase() === 'open' ? ' is-connected' : ''}`} aria-hidden="true" />
         <div><strong>Evolution API</strong><span role="status">{connectionStateLabel(connectionState)}</span></div>
         {webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}
-        {role === 'owner' && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Configurar recebimento'}</button>}
+        {role === 'owner' && connectionState.toLowerCase() !== 'open' && <button className="button button-primary" disabled={pairingLoading} onClick={() => void handleConnectWhatsApp()} type="button">{pairingLoading ? 'Preparando…' : instanceExists ? 'Conectar número' : 'Criar e conectar WhatsApp'}</button>}
+        {role === 'owner' && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
       </div>
+      {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
+      {qrImage && <section className="surface-panel whatsapp-qr-panel" aria-labelledby="whatsapp-qr-title" aria-live="polite">
+        <div><p className="eyebrow">PAREAMENTO EXPLÍCITO</p><h2 id="whatsapp-qr-title">Escaneie com o WhatsApp</h2><p>Abra esta página em outro dispositivo. No telefone que será conectado, abra <strong>Aparelhos conectados</strong> e escaneie o código. A conexão só é concluída depois da leitura.</p></div>
+        <img alt="QR Code temporário para conectar o WhatsApp" src={qrImage} />
+        <button className="button button-secondary" disabled={pairingLoading} onClick={() => void handleConnectWhatsApp()} type="button">Atualizar QR Code</button>
+      </section>}
       <aside className={`surface-panel whatsapp-conversation-panel${selectedId ? ' is-mobile-hidden' : ''}`} aria-label="Lista de conversas">
         <div className="whatsapp-list-heading">
           <div><p className="eyebrow">EVOLUTION API · WHATSAPP</p><h2>{view === 'calls' ? 'Chamadas' : 'Conversas'}</h2></div>
@@ -794,8 +908,8 @@ export function WhatsAppInboxPage() {
           <form className="whatsapp-compose" onSubmit={(event) => void handleSend(event)}>
             {currentConversation && !currentConversation.can_reply && <p className="section-footnote">O canal não permite responder a esta conversa neste momento.</p>}
             <label className="visually-hidden" htmlFor="whatsapp-message-draft">Mensagem</label>
-            <textarea disabled={!currentConversation?.can_reply} id="whatsapp-message-draft" maxLength={4000} onChange={(event) => setMessageDraft(event.target.value)} placeholder="Escreva uma mensagem…" value={messageDraft} />
-            <div><span>{messageDraft.length}/4000</span><button className="button button-primary" disabled={sending || !messageDraft.trim() || !currentConversation?.can_reply} type="submit">{sending ? 'Enviando…' : 'Enviar'}</button></div>
+            <textarea disabled={!currentConversation?.can_reply || mediaSending} id="whatsapp-message-draft" maxLength={4000} onChange={(event) => setMessageDraft(event.target.value)} placeholder="Escreva uma mensagem…" value={messageDraft} />
+            <div className="whatsapp-compose-tools"><span>{mediaSending ? 'Enviando arquivo…' : `${messageDraft.length}/4000`}</span><button className="button button-secondary whatsapp-attach-button" disabled={mediaSending || sending || !currentConversation?.can_reply} onClick={() => mediaPicker.current?.click()} type="button">Anexar arquivo</button><input accept="image/jpeg,image/png,image/webp,audio/aac,audio/mpeg,audio/mp4,audio/ogg,audio/wav,audio/webm,video/mp4,application/pdf" aria-label="Escolher imagem, áudio compatível, vídeo MP4 ou PDF de até 2 MiB" className="visually-hidden" onChange={(event) => void handleSendMedia(event.target.files?.[0])} ref={mediaPicker} type="file" /><button className="button button-primary" disabled={sending || mediaSending || !messageDraft.trim() || !currentConversation?.can_reply} type="submit">{sending ? 'Enviando…' : 'Enviar'}</button></div>
           </form>
 
           <form className="whatsapp-context-panel" onSubmit={(event) => void handleSaveLink(event)}>

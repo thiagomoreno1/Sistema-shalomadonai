@@ -7,6 +7,7 @@ O Shalom usa a Evolution API diretamente. O conjunto disponível depende da vers
 | Recurso | Situação no código | Observação |
 | --- | --- | --- |
 | Conversas e mensagens de texto | Integrado | Eventos da Evolution abastecem a caixa; a equipe pode responder com texto. |
+| Envio de arquivos | Integrado | A gestão pode enviar imagem, áudio, vídeo MP4 e PDF de até 2 MiB pela conversa. |
 | Entrega e leitura de mensagens | Integrado | Estados recebidos pelo webhook aparecem na conversa; abrir uma conversa zera as não lidas no Shalom. |
 | Imagens, áudio, vídeo, documentos e figurinhas recebidos | Integrado | Metadados são salvos; o conteúdo é buscado sob demanda com limite de tamanho. |
 | Contatos e telefones | Integrado | Nome e telefone recebidos podem atualizar a conversa. |
@@ -15,18 +16,19 @@ O Shalom usa a Evolution API diretamente. O conjunto disponível depende da vers
 | Vínculo manual de cliente e pedido | Integrado | A gestão pode escolher outro cadastro ou pedido. Um vínculo manual não é substituído pela sincronização. |
 | Histórico inicial | Integrado por evento | `MESSAGES_SET` é importado sem somar o histórico antigo como mensagens não lidas. A quantidade de histórico depende do que a Evolution sincronizar. |
 | Resolver/reabrir conversa | Integrado | Estado operacional do Shalom; não altera o status do chat no aplicativo conectado. |
+| Configurar instância e exibir QR | Integrado | O botão da gestão cria a instância sem parear; só solicita e mostra o QR quando a pessoa escolhe conectar. |
 
 ## Limites e próximas funções
 
-Ainda faltam envio de mídia, respostas citadas, reações no conteúdo original, edição, localização, cartões de contato, grupos/participantes/etiquetas, presença e publicação de Status. A exclusão recebida é refletida no histórico, mas não há ação de apagar mensagens pelo Shalom. Esses recursos devem ser adicionados somente após validar as rotas da versão instalada e seu suporte no canal; a caixa não deve exibir uma ação que falhe silenciosamente.
+Ainda faltam respostas citadas, reações no conteúdo original, edição e exclusão de mensagens enviadas, localização, cartões de contato, grupos/participantes/etiquetas, presença e publicação de Status. Esses recursos devem ser adicionados somente após validar as rotas da versão instalada e seu suporte no canal; a caixa não deve exibir uma ação que falhe silenciosamente.
 
 O evento `CALL` fornece metadados conforme o provedor os envia. O Shalom não atende chamadas, não grava áudio e não inventa duração ou resultado quando esses campos não chegam. A versão Evolution fixada no teste local deve continuar restrita ao computador até ser atualizada e revisada.
 
 ## Para validar o fluxo real
 
-1. Iniciar a Evolution e o Supabase local na mesma rede Docker.
-2. Aplicar a migration e servir as Edge Functions apenas no ambiente local.
-3. Conectar um número dedicado de teste e configurar o webhook pela caixa do Shalom.
-4. Conferir recebimento, resposta, anexos, evento de chamada, estados de entrega e associação de telefone; repetir eventos para confirmar que não duplicam registros.
+1. A configuração hospedada mantém endereço e chaves no Vault do Supabase. O computador da Evolution precisa ficar ligado e acessível pelo túnel temporário durante esta prova.
+2. Na caixa do Shalom, a gestão pode criar a instância e solicitar um QR; nada é pareado antes da leitura manual.
+3. Depois do pareamento, o Shalom configura o webhook e recebe mensagens, anexos, estados de entrega e metadados de chamadas.
+4. Conferir recebimento, resposta, envio de arquivo, chamada e associação de telefone; repetir eventos para confirmar que não duplicam registros.
 
-Até esse fluxo ser executado, o código e o build confirmam somente que a aplicação foi preparada; não confirmam mensagens nem chamadas reais.
+Até alguém escanear o QR, não há sessão de WhatsApp conectada e, portanto, não há conversas ou chamadas reais para exibir. O túnel Cloudflare usado para esta prévia é temporário e não substitui hospedagem permanente da Evolution.

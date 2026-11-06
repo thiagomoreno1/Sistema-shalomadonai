@@ -3,6 +3,14 @@ import { withSupabase } from '@supabase/server'
 const PAGE_SIZE = 25
 const MESSAGE_HISTORY_LIMIT = 150
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024
+const MAX_OUTBOUND_MEDIA_BYTES = 2 * 1024 * 1024
+const MAX_REQUEST_BYTES = 3_000_000
+const OUTBOUND_MEDIA_TYPES: Record<string, 'image' | 'audio' | 'video' | 'document'> = {
+  'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image',
+  'audio/aac': 'audio', 'audio/mpeg': 'audio', 'audio/mp4': 'audio', 'audio/ogg': 'audio', 'audio/wav': 'audio', 'audio/webm': 'audio',
+  'video/mp4': 'video',
+  'application/pdf': 'document',
+}
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -11,7 +19,14 @@ const CORS_HEADERS = {
 }
 
 type JsonRecord = Record<string, unknown>
-type EvolutionConfig = { baseUrl: URL; apiKey: string; instanceName: string }
+type EvolutionConfig = {
+  baseUrl: URL
+  apiKey: string
+  instanceName: string
+  businessId: string | null
+  webhookUrl: string | null
+  webhookSecret: string | null
+}
 
 class RequestError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code) }
@@ -35,11 +50,14 @@ function json(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: CORS_HEADERS })
 }
 
-function loadConfiguration(): EvolutionConfig | null {
-  const baseUrlValue = Deno.env.get('EVOLUTION_API_URL')?.trim() ?? ''
-  const apiKey = Deno.env.get('EVOLUTION_API_KEY')?.trim() ?? ''
-  const instanceName = Deno.env.get('EVOLUTION_INSTANCE_NAME')?.trim() ?? ''
-  if (!baseUrlValue || !apiKey || !instanceName || instanceName.length > 120) return null
+function parseConfiguration(source: JsonRecord): EvolutionConfig | null {
+  const baseUrlValue = text(source.evolution_api_url, 2048) ?? ''
+  const apiKey = text(source.evolution_api_key, 4096) ?? ''
+  const instanceName = text(source.evolution_instance_name, 120) ?? ''
+  const businessId = text(source.evolution_business_id, 64)
+  const webhookUrl = text(source.evolution_webhook_url, 2048)
+  const webhookSecret = text(source.evolution_webhook_secret, 4096)
+  if (!baseUrlValue || !apiKey || !instanceName || !isUuid(businessId) || !webhookUrl || !webhookSecret) return null
   try {
     const baseUrl = new URL(baseUrlValue)
     const localHost = baseUrl.hostname === 'localhost'
@@ -50,7 +68,26 @@ function loadConfiguration(): EvolutionConfig | null {
       || baseUrl.hostname.endsWith('.internal')
     if ((baseUrl.protocol !== 'https:' && !(localHost && baseUrl.protocol === 'http:'))
       || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) return null
-    return { baseUrl, apiKey, instanceName }
+    return { baseUrl, apiKey, instanceName, businessId, webhookUrl, webhookSecret }
+  } catch {
+    return null
+  }
+}
+
+async function loadConfiguration(admin: { rpc: (name: string) => PromiseLike<{ data: unknown; error: unknown }> }): Promise<EvolutionConfig | null> {
+  const environment = parseConfiguration({
+    evolution_api_url: Deno.env.get('EVOLUTION_API_URL'),
+    evolution_api_key: Deno.env.get('EVOLUTION_API_KEY'),
+    evolution_instance_name: Deno.env.get('EVOLUTION_INSTANCE_NAME'),
+    evolution_business_id: Deno.env.get('EVOLUTION_BUSINESS_ID'),
+    evolution_webhook_url: Deno.env.get('EVOLUTION_WEBHOOK_URL'),
+    evolution_webhook_secret: Deno.env.get('EVOLUTION_WEBHOOK_SECRET'),
+  })
+  if (environment) return environment
+  try {
+    const { data, error } = await admin.rpc('get_evolution_runtime_config')
+    if (error || !isRecord(data)) return null
+    return parseConfiguration(data)
   } catch {
     return null
   }
@@ -78,6 +115,38 @@ async function evolutionRequest(config: EvolutionConfig, path: string, init?: Re
   const raw = await response.text()
   if (!raw) return null
   try { return JSON.parse(raw) as unknown } catch { return raw }
+}
+
+async function setEvolutionWebhook(config: EvolutionConfig): Promise<void> {
+  if (!config.webhookUrl || !config.webhookSecret) throw new RequestError(503, 'webhook_not_configured')
+  let parsedUrl: URL
+  try { parsedUrl = new URL(config.webhookUrl) } catch { throw new RequestError(503, 'webhook_url_invalid') }
+  const localWebhookHost = parsedUrl.hostname === 'kong'
+    || parsedUrl.hostname === '127.0.0.1'
+    || parsedUrl.hostname === 'localhost'
+    || /^supabase_kong_[a-z0-9_]+$/.test(parsedUrl.hostname)
+  const validWebhookPath = parsedUrl.pathname === '/functions/v1/evolution-webhook'
+  const safeWebhookUrl = !parsedUrl.username && !parsedUrl.password && !parsedUrl.search && !parsedUrl.hash
+  if (!validWebhookPath || !safeWebhookUrl || (parsedUrl.protocol !== 'https:' && !localWebhookHost)) {
+    throw new RequestError(503, 'webhook_url_invalid')
+  }
+  await evolutionRequest(config, `/event/webhook/set/${encodeURIComponent(config.instanceName)}`, {
+    method: 'POST',
+    body: JSON.stringify({ webhook: {
+      enabled: true,
+      url: config.webhookUrl,
+      headers: { Authorization: `Bearer ${config.webhookSecret}` },
+      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
+      byEvents: false,
+      base64: false,
+    } }),
+  })
+}
+
+function evolutionInstanceName(entry: unknown): string | null {
+  if (!isRecord(entry)) return null
+  const instance = isRecord(entry.instance) ? entry.instance : entry
+  return text(instance.instanceName ?? instance.name, 120)
 }
 
 function conversationResponse(row: JsonRecord, lastMessage: JsonRecord | null) {
@@ -153,6 +222,43 @@ function base64Bytes(value: string): Uint8Array {
   return bytes
 }
 
+function outboundFileName(value: unknown): string | null {
+  const supplied = text(value, 255)
+  if (!supplied) return null
+  const safe = supplied.replace(/[\\/:\u0000-\u001f\u007f]/g, '_').replace(/\s+/g, ' ').trim()
+  return safe && safe !== '.' && safe !== '..' ? safe : null
+}
+
+async function readBoundedRequestBody(request: Request, maximumBytes: number): Promise<string | null> {
+  const declaredLength = Number(request.headers.get('Content-Length'))
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) return null
+  if (!request.body) return ''
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      totalBytes += value.byteLength
+      if (totalBytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined)
+        return null
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const body = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    body.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(body)
+}
+
 async function mediaResponse(admin: any, config: EvolutionConfig, businessId: string, conversationId: string, messageId: string) {
   const { data: message, error: messageError } = await admin.from('whatsapp_messages')
     .select('id, instance_name, provider_message_id, direction, message_kind, media_metadata, deleted_at')
@@ -201,8 +307,9 @@ export default {
     if (request.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS })
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
 
-    const raw = await request.text()
-    if (new TextEncoder().encode(raw).byteLength > 32_000) return json({ error: 'request_too_large' }, 413)
+    let raw: string | null
+    try { raw = await readBoundedRequestBody(request, MAX_REQUEST_BYTES) } catch { return json({ error: 'invalid_request' }, 400) }
+    if (raw === null) return json({ error: 'request_too_large' }, 413)
     let body: JsonRecord
     try {
       const parsed: unknown = JSON.parse(raw)
@@ -216,7 +323,7 @@ export default {
     const businessId = body.business_id
     const userId = text(context.userClaims?.id, 64)
     if (!userId || !isUuid(businessId)) return json({ error: 'invalid_request' }, 400)
-    if (!['status', 'list', 'calls', 'conversation', 'mark_read', 'send', 'set_status', 'attachment', 'configure_webhook'].includes(action ?? '')) {
+    if (!['status', 'list', 'calls', 'conversation', 'mark_read', 'send', 'send_media', 'set_status', 'attachment', 'configure_webhook', 'connect'].includes(action ?? '')) {
       return json({ error: 'invalid_action' }, 400)
     }
 
@@ -230,50 +337,64 @@ export default {
       if (membershipError) return json({ error: 'access_check_failed' }, 500)
       if (!membership || !['owner', 'staff'].includes(membership.role)) return json({ error: 'forbidden' }, 403)
 
-      const config = loadConfiguration()
+      const admin = context.supabaseAdmin
+      const config = await loadConfiguration(admin)
+      if (config?.businessId && config.businessId !== businessId) return json({ error: 'forbidden' }, 403)
       if (action === 'status') {
         if (!config) return json({ configured: false, connected: false, connection_state: 'not_configured' })
         try {
+          const instances = await evolutionRequest(config, '/instance/fetchInstances')
+          const instanceExists = Array.isArray(instances) && instances.some((entry) => evolutionInstanceName(entry) === config.instanceName)
+          if (!instanceExists) return json({ configured: true, connected: false, instance_exists: false, connection_state: 'not_created' })
           const result = await evolutionRequest(config, `/instance/connectionState/${encodeURIComponent(config.instanceName)}`)
           const stateRecord = isRecord(result) && isRecord(result.instance) ? result.instance : isRecord(result) ? result : {}
           const state = text(stateRecord.state ?? stateRecord.connectionStatus, 64) ?? 'unknown'
-          return json({ configured: true, connected: state.toLowerCase() === 'open', connection_state: state })
+          return json({ configured: true, connected: state.toLowerCase() === 'open', instance_exists: true, connection_state: state })
         } catch {
           return json({ configured: true, connected: false, connection_state: 'unavailable' })
         }
       }
       if (!config) return json({ error: 'evolution_not_configured' }, 503)
-      const admin = context.supabaseAdmin
 
       if (action === 'configure_webhook') {
         if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
-        const webhookUrl = Deno.env.get('EVOLUTION_WEBHOOK_URL')?.trim() ?? ''
-        const webhookSecret = Deno.env.get('EVOLUTION_WEBHOOK_SECRET')?.trim() ?? ''
-        if (!webhookUrl || !webhookSecret) return json({ error: 'webhook_not_configured' }, 503)
-        try {
-          const parsedUrl = new URL(webhookUrl)
-          const localWebhookHost = parsedUrl.hostname === 'kong'
-            || parsedUrl.hostname === '127.0.0.1'
-            || parsedUrl.hostname === 'localhost'
-            || /^supabase_kong_[a-z0-9_]+$/.test(parsedUrl.hostname)
-          const validWebhookPath = parsedUrl.pathname === '/functions/v1/evolution-webhook'
-          const safeWebhookUrl = !parsedUrl.username && !parsedUrl.password && !parsedUrl.search && !parsedUrl.hash
-          if (!validWebhookPath || !safeWebhookUrl || (parsedUrl.protocol !== 'https:' && !localWebhookHost)) {
-            return json({ error: 'webhook_url_invalid' }, 503)
-          }
-        } catch { return json({ error: 'webhook_url_invalid' }, 503) }
-        await evolutionRequest(config, `/event/webhook/set/${encodeURIComponent(config.instanceName)}`, {
-          method: 'POST',
-          body: JSON.stringify({ webhook: {
-            enabled: true,
-            url: webhookUrl,
-            headers: { Authorization: `Bearer ${webhookSecret}` },
-            events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
-            byEvents: false,
-            base64: false,
-          } }),
-        })
+        await setEvolutionWebhook(config)
         return json({ configured: true })
+      }
+
+      if (action === 'connect') {
+        if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        const instanceList = await evolutionRequest(config, '/instance/fetchInstances')
+        const instanceExists = Array.isArray(instanceList) && instanceList.some((entry) => evolutionInstanceName(entry) === config.instanceName)
+        if (!instanceExists) {
+          await evolutionRequest(config, '/instance/create', {
+            method: 'POST',
+            body: JSON.stringify({
+              instanceName: config.instanceName,
+              integration: 'WHATSAPP-BAILEYS',
+              qrcode: false,
+            }),
+          })
+        }
+        try { await setEvolutionWebhook(config) } catch {
+          return json({ error: 'webhook_setup_failed', instance_exists: true, connection_state: 'close' })
+        }
+        let result: unknown
+        try { result = await evolutionRequest(config, `/instance/connect/${encodeURIComponent(config.instanceName)}`) } catch {
+          return json({ error: 'qrcode_unavailable', instance_exists: true, connection_state: 'close' })
+        }
+        const outer = isRecord(result) ? result : {}
+        const instance = isRecord(outer.instance) ? outer.instance : {}
+        const state = text(instance.state ?? outer.state ?? instance.connectionStatus, 64)?.toLowerCase()
+        if (state === 'open') return json({ connected: true, instance_exists: true, connection_state: 'open' })
+        const qr = isRecord(outer.qrcode) ? outer.qrcode : outer
+        const imageValue = text(qr.base64 ?? qr.qrcode, 1_500_000)
+        if (!imageValue) return json({ error: 'qrcode_unavailable', instance_exists: true, connection_state: 'connecting' })
+        if (!imageValue.startsWith('data:image/') && !/^[A-Za-z0-9+/]+={0,2}$/.test(imageValue)) {
+          return json({ error: 'qrcode_unavailable', instance_exists: true, connection_state: 'connecting' })
+        }
+        const qrImage = imageValue.startsWith('data:image/') ? imageValue : `data:image/png;base64,${imageValue}`
+        return json({ connected: false, instance_exists: true, connection_state: 'connecting', qr_image: qrImage })
       }
 
       if (action === 'list') {
@@ -436,6 +557,56 @@ export default {
           delivery_status: 'pending',
           media_metadata: {},
           provider_timestamp: providerTimestamp,
+        }, { onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true })
+        if (insertError) throw new RequestError(500, 'message_persist_failed')
+        return json({ sent: true })
+      } else if (action === 'send_media') {
+        const mediaBase64 = text(body.mediaBase64, MAX_REQUEST_BYTES)
+        const mimeType = (text(body.mimeType, 160) ?? '').toLowerCase().split(';', 1)[0].trim()
+        const mediaKind = OUTBOUND_MEDIA_TYPES[mimeType]
+        const fileName = outboundFileName(body.fileName)
+        const caption = body.caption === undefined ? '' : (text(body.caption, 1024) ?? '')
+        if (!mediaBase64 || !fileName || !mediaKind || mediaBase64.length > 2_900_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(mediaBase64)) {
+          return json({ error: 'invalid_media' }, 400)
+        }
+        let bytes: Uint8Array
+        try { bytes = base64Bytes(mediaBase64) } catch { return json({ error: 'invalid_media' }, 400) }
+        if (bytes.length < 1 || bytes.length > MAX_OUTBOUND_MEDIA_BYTES) return json({ error: 'media_too_large' }, 413)
+        if (conversation.remote_jid.startsWith('unknown-call:')
+          || (conversation.remote_jid.includes('@lid')
+            && (!conversation.remote_jid_alt || !phoneFromWhatsAppJid(conversation.remote_jid_alt)))) {
+          return json({ error: 'contact_not_replyable' }, 409)
+        }
+        const replyAddress = conversation.remote_jid.includes('@lid') ? conversation.remote_jid_alt : conversation.remote_jid
+        const number = replyAddress.includes('@') ? replyAddress : replyAddress.replace(/[^0-9]/g, '')
+        const mediaBody: JsonRecord = {
+          number,
+          mediatype: mediaKind,
+          mimetype: mimeType,
+          media: mediaBase64,
+          caption,
+          fileName,
+        }
+        // Evolution v2.3.7 expects the lower-case alias for image uploads.
+        if (mediaKind === 'image') mediaBody.filename = fileName
+        const result = await evolutionRequest(config, `/message/sendMedia/${encodeURIComponent(config.instanceName)}`, {
+          method: 'POST',
+          body: JSON.stringify(mediaBody),
+        })
+        const response = isRecord(result) ? result : {}
+        const key = isRecord(response.key) ? response.key : isRecord(response.message) && isRecord(response.message.key) ? response.message.key : {}
+        const providerMessageId = text(key.id, 256) ?? `sent-${crypto.randomUUID()}`
+        const { error: insertError } = await admin.from('whatsapp_messages').upsert({
+          business_id: businessId,
+          conversation_id: conversationId,
+          instance_name: config.instanceName,
+          provider_message_id: providerMessageId,
+          direction: 'outgoing',
+          message_kind: mediaKind,
+          content: caption || null,
+          delivery_status: 'pending',
+          media_metadata: { mime_type: mimeType, file_name: fileName, file_size: bytes.length },
+          provider_timestamp: new Date().toISOString(),
         }, { onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true })
         if (insertError) throw new RequestError(500, 'message_persist_failed')
         return json({ sent: true })
