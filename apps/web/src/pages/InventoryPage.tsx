@@ -809,8 +809,9 @@ export function InventoryPage() {
         {!loading && products.some((product) => product.is_combo) && <p className="section-footnote inventory-combo-note">Combos não têm saldo próprio. A disponibilidade é formada pelos saldos dos produtos da composição.</p>}
       </section>
 
-      <section className="surface-panel record-panel" aria-labelledby="inventory-history-heading">
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">RASTREABILIDADE</p><h2 id="inventory-history-heading">Histórico de movimentações</h2></div><span className="neutral-status">{movementTotal}</span></div>
+      <details className="surface-panel dashboard-trend-details inventory-history-details" aria-label="Histórico de movimentações">
+        <summary>Ver histórico de movimentações <span>{movementTotal} registros</span></summary>
+        <div className="inventory-history-content">
         {loading ? <p className="inline-state" aria-live="polite">Carregando movimentações…</p> : movements.length === 0 ? <p className="inline-state">Nenhuma movimentação registrada.</p> : <ul className="timeline-list inventory-movement-list">
           {pagedMovements.map((movement) => {
             const product = productMap.get(movement.product_id)
@@ -829,7 +830,8 @@ export function InventoryPage() {
           {historyPage < lastHistoryPage && <button className="button button-secondary" onClick={() => setHistoryPage((page) => Math.min(lastHistoryPage, page + 1))} type="button">Movimentações anteriores</button>}
           {movementOffset < movementTotal && historyPage === lastHistoryPage && <button className="button button-secondary" disabled={loadingMore} onClick={() => void loadMoreMovements()} type="button">{loadingMore ? 'Carregando…' : 'Carregar histórico anterior'}</button>}
         </div>}
-      </section>
+        </div>
+      </details>
     </div>
   )
 }

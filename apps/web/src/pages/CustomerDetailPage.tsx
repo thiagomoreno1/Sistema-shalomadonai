@@ -931,11 +931,9 @@ export function CustomerDetailPage() {
         </section>
       </div>
 
-      <section className="surface-panel record-panel customer-order-history" aria-labelledby="customer-orders-heading">
-        <div className="section-heading section-heading-compact">
-          <div><p className="eyebrow">HISTÓRICO FINANCEIRO</p><h2 id="customer-orders-heading">Pedidos e parcelas</h2></div>
-          <span className="neutral-status">{displayedPurchaseOrders.length} carregados</span>
-        </div>
+      <details className="surface-panel dashboard-trend-details customer-order-history">
+        <summary>Ver pedidos e parcelas <span>{displayedPurchaseOrders.length} carregados</span></summary>
+        <div className="customer-order-history-content">
         {displayedOrderHistoryError && <div className="form-message form-message-error" role="alert"><p>{displayedOrderHistoryError}</p><button className="text-button" disabled={orderHistoryLoading} onClick={() => void loadCustomer()} type="button">Tentar novamente</button></div>}
         {!purchaseOrdersAreCurrent || orderHistoryLoading ? <p className="inline-state" aria-live="polite">Carregando pedidos e parcelas…</p> : displayedPurchaseOrders.length === 0 ? displayedOrderHistoryError ? null : <p className="inline-state">Este cliente ainda não tem pedidos registrados.</p> : (
           <div className="customer-order-list">
@@ -989,10 +987,11 @@ export function CustomerDetailPage() {
         )}
         {displayedMoreOrdersError && <div className="form-message form-message-error" role="alert"><p>{displayedMoreOrdersError}</p><button className="text-button" disabled={loadingMoreOrders} onClick={() => void loadMoreOrders()} type="button">Tentar novamente</button></div>}
         {customerHasMoreOrders && <button className="button button-secondary customer-order-more" disabled={loadingMoreOrders} onClick={() => void loadMoreOrders()} type="button">{loadingMoreOrders ? 'Carregando pedidos…' : 'Carregar mais pedidos'}</button>}
-      </section>
+        </div>
+      </details>
 
-      <section className="surface-panel record-panel" aria-labelledby="interaction-title">
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">HISTÓRICO</p><h2 id="interaction-title">Contatos registrados</h2></div><span className="neutral-status">{interactions.length}</span></div>
+      <details className="surface-panel dashboard-trend-details customer-interaction-history">
+        <summary>Ver contatos registrados <span>{interactions.length}</span></summary>
         {interactions.length === 0 ? <p className="inline-state">Nenhum contato registrado ainda.</p> : (
           <ul className="timeline-list">
             {interactions.map((interaction) => {
@@ -1012,7 +1011,7 @@ export function CustomerDetailPage() {
             })}
           </ul>
         )}
-      </section>
+      </details>
     </div>
   )
 }
