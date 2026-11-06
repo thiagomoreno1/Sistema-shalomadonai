@@ -58,13 +58,25 @@ type DashboardFinancialSummary = {
   }
 }
 
-type ActionFilter = 'all' | 'followups' | 'receivables' | 'deliveries'
+type ActionFilter = 'all' | 'followups' | 'receivables' | 'deliveries' | 'inventory'
+type DashboardPriorityAction = {
+  key: string
+  dueOn: string
+  severity: number
+  category: number
+  href: string
+  icon: 'phone' | 'coin' | 'truck' | 'box'
+  title: string
+  detail: string
+  state: string
+}
 
 const actionFilters: Array<{ value: ActionFilter; label: string }> = [
   { value: 'all', label: 'Todos' },
   { value: 'followups', label: 'Retornos' },
   { value: 'receivables', label: 'Pagamentos' },
   { value: 'deliveries', label: 'Entregas' },
+  { value: 'inventory', label: 'Estoque' },
 ]
 
 const trendPeriodOptions: Array<{ value: DashboardTrendPeriod; label: string }> = [
@@ -76,17 +88,20 @@ const trendPeriodOptions: Array<{ value: DashboardTrendPeriod; label: string }> 
   { value: 'year', label: 'Este ano' },
 ]
 
-const integrations = [
-  { label: 'WhatsApp', state: 'Conexão pendente' },
-  { label: 'Fiscal', state: 'Dados pendentes' },
-]
-
 const deliveryStatusLabels: Record<DashboardPriorities['deliveries']['items'][number]['status'], string> = {
   awaiting_separation: 'Aguardando separação',
   ready: 'Pronta para despacho',
   dispatched: 'Em rota',
   attempted: 'Entrega não concluída',
   rescheduled: 'Reagendada',
+}
+
+const deliveryPriorityRanks: Record<DashboardPriorities['deliveries']['items'][number]['status'], number> = {
+  attempted: 0,
+  awaiting_separation: 1,
+  ready: 2,
+  rescheduled: 3,
+  dispatched: 4,
 }
 
 function createDemoPriorities(today: string): DashboardPriorities {
@@ -263,12 +278,13 @@ export function DashboardPage() {
   const prioritiesLoading = currentPriorities.loading
   const prioritiesError = currentPriorities.error
   const [actionFilter, setActionFilter] = useState<ActionFilter>('all')
-  const noActions = priorities !== null && priorities.follow_ups.items.length === 0 && priorities.receivables.items.length === 0 && priorities.deliveries.items.length === 0
+  const noActions = priorities !== null && priorities.follow_ups.pending_count === 0 && priorities.receivables.overdue_count === 0 && priorities.receivables.due_today_count === 0 && priorities.deliveries.pending_count === 0 && priorities.inventory.attention_count === 0
   const visibleActionCount = priorities === null ? null : {
-    all: priorities.follow_ups.items.length + priorities.receivables.items.length + priorities.deliveries.items.length,
-    followups: priorities.follow_ups.items.length,
-    receivables: priorities.receivables.items.length,
-    deliveries: priorities.deliveries.items.length,
+    all: priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count,
+    followups: priorities.follow_ups.pending_count,
+    receivables: priorities.receivables.overdue_count + priorities.receivables.due_today_count,
+    deliveries: priorities.deliveries.pending_count,
+    inventory: priorities.inventory.attention_count,
   }[actionFilter]
   const activeActionFilterLabel = actionFilters.find((filter) => filter.value === actionFilter)?.label ?? 'Todos'
   const recentOrdersScopeKey = `${businessId}:${role}`
@@ -474,35 +490,63 @@ export function DashboardPage() {
   const productCostCents = financialSummary?.item_cost_cents === null || !financialSummary ? null : BigInt(financialSummary.item_cost_cents)
   const grossProfitCents = financialSummary?.available && productCostCents !== null && netSalesCents !== null ? netSalesCents - productCostCents : null
   const paidExpenseCents = financialSummary ? BigInt(financialSummary.operating_expense_cents) + BigInt(financialSummary.delivery_cost_cents) : null
-  const nextActionCandidates = [
+  const totalPriorityActionCount = priorities
+    ? priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count
+    : null
+  const priorityActionCandidates: DashboardPriorityAction[] = [
     ...(priorities?.follow_ups.items.map((followUp) => ({
+      key: followUp.id,
       dueOn: followUp.due_on,
       severity: followUp.due_on < today ? 0 : followUp.priority === 'high' ? 1 : 2,
       category: 0,
-      action: { href: '/atendimento', icon: 'phone' as const, title: followUp.title, detail: `${followUp.customer_name ?? 'Sem cliente vinculado'} · ${followUp.due_on < today ? 'Atrasado' : followUp.due_on === today ? 'Hoje' : formatBusinessDate(followUp.due_on)}`, state: 'Retorno' },
+      href: '/atendimento',
+      icon: 'phone' as const,
+      title: followUp.title,
+      detail: `${followUp.customer_name ?? 'Sem cliente vinculado'} · ${followUp.due_on < today ? 'Atrasado' : followUp.due_on === today ? 'Hoje' : formatBusinessDate(followUp.due_on)}`,
+      state: 'Retorno',
     })) ?? []),
     ...(priorities?.receivables.items.map((receivable) => ({
+      key: receivable.installment_id,
       dueOn: receivable.due_on,
       severity: receivable.overdue ? 0 : 2,
       category: 1,
-      action: { href: demoPreview ? '/financeiro' : `/pedidos/${receivable.order_id}`, icon: 'coin' as const, title: receivable.customer_name, detail: `Parcela ${receivable.installment_number} · ${formatBusinessDate(receivable.due_on)} · ${formatBRLExact(receivable.balance_cents)}`, state: receivable.overdue ? 'Atrasado' : 'Vence hoje' },
+      href: demoPreview ? '/financeiro' : `/pedidos/${receivable.order_id}`,
+      icon: 'coin' as const,
+      title: receivable.customer_name,
+      detail: `Parcela ${receivable.installment_number} · ${formatBusinessDate(receivable.due_on)} · ${formatBRLExact(receivable.balance_cents)}`,
+      state: receivable.overdue ? 'Atrasado' : 'Vence hoje',
     })) ?? []),
     ...(priorities?.deliveries.items.map((delivery) => ({
-      dueOn: delivery.scheduled_on ?? '9999-12-31',
-      severity: delivery.status === 'attempted' || (delivery.scheduled_on !== null && delivery.scheduled_on < today) ? 0 : delivery.scheduled_on === today ? 1 : 2,
+      key: delivery.delivery_id,
+      dueOn: delivery.scheduled_on ?? '',
+      severity: deliveryPriorityRanks[delivery.status],
       category: 2,
-      action: { href: demoPreview ? '/entregas' : `/pedidos/${delivery.order_id}`, icon: 'truck' as const, title: delivery.customer_name, detail: delivery.delivery_worker_name ?? 'Entrega sem entregador definido', state: deliveryStatusLabels[delivery.status] },
+      href: demoPreview ? '/entregas' : `/pedidos/${delivery.order_id}`,
+      icon: 'truck' as const,
+      title: delivery.customer_name,
+      detail: `${delivery.delivery_worker_name ?? 'Sem entregador definido'} · ${delivery.scheduled_on === null ? 'Sem data' : delivery.scheduled_on < today ? 'Data vencida' : delivery.scheduled_on === today ? 'Hoje' : formatBusinessDate(delivery.scheduled_on)}`,
+      state: deliveryStatusLabels[delivery.status],
     })) ?? []),
     ...(priorities?.inventory.items.map((stockItem) => ({
+      key: stockItem.product_id,
       dueOn: '9999-12-31',
-      severity: stockItem.quantity_on_hand < 0 ? 0 : 3,
+      severity: stockItem.quantity_on_hand < 0 ? 0 : 5,
       category: 3,
-      action: { href: '/estoque', icon: 'box' as const, title: stockItem.product_name, detail: `${formatQuantity(stockItem.quantity_on_hand)} ${stockItem.inventory_unit} disponíveis`, state: stockItem.quantity_on_hand < 0 ? 'Estoque negativo' : 'Abaixo do mínimo' },
+      href: '/estoque',
+      icon: 'box' as const,
+      title: stockItem.product_name,
+      detail: `${formatQuantity(stockItem.quantity_on_hand)} ${stockItem.inventory_unit} disponíveis`,
+      state: stockItem.quantity_on_hand < 0 ? 'Estoque negativo' : 'Abaixo do mínimo',
     })) ?? []),
-  ]
-  const nextAction = nextActionCandidates
-    .sort((left, right) => left.severity - right.severity || left.dueOn.localeCompare(right.dueOn) || left.category - right.category)[0]?.action ?? null
-
+  ].sort((left, right) => left.severity - right.severity || left.dueOn.localeCompare(right.dueOn) || left.category - right.category)
+  const visiblePriorityActions = priorityActionCandidates.slice(0, 3)
+  const remainingPriorityActionCount = Math.max(0, (totalPriorityActionCount ?? 0) - visiblePriorityActions.length)
+  const visibleStockItems = priorities?.inventory.items.slice(0, 2) ?? []
+  const additionalStockItems = priorities?.inventory.items.slice(2) ?? []
+  const renderStockItem = (item: DashboardPriorities['inventory']['items'][number]) => <li key={item.product_id}>
+    <span><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.minimum_stock === null ? 'Defina um mínimo para receber alerta' : `Estoque mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
+    <span className="dashboard-stock-quantity">{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span>
+  </li>
   return (
     <div className="page-stack dashboard-page">
       <header className="page-heading dashboard-heading">
@@ -522,6 +566,103 @@ export function DashboardPage() {
       </header>
 
       {role === 'owner' ? <>
+
+      <div className="dashboard-command-grid dashboard-command-priorities">
+        <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
+          <div className="section-heading">
+            <h2 id="attention-title">Fila de ações do dia</h2>
+            <span className="dashboard-today-label"><Icon name="clock" /> {totalPriorityActionCount === null ? 'Hoje' : `${totalPriorityActionCount} pendências`}</span>
+          </div>
+          {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
+          {prioritiesError && <div className="dashboard-priority-retry" role="alert"><p>{priorities ? 'Não foi possível atualizar; os indicadores podem estar desatualizados.' : 'Não foi possível carregar as prioridades.'}</p><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>}
+          {!prioritiesLoading && priorities && visiblePriorityActions.length > 0 && <ul className="dashboard-action-list dashboard-action-preview">
+            {visiblePriorityActions.map((action) => <li key={action.key}>
+              <Link to={action.href}>
+                <span className={`dashboard-action-symbol${action.severity === 0 ? ' is-overdue' : action.severity === 1 ? ' is-today' : ''}`}><Icon name={action.icon} /></span>
+                <span className="dashboard-action-copy"><strong>{action.title}</strong><small>{action.detail}</small></span>
+                <span className={`dashboard-row-state${action.severity === 0 ? ' is-overdue' : action.severity === 1 ? ' is-today' : ''}`}>{action.state}</span>
+                <Icon className="dashboard-row-arrow" name="arrow" />
+              </Link>
+            </li>)}
+          </ul>}
+          {!prioritiesLoading && !prioritiesError && noActions && <p className="dashboard-priority-empty">Nenhum retorno, pagamento, entrega ou alerta de estoque precisa de atenção.</p>}
+          {remainingPriorityActionCount > 0 && <p className="section-footnote dashboard-action-preview-note">Mais {remainingPriorityActionCount} ações na fila.</p>}
+          <details className="dashboard-action-details">
+            <summary>Ver fila por tipo <span>Retornos, pagamentos, entregas e estoque</span></summary>
+          <div className="dashboard-action-filters" role="group" aria-label="Filtrar fila por tipo de ação">
+            {actionFilters.map((filter) => <button aria-pressed={actionFilter === filter.value} key={filter.value} onClick={() => setActionFilter(filter.value)} type="button">{filter.label}</button>)}
+          </div>
+          <span className="visually-hidden" aria-live="polite" aria-atomic="true">{visibleActionCount !== null && !prioritiesLoading && !prioritiesError ? `${activeActionFilterLabel}: ${visibleActionCount} ${visibleActionCount === 1 ? 'item exibido' : 'itens exibidos'}.` : ''}</span>
+          {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
+          {!prioritiesLoading && prioritiesError && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="clock" /></span><h3>Não foi possível carregar as prioridades</h3><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>}
+          {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-action-queue">
+            {actionFilter === 'all' && noActions ? <div className="dashboard-panel-state is-clear"><span className="empty-icon"><Icon name="check" /></span><h3>Tudo em dia</h3><p>Nenhum retorno, pagamento, entrega ou saldo de estoque precisa de atenção.</p></div> : <>
+              {(actionFilter === 'followups' || (actionFilter === 'all' && priorities.follow_ups.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-followups-title">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-followups-title">Retornos</h3><Link className="quiet-link" to="/atendimento">Ver retornos <Icon name="arrow" /></Link></div>
+                {priorities.follow_ups.items.length === 0 ? <p className="dashboard-priority-empty">Nenhum retorno vencido ou com prazo para hoje.</p> : <ul className="dashboard-action-list">
+                  {priorities.follow_ups.items.map((task) => <li key={task.id}>
+                    <Link to="/atendimento">
+                      <span className={`dashboard-action-symbol${task.due_on < today ? ' is-overdue' : ' is-today'}`}><Icon name="phone" /></span>
+                      <span className="dashboard-action-copy"><strong>{task.title}</strong><small>{task.customer_name ?? 'Sem cliente vinculado'}</small></span>
+                      <span className={`dashboard-row-state${task.due_on < today ? ' is-overdue' : ' is-today'}`}>{task.due_on < today ? 'Atrasado' : task.due_on === today ? 'Hoje' : formatBusinessDate(task.due_on)}</span>
+                      <Icon className="dashboard-row-arrow" name="arrow" />
+                    </Link>
+                  </li>)}
+                </ul>}
+                {priorities.follow_ups.pending_count > priorities.follow_ups.items.length && <p className="section-footnote">Mostrando {priorities.follow_ups.items.length} de {priorities.follow_ups.pending_count} retornos com prazo até hoje.</p>}
+              </section>}
+
+              {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.receivables.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-receivables-title">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Pagamentos para acompanhar</h3><Link className="quiet-link" to="/financeiro">Ver pagamentos <Icon name="arrow" /></Link></div>
+                {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma parcela atrasada ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
+                  {priorities.receivables.items.map((item) => <li key={item.installment_id}>
+                    <Link to={demoPreview ? '/financeiro' : `/pedidos/${item.order_id}`}>
+                      <span className={`dashboard-action-symbol${item.overdue ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
+                      <span className="dashboard-action-copy"><strong>{item.customer_name}</strong><small>Parcela {item.installment_number} · {formatBusinessDate(item.due_on)}</small></span>
+                      <span className="dashboard-action-meta"><strong>{formatBRLExact(item.balance_cents)}</strong><span className={`dashboard-row-state${item.overdue ? ' is-overdue' : ' is-today'}`}>{item.overdue ? 'Atrasado' : 'Vence hoje'}</span></span>
+                      <Icon className="dashboard-row-arrow" name="arrow" />
+                    </Link>
+                  </li>)}
+                </ul>}
+                {priorities.receivables.overdue_count + priorities.receivables.due_today_count > priorities.receivables.items.length && <p className="section-footnote">Mostrando {priorities.receivables.items.length} de {priorities.receivables.overdue_count + priorities.receivables.due_today_count} parcelas prioritárias.</p>}
+              </section>}
+
+              {(actionFilter === 'deliveries' || (actionFilter === 'all' && priorities.deliveries.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-deliveries-title">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-deliveries-title">Entregas</h3><Link className="quiet-link" to="/entregas">Ver fila <Icon name="arrow" /></Link></div>
+                {priorities.deliveries.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma entrega precisa de atualização.</p> : <ul className="dashboard-action-list">
+                  {priorities.deliveries.items.map((delivery) => <li key={delivery.delivery_id}>
+                    <Link to={demoPreview ? '/entregas' : `/pedidos/${delivery.order_id}`}>
+                      <span className={`dashboard-action-symbol${delivery.status === 'attempted' ? ' is-overdue' : ' is-delivery'}`}><Icon name="truck" /></span>
+                      <span className="dashboard-action-copy"><strong>{delivery.customer_name}</strong><small>{delivery.delivery_worker_name ?? 'Entrega a acompanhar'}</small></span>
+                      <span className="dashboard-action-meta"><span className={`dashboard-row-state${delivery.status === 'attempted' ? ' is-overdue' : ' is-delivery'}`}>{deliveryStatusLabels[delivery.status]}</span><small>{delivery.scheduled_on === null ? 'Sem data' : delivery.scheduled_on < today ? 'Data vencida' : delivery.scheduled_on === today ? 'Hoje' : formatBusinessDate(delivery.scheduled_on)}</small></span>
+                      <Icon className="dashboard-row-arrow" name="arrow" />
+                    </Link>
+                  </li>)}
+                </ul>}
+                {priorities.deliveries.pending_count > priorities.deliveries.items.length && <p className="section-footnote">Mostrando {priorities.deliveries.items.length} de {priorities.deliveries.pending_count} entregas em atenção.</p>}
+              </section>}
+
+              {(actionFilter === 'inventory' || (actionFilter === 'all' && priorities.inventory.attention_count > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-inventory-title">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-inventory-title">Estoque</h3><Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link></div>
+                {priorities.inventory.items.length === 0 ? <p className="dashboard-priority-empty">Nenhum produto em atenção.</p> : <ul className="dashboard-action-list">
+                  {priorities.inventory.items.map((item) => <li key={item.product_id}>
+                    <Link to="/estoque">
+                      <span className={`dashboard-action-symbol${item.quantity_on_hand < 0 ? ' is-overdue' : ''}`}><Icon name="box" /></span>
+                      <span className="dashboard-action-copy"><strong>{item.product_name}</strong><small>{item.minimum_stock === null ? 'Defina um mínimo para receber alerta' : `Mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
+                      <span className={`dashboard-row-state${item.quantity_on_hand < 0 ? ' is-overdue' : ''}`}>{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span>
+                      <Icon className="dashboard-row-arrow" name="arrow" />
+                    </Link>
+                  </li>)}
+                </ul>}
+                {priorities.inventory.attention_count > priorities.inventory.items.length && <p className="section-footnote">Mostrando {priorities.inventory.items.length} de {priorities.inventory.attention_count} produtos em atenção.</p>}
+              </section>}
+            </>}
+          </div>}
+          </details>
+        </section>
+
+      </div>
+
       <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
         <Link className="dashboard-summary-link is-followups" to="/atendimento">
           <span className="dashboard-summary-icon"><Icon name="phone" /></span>
@@ -555,18 +696,6 @@ export function DashboardPage() {
         </Link>
       </nav>
 
-      <section className="surface-panel dashboard-next-action" aria-label="Próxima ação prioritária" aria-busy={prioritiesLoading}>
-        <p className="eyebrow">PRÓXIMA AÇÃO</p>
-        {prioritiesLoading ? <p className="dashboard-next-action-empty">Carregando prioridades…</p>
-          : prioritiesError ? <div className="dashboard-priority-retry" role="alert"><p>{priorities ? 'Não foi possível atualizar; os indicadores podem estar desatualizados.' : 'Não foi possível carregar as prioridades.'}</p><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>
-          : nextAction ? <Link to={nextAction.href}>
-          <span className="dashboard-next-action-icon"><Icon name={nextAction.icon} /></span>
-          <span className="dashboard-next-action-copy"><strong>{nextAction.title}</strong><small>{nextAction.detail}</small></span>
-          <span className="dashboard-next-action-state">{nextAction.state}</span>
-          <Icon className="dashboard-row-arrow" name="arrow" />
-        </Link> : <p className="dashboard-next-action-empty">Nenhum retorno, pagamento, entrega ou saldo de estoque precisa de atenção agora.</p>}
-      </section>
-
         <section className="dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
           <div className="section-heading dashboard-financial-heading">
             <div>
@@ -585,14 +714,11 @@ export function DashboardPage() {
               <article className="indicator-card"><p>Custo dos produtos</p><strong>{productCostCents === null ? 'Indisponível' : formatBRLExact(productCostCents)}</strong><span>Combo usa o custo do catálogo</span></article>
               <article className="indicator-card"><p>Faturamento líquido</p><strong>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</strong><span>Vendas após descontos − custo</span></article>
             </div>
-            <details className="dashboard-trend-details dashboard-financial-extra">
-              <summary>Ver descontos e gastos <span>Informações complementares</span></summary>
-              <div className="indicator-grid dashboard-financial-indicators">
-                <article className="indicator-card"><p>Descontos</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</strong><span>Aplicados aos pedidos</span></article>
+            <div className="indicator-grid dashboard-financial-indicators dashboard-financial-secondary-indicators">
+              <article className="indicator-card"><p>Descontos</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</strong><span>Aplicados aos pedidos</span></article>
               <article className="indicator-card"><p>Gastos pagos</p><strong>{paidExpenseCents === null ? '—' : formatBRLExact(paidExpenseCents)}</strong><span>Empresa e entregas</span></article>
               <article className="indicator-card"><p>Resultado após gastos</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>Antes de impostos</span></article>
-              </div>
-            </details>
+            </div>
             <details className="surface-panel dashboard-result-breakdown">
               <summary>Ver composição dos valores</summary>
               <div className="dashboard-result-breakdown-heading"><h3>Conta do período</h3><span>Vendas pela entrega ou retirada</span></div>
@@ -626,74 +752,6 @@ export function DashboardPage() {
           startOn={trendStartOn}
         />
 
-      <div className="dashboard-command-grid dashboard-command-priorities">
-        <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
-          <div className="section-heading">
-            <h2 id="attention-title">Fila de ações do dia</h2>
-            <span className="dashboard-today-label"><Icon name="clock" /> Hoje</span>
-          </div>
-          <details className="dashboard-trend-details dashboard-action-details">
-            <summary>Ver ações do dia <span>Retornos, pagamentos e entregas</span></summary>
-          <div className="dashboard-action-filters" role="group" aria-label="Filtrar fila por tipo de ação">
-            {actionFilters.map((filter) => <button aria-pressed={actionFilter === filter.value} key={filter.value} onClick={() => setActionFilter(filter.value)} type="button">{filter.label}</button>)}
-          </div>
-          <span className="visually-hidden" aria-live="polite" aria-atomic="true">{visibleActionCount !== null && !prioritiesLoading && !prioritiesError ? `${activeActionFilterLabel}: ${visibleActionCount} ${visibleActionCount === 1 ? 'item exibido' : 'itens exibidos'}.` : ''}</span>
-          {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
-          {!prioritiesLoading && prioritiesError && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="clock" /></span><h3>Não foi possível carregar as prioridades</h3><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>}
-          {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-action-queue">
-            {actionFilter === 'all' && noActions ? <div className="dashboard-panel-state is-clear"><span className="empty-icon"><Icon name="check" /></span><h3>Tudo em dia</h3><p>Nenhum retorno, vencimento ou entrega precisa de atenção hoje.</p></div> : <>
-              {(actionFilter === 'followups' || (actionFilter === 'all' && priorities.follow_ups.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-followups-title">
-                <div className="dashboard-action-group-heading"><h3 id="dashboard-followups-title">Retornos</h3><Link className="quiet-link" to="/atendimento">Ver retornos <Icon name="arrow" /></Link></div>
-                {priorities.follow_ups.items.length === 0 ? <p className="dashboard-priority-empty">Nenhum retorno vencido ou com prazo para hoje.</p> : <ul className="dashboard-action-list">
-                  {priorities.follow_ups.items.map((task) => <li key={task.id}>
-                    <Link to="/atendimento">
-                      <span className={`dashboard-action-symbol${task.due_on < today ? ' is-overdue' : ' is-today'}`}><Icon name="phone" /></span>
-                      <span className="dashboard-action-copy"><strong>{task.title}</strong><small>{task.customer_name ?? 'Sem cliente vinculado'}</small></span>
-                      <span className={`dashboard-row-state${task.due_on < today ? ' is-overdue' : ' is-today'}`}>{task.due_on < today ? 'Atrasado' : task.due_on === today ? 'Hoje' : formatBusinessDate(task.due_on)}</span>
-                      <Icon className="dashboard-row-arrow" name="arrow" />
-                    </Link>
-                  </li>)}
-                </ul>}
-                {priorities.follow_ups.pending_count > priorities.follow_ups.items.length && <p className="section-footnote">Mostrando {priorities.follow_ups.items.length} de {priorities.follow_ups.pending_count} retornos com prazo até hoje.</p>}
-              </section>}
-
-              {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.receivables.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-receivables-title">
-                <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Pagamentos para acompanhar</h3><Link className="quiet-link" to="/financeiro">Ver pagamentos <Icon name="arrow" /></Link></div>
-                {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma parcela atrasada ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
-                  {priorities.receivables.items.map((item) => <li key={item.installment_id}>
-                    <Link to={demoPreview ? '/financeiro' : `/pedidos/${item.order_id}`}>
-                      <span className={`dashboard-action-symbol${item.overdue ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
-                      <span className="dashboard-action-copy"><strong>{item.customer_name}</strong><small>Parcela {item.installment_number} · {formatBusinessDate(item.due_on)}</small></span>
-                      <span className="dashboard-action-meta"><strong>{formatBRLExact(item.balance_cents)}</strong><span className={`dashboard-row-state${item.overdue ? ' is-overdue' : ' is-today'}`}>{item.overdue ? 'Atrasado' : 'Vence hoje'}</span></span>
-                      <Icon className="dashboard-row-arrow" name="arrow" />
-                    </Link>
-                  </li>)}
-                </ul>}
-                {priorities.receivables.items.length > 0 && <p className="section-footnote">Até quatro vencimentos prioritários; os indicadores incluem todos os saldos devidos.</p>}
-              </section>}
-
-              {(actionFilter === 'deliveries' || (actionFilter === 'all' && priorities.deliveries.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-deliveries-title">
-                <div className="dashboard-action-group-heading"><h3 id="dashboard-deliveries-title">Entregas</h3><Link className="quiet-link" to="/entregas">Ver fila <Icon name="arrow" /></Link></div>
-                {priorities.deliveries.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma entrega precisa de atualização.</p> : <ul className="dashboard-action-list">
-                  {priorities.deliveries.items.map((delivery) => <li key={delivery.delivery_id}>
-                    <Link to={demoPreview ? '/entregas' : `/pedidos/${delivery.order_id}`}>
-                      <span className={`dashboard-action-symbol${delivery.status === 'attempted' ? ' is-overdue' : ' is-delivery'}`}><Icon name="truck" /></span>
-                      <span className="dashboard-action-copy"><strong>{delivery.customer_name}</strong><small>{delivery.delivery_worker_name ?? 'Entrega a acompanhar'}</small></span>
-                      <span className="dashboard-action-meta"><span className={`dashboard-row-state${delivery.status === 'attempted' ? ' is-overdue' : ' is-delivery'}`}>{deliveryStatusLabels[delivery.status]}</span><small>{delivery.scheduled_on === null ? 'Sem data' : delivery.scheduled_on < today ? 'Data vencida' : delivery.scheduled_on === today ? 'Hoje' : formatBusinessDate(delivery.scheduled_on)}</small></span>
-                      <Icon className="dashboard-row-arrow" name="arrow" />
-                    </Link>
-                  </li>)}
-                </ul>}
-                {priorities.deliveries.pending_count > priorities.deliveries.items.length && <p className="section-footnote">Mostrando {priorities.deliveries.items.length} de {priorities.deliveries.pending_count} entregas em atenção.</p>}
-              </section>}
-            </>}
-          </div>}
-          </details>
-        </section>
-
-      </div>
-      <details className="dashboard-trend-details dashboard-operations-details">
-        <summary>Ver pedidos recentes e estoque <span>{priorities?.inventory.attention_count ?? 0} produtos em atenção</span></summary>
       <div className="dashboard-columns dashboard-operations-grid">
         <section className="surface-panel dashboard-recent-panel" aria-labelledby="dashboard-recent-orders-title">
           <div className="section-heading">
@@ -704,16 +762,19 @@ export function DashboardPage() {
             {currentRecentOrders.loading && <p className="inline-state" aria-live="polite">Carregando pedidos recentes…</p>}
             {!currentRecentOrders.loading && currentRecentOrders.error && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="bag" /></span><h3>Não foi possível carregar os pedidos</h3><p>Tente novamente para atualizar esta lista.</p><button className="text-button" onClick={() => void loadRecentOrders()} type="button">Tentar novamente</button></div>}
             {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length === 0 && <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="bag" /></span><h3>Ainda não há pedidos registrados</h3><p>Os últimos quatro pedidos aparecerão aqui.</p><Link className="quiet-link" to="/pedidos/novo">Criar primeiro pedido <Icon name="arrow" /></Link></div>}
-            {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length > 0 && <ul className="dashboard-recent-order-list">
-              {currentRecentOrders.orders.map((order) => <li key={order.id}>
-                <Link to={demoPreview ? '/pedidos' : `/pedidos/${order.id}`}>
-                  <span className={`dashboard-order-dot${order.status === 'cancelled' ? ' is-cancelled' : ''}`} aria-hidden="true" />
-                  <span className="dashboard-recent-order-copy"><strong>{order.customer_name_snapshot}</strong><small>{formatOrderDate(order.created_at)} · {order.requires_delivery ? 'Entrega' : 'Retirada'}</small></span>
-                  <span className={`dashboard-recent-order-status${order.status === 'cancelled' ? ' is-cancelled' : ''}`}>{order.status === 'cancelled' ? 'Cancelado' : order.status === 'completed' ? 'Concluído' : 'Pedido ativo'}</span>
-                  <Icon className="dashboard-row-arrow" name="arrow" />
-                </Link>
-              </li>)}
-            </ul>}
+            {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length > 0 && <details className="dashboard-recent-details">
+              <summary>Ver últimos pedidos <span>{currentRecentOrders.orders.length} registros</span></summary>
+              <ul className="dashboard-recent-order-list">
+                {currentRecentOrders.orders.map((order) => <li key={order.id}>
+                  <Link to={demoPreview ? '/pedidos' : `/pedidos/${order.id}`}>
+                    <span className={`dashboard-order-dot${order.status === 'cancelled' ? ' is-cancelled' : ''}`} aria-hidden="true" />
+                    <span className="dashboard-recent-order-copy"><strong>{order.customer_name_snapshot}</strong><small>{formatOrderDate(order.created_at)} · {order.requires_delivery ? 'Entrega' : 'Retirada'}</small></span>
+                    <span className={`dashboard-recent-order-status${order.status === 'cancelled' ? ' is-cancelled' : ''}`}>{order.status === 'cancelled' ? 'Cancelado' : order.status === 'completed' ? 'Concluído' : 'Pedido ativo'}</span>
+                    <Icon className="dashboard-row-arrow" name="arrow" />
+                  </Link>
+                </li>)}
+              </ul>
+            </details>}
           </>}
         </section>
         <section className="surface-panel stock-panel" aria-labelledby="stock-title">
@@ -729,39 +790,21 @@ export function DashboardPage() {
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count === 0 && <div className="small-empty-state"><p>Nenhum produto está configurado para controle de estoque.</p><Link className="quiet-link" to="/catalogo">Configurar produtos <Icon name="arrow" /></Link></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count > 0 && priorities.inventory.attention_count === 0 && <div className="small-empty-state"><p>Nenhum saldo está negativo ou abaixo do mínimo definido.{priorities.inventory.without_minimum_count > 0 ? ` ${priorities.inventory.without_minimum_count} produto(s) ainda sem mínimo definido.` : ''}</p><Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.attention_count > 0 && <>
-            <ul className="dashboard-stock-list">{priorities.inventory.items.map((item) => <li key={item.product_id}><span><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.minimum_stock === null ? 'Defina um mínimo para receber alerta' : `Estoque mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span><span className="dashboard-stock-quantity">{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span></li>)}</ul>
-            {priorities.inventory.attention_count > priorities.inventory.items.length && <p className="section-footnote">Mostrando {priorities.inventory.items.length} de {priorities.inventory.attention_count} produtos em atenção.</p>}
+            <ul className="dashboard-stock-list">{visibleStockItems.map(renderStockItem)}</ul>
+            {additionalStockItems.length > 0 && <details className="dashboard-stock-details">
+              <summary>Ver mais produtos <span>{Math.min(additionalStockItems.length, priorities.inventory.attention_count - visibleStockItems.length)} produtos</span></summary>
+              <ul className="dashboard-stock-list">{additionalStockItems.map(renderStockItem)}</ul>
+              {priorities.inventory.attention_count > priorities.inventory.items.length && <p className="section-footnote">Mostrando {priorities.inventory.items.length} de {priorities.inventory.attention_count} produtos em atenção.</p>}
+            </details>}
             {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">{priorities.inventory.without_minimum_count} produto(s) sem mínimo configurado para alerta.</p>}
             <Link className="quiet-link" to="/estoque">Ver produtos em atenção <Icon name="arrow" /></Link>
           </>}
         </section>
       </div>
-      </details>
       </> : <section className="surface-panel dashboard-role-note" aria-label="Resumo do dia">
         <h2>Resumo de gestão</h2>
         <p>Indicadores financeiros, vencimentos, entregas e alertas de estoque ficam disponíveis para o perfil proprietário.</p>
       </section>}
-
-      <details className="dashboard-trend-details dashboard-bottom-details">
-        <summary>Ver conexões e atalhos <span>Configurações e páginas do sistema</span></summary>
-      <section className="surface-panel dashboard-connections-panel" aria-labelledby="integrations-title">
-        <div className="section-heading section-heading-compact">
-          <div>
-            <p className="eyebrow">CONFIGURAÇÃO</p>
-            <h2 id="integrations-title">Conexões</h2>
-          </div>
-          <Link className="quiet-link" to="/configuracoes">Ver status <Icon name="arrow" /></Link>
-        </div>
-        <ul className="status-list">
-          {integrations.map((item) => (
-            <li key={item.label}>
-              <span className="status-indicator" aria-hidden="true" />
-              <span className="status-name">{item.label}</span>
-              <span className="status-copy">{item.state}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
 
       <section className="quick-links" aria-label="Atalhos">
         <Link className="quick-link" to="/atendimento"><Icon name="phone" /><span><strong>Atendimento</strong><small>Chamadas e retornos</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
@@ -769,7 +812,6 @@ export function DashboardPage() {
         <Link className="quick-link" to="/clientes"><Icon name="people" /><span><strong>Clientes</strong><small>Cadastros e histórico</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
         <Link className="quick-link" to="/catalogo"><Icon name="box" /><span><strong>Catálogo</strong><small>Produtos e categorias</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
       </section>
-      </details>
     </div>
   )
 }
