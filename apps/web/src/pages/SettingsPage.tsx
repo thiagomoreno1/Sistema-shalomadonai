@@ -414,14 +414,14 @@ export function SettingsPage() {
               <h3 id="whatsapp-title">Caixa de entrada WhatsApp</h3>
               <span className="neutral-status">Não conectada</span>
             </div>
-            <p className="settings-integration-copy">O painel do Chatwoot será exibido aqui depois de conectar a conta e o número de WhatsApp Business.</p>
+            <p className="settings-integration-copy">O Shalom usa a Evolution API diretamente para receber mensagens, anexos e registros de chamadas.</p>
             <dl className="settings-detail-list settings-integration-details">
-              <div><dt>Provedor de atendimento</dt><dd>Chatwoot · preparação em andamento</dd></div>
-              <div><dt>Infraestrutura</dt><dd>Contabo, se escolhida para hospedagem; versão própria 4.19+</dd></div>
+              <div><dt>Integração</dt><dd>Evolution API · conexão em preparação</dd></div>
+              <div><dt>Servidor</dt><dd>Local · acesso protegido</dd></div>
               <div><dt>Número WhatsApp Business</dt><dd>Não informado</dd></div>
-              <div><dt>Credenciais</dt><dd>Não configuradas nos secrets do servidor</dd></div>
+              <div><dt>Credenciais</dt><dd>Ainda não configuradas nos secrets do servidor</dd></div>
             </dl>
-            <p className="settings-integration-note">Nenhuma mensagem é enviada ou recebida até concluir a conexão e validar o canal real.</p>
+            <p className="settings-integration-note">A conexão só será considerada ativa após validar o webhook e trocar mensagens com um número de teste.</p>
           </article>
 
           <article className="settings-integration-card" aria-labelledby="fiscal-title">

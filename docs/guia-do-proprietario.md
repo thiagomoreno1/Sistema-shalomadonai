@@ -1,6 +1,6 @@
 # Guia do proprietário — Shalom Adonai
 
-**Atualizado em 04/11/2026.** Este guia descreve os fluxos que existem no repositório e os limites do ambiente Supabase conferido nesta data. A aplicação ainda não está publicada em hospedagem de produção; a prévia local deste computador aponta para o banco Supabase hospedado. Não use dados fictícios na prévia: gravações podem atingir esse banco.
+**Atualizado em 06/11/2026.** Este guia descreve os fluxos do repositório e os limites do ambiente conferido. A integração direta com Evolution está em implementação; o código local ainda não significa que o número ou o webhook estejam conectados.
 
 ## Antes de começar
 
@@ -12,7 +12,7 @@
 ## Fluxo diário
 
 1. **Painel:** abra a fila do dia para ver retornos prioritários, vencimentos e entregas que precisam de atualização. Indicadores sem dados ou com erro de configuração devem ser conferidos antes de agir.
-2. **Clientes:** cadastre o cliente e seus telefones e endereços conhecidos. Registre ligações e o próximo retorno manualmente; o sistema não captura o histórico do telefone celular.
+2. **Clientes:** cadastre o cliente e seus telefones e endereços conhecidos. Quando o webhook da Evolution estiver conectado, conversas e eventos de chamadas poderão ser associados ao cadastro por um telefone brasileiro único e completo; correspondências ambíguas ou sem número ficam para escolha manual.
 3. **Catálogo e estoque:** cadastre nome, preço e custo conhecidos. Para controlar estoque, informe unidade e contagem inicial; sem isso, o produto não deve ser interpretado como saldo zero. Um combo precisa ter sua composição salva.
 4. **Pedido:** selecione cliente, itens e quantidades. Informe cada vencimento e valor no pedido conforme o combinado com o cliente; os prazos comuns de cesta e eletrodoméstico não são aplicados automaticamente a todo produto.
 5. **Recebimento:** registre pagamentos no pedido/contas a receber. O saldo e os vencimentos aparecem na tela financeira; recebimentos parciais são aceitos.
@@ -24,7 +24,7 @@
 
 | Área | Situação nesta versão | O que falta |
 | --- | --- | --- |
-| WhatsApp | Há código para o painel/inbox Chatwoot; a instância não está publicada nem conectada. | Hospedar/configurar Chatwoot, domínio HTTPS, caixa de entrada, credenciais e onboarding aprovado do número/conta Meta. |
+| WhatsApp | Caixa própria em integração direta com Evolution está no repositório, mas ainda não foi conectada nem testada com um número. | Completar o fluxo Evolution ↔ Supabase local, aplicar a migration local, configurar webhook e validar mensagens/chamadas com um número dedicado de teste. Não usar o número operacional antes dessa validação. |
 | Banco | Importação OFX/QFX e prova Belvo Sandbox existem no repositório. Não há conexão bancária ativa nem importação habilitada no banco hospedado. | Aplicar migration, validar arquivo bancário sanitizado e, para Belvo, obter credenciais sandbox, URL pública HTTPS, termos aprovados e webhook. |
 | Fiscal | Não emite documentos fiscais. | Contador confirmar regime, documentos e requisitos; depois escolher e validar provedor. |
 | Mensagens automáticas | Não envie lembretes, reativação ou pesquisas automaticamente. | Confirmar textos, gatilhos, horários, consentimento, opt-out e suporte do canal; só então ativar e testar. |
@@ -65,7 +65,7 @@ O projeto ainda não tem um procedimento completo de recuperação testado. A c�
 - Ativar e testar proteção contra senhas comprometidas no Auth; a organização atual está no plano Free, e a opção requer plano pago conforme a documentação do Supabase.
 - Enviar produtos, unidades, custos/preços e contagem inicial para começar a operação real.
 - Confirmar com o contador os dados e documentos fiscais necessários.
-- Configurar e testar Chatwoot/WhatsApp e, separadamente, a prova Belvo Sandbox.
+- Configurar e testar Evolution/WhatsApp e, separadamente, a prova Belvo Sandbox.
 - Escolher a forma de backup que cubra banco, arquivos e configurações, e testar a restauração antes de depender dela.
 
 ## Referências oficiais do Supabase

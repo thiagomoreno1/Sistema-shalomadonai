@@ -37,9 +37,6 @@ enable_anonymous_sign_ins = false
 enabled = true
 enable_confirmations = false
 
-[functions.chatwoot-inbox]
-verify_jwt = true
-
 [functions.create-delivery-driver]
 verify_jwt = true
 
@@ -48,3 +45,25 @@ verify_jwt = true
 
 [functions.belvo-sandbox-webhook]
 verify_jwt = false
+
+[functions.evolution-webhook]
+enabled = true
+verify_jwt = false
+import_map = "./functions/evolution-webhook/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/evolution-webhook/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/evolution-webhook/*.html" ]
+
+[functions.evolution-inbox]
+enabled = true
+verify_jwt = true
+import_map = "./functions/evolution-inbox/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/evolution-inbox/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/evolution-inbox/*.html" ]

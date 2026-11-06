@@ -26,9 +26,6 @@ services:
       CACHE_REDIS_PREFIX_KEY: shalom_adonai_local
       CACHE_REDIS_SAVE_INSTANCES: "false"
       CACHE_LOCAL_ENABLED: "false"
-      CHATWOOT_ENABLED: "true"
-      CHATWOOT_MESSAGE_READ: "true"
-      CHATWOOT_MESSAGE_DELETE: "true"
       TELEMETRY_ENABLED: "false"
       # Wildcard is limited to this loopback-only local profile so direct browser navigation works.
       CORS_ORIGIN: "*"

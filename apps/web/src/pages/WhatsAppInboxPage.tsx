@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { supabaseClient } from '../lib/supabase'
@@ -22,10 +22,11 @@ type Message = {
   content: string | null
   created_at: string | null
   message_type: 'incoming' | 'outgoing' | 'activity'
-  status: 'sent' | 'delivered' | 'read' | 'failed' | null
+  status: 'pending' | 'sent' | 'delivered' | 'read' | 'played' | 'failed' | 'deleted' | null
   private: boolean
   sender: { name: string | null }
   attachments: Attachment[]
+  message_kind: string | null
 }
 type Conversation = {
   id: string
@@ -37,16 +38,39 @@ type Conversation = {
   last_activity_at: string | null
   last_message: Message | null
   messages: Message[]
+  calls?: CallEvent[]
 }
 type Customer = { id: string; name: string; phone: string | null; whatsapp_phone: string | null }
 type Order = { id: string; created_at: string; status: 'open' | 'cancelled'; total_cents: number }
-type ConversationLink = { conversation_id: string; inbox_id: string; customer_id: string | null; order_id: string | null }
+type ConversationLink = { conversation_id: string; customer_id: string | null; order_id: string | null; match_method: 'phone' | 'manual' }
+type CallEvent = { id: string; conversation_id: string; contact: { name: string | null; phone: string | null }; customer_name?: string | null; status: string | null; status_label: string; is_video: boolean | null; occurred_at: string; event_count?: number; states?: string[] }
 type ConversationListResponse = { conversations?: Conversation[]; meta?: { page?: number; has_more?: boolean } }
+type CallListResponse = { calls?: CallEvent[] }
 
 const EMPTY_CONVERSATIONS: Conversation[] = []
 
 function digitsOnly(value: string | null | undefined) {
   return (value ?? '').replace(/\D/g, '')
+}
+
+function canonicalBrazilPhone(value: string | null | undefined) {
+  const digits = digitsOnly(value)
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) return digits
+  return ''
+}
+
+function messageKindLabel(value: string | null | undefined) {
+  if (value === 'image') return 'Imagem recebida'
+  if (value === 'audio') return 'Áudio recebido'
+  if (value === 'video') return 'Vídeo recebido'
+  if (value === 'document') return 'Documento recebido'
+  if (value === 'sticker') return 'Figurinha recebida'
+  if (value === 'location') return 'Localização recebida'
+  if (value === 'contact') return 'Contato compartilhado'
+  if (value === 'interactive') return 'Mensagem interativa'
+  if (value === 'reaction') return 'Reação'
+  return 'Mensagem sem texto'
 }
 
 function timestampLabel(value: string | null | undefined) {
@@ -64,11 +88,24 @@ function statusLabel(value: string | null | undefined) {
   return value ? `Status: ${value}` : 'Status indisponível'
 }
 
+function connectionStateLabel(value: string | null | undefined) {
+  const normalized = (value ?? '').toLowerCase()
+  if (normalized === 'open' || normalized === 'connected') return 'Conectado'
+  if (normalized === 'connecting' || normalized === 'connecting...') return 'Conectando'
+  if (normalized === 'close' || normalized === 'closed' || normalized === 'disconnected') return 'Desconectado'
+  if (normalized === 'not_configured') return 'Não configurado'
+  if (normalized === 'unavailable') return 'API indisponível'
+  return value ? `Estado: ${value}` : 'Estado indisponível'
+}
+
 function messageDeliveryLabel(value: Message['status']) {
+  if (value === 'pending') return 'Aguardando envio'
   if (value === 'sent') return 'Enviada'
   if (value === 'delivered') return 'Entregue'
   if (value === 'read') return 'Lida'
+  if (value === 'played') return 'Reproduzida'
   if (value === 'failed') return 'Falhou'
+  if (value === 'deleted') return 'Apagada'
   return null
 }
 
@@ -80,7 +117,7 @@ function orderLabel(order: Order) {
 
 async function invokeInbox<T>(body: Record<string, unknown>) {
   if (!supabaseClient) throw new Error('A conexão segura com o Supabase não está disponível.')
-  const { data, error } = await supabaseClient.functions.invoke('chatwoot-inbox', { body })
+  const { data, error } = await supabaseClient.functions.invoke('evolution-inbox', { body })
   if (error) throw error
   return data as T
 }
@@ -132,7 +169,7 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId }
   const previewRegion = useRef<HTMLDivElement>(null)
   const loadButton = useRef<HTMLButtonElement>(null)
   const name = attachmentName(attachment)
-  const tooLarge = sizeRejected || (attachment.file_size !== null && attachment.file_size > 25 * 1024 * 1024)
+const tooLarge = sizeRejected || (attachment.file_size !== null && attachment.file_size > 10 * 1024 * 1024)
 
   useEffect(() => {
     mounted.current = true
@@ -152,7 +189,7 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId }
     setLoading(true)
     setError(false)
     try {
-      const { data, error: requestError, response } = await supabaseClient.functions.invoke<Blob>('chatwoot-inbox', {
+      const { data, error: requestError, response } = await supabaseClient.functions.invoke<Blob>('evolution-inbox', {
         body: {
           action: 'attachment', business_id: businessId, conversationId, messageId, attachmentId: attachment.id,
         },
@@ -197,7 +234,7 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId }
   const label = `${attachmentKindLabel(attachment)}${attachmentSizeLabel(attachment.file_size)}`
   if (!file) return (
     <div className="whatsapp-attachment">
-      {tooLarge && <p className="whatsapp-attachment-error" role="alert">Este anexo excede o limite de 25 MiB.</p>}
+      {tooLarge && <p className="whatsapp-attachment-error" role="alert">Este anexo excede o limite de 10 MiB.</p>}
       {!tooLarge && <button className="whatsapp-attachment-load" disabled={loading} onClick={() => void loadAttachment()} ref={loadButton} type="button">
         <Icon name="file" />
         <span>{error ? 'Não foi possível abrir · tentar novamente' : `Abrir ${label}`}</span>
@@ -222,10 +259,18 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId }
 
 export function WhatsAppInboxPage() {
   const { id: businessId, role } = useBusiness()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [connectionChecking, setConnectionChecking] = useState(true)
   const [configured, setConfigured] = useState(false)
+  const [connectionState, setConnectionState] = useState('')
+  const [webhookSaving, setWebhookSaving] = useState(false)
+  const [webhookFeedback, setWebhookFeedback] = useState<string | null>(null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [status, setStatus] = useState<InboxStatus>('open')
+  const [view, setView] = useState<'conversations' | 'calls'>(() => searchParams.get('view') === 'calls' ? 'calls' : 'conversations')
+  const [calls, setCalls] = useState<CallEvent[]>([])
+  const [callsLoading, setCallsLoading] = useState(false)
+  const [callsError, setCallsError] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [conversations, setConversations] = useState<Conversation[]>(EMPTY_CONVERSATIONS)
@@ -255,6 +300,40 @@ export function WhatsAppInboxPage() {
   const listRequest = useRef(0)
   const activeListScope = useRef(conversationScopeKey(status, search))
   const currentListScope = conversationScopeKey(status, search)
+  const businessContextLoaded = useRef(false)
+
+  const changeView = useCallback((nextView: 'conversations' | 'calls') => {
+    setView(nextView)
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextView === 'calls') next.set('view', 'calls')
+      else next.delete('view')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+
+  const loadBusinessContext = useCallback(async () => {
+    if (!configured || !supabaseClient) return
+    if (!businessContextLoaded.current) setLinkLoading(true)
+    try {
+      const [customersResult, linksResult] = await Promise.all([
+        supabaseClient.from('customers').select('id, name, phone, whatsapp_phone').eq('business_id', businessId).eq('is_active', true).order('name', { ascending: true }),
+        supabaseClient.from('whatsapp_conversation_contexts').select('conversation_id, customer_id, order_id, match_method').eq('business_id', businessId),
+      ])
+      if (customersResult.error || linksResult.error) {
+        setLinkError('Não foi possível carregar os vínculos com clientes e pedidos.')
+      } else {
+        setCustomers((customersResult.data ?? []) as Customer[])
+        setLinks(Object.fromEntries(((linksResult.data ?? []) as ConversationLink[]).map((link) => [link.conversation_id, link])))
+        setLinkError(null)
+      }
+    } catch {
+      setLinkError('Não foi possível carregar os vínculos com clientes e pedidos.')
+    } finally {
+      businessContextLoaded.current = true
+      setLinkLoading(false)
+    }
+  }, [businessId, configured])
 
   const loadConversations = useCallback(async (page = 1, append = false) => {
     if (!configured) return
@@ -341,8 +420,11 @@ export function WhatsAppInboxPage() {
       setConnectionChecking(true)
       setConnectionError(null)
       try {
-        const result = await invokeInbox<{ configured?: boolean }>({ action: 'status', business_id: businessId })
-        if (active) setConfigured(result.configured === true)
+        const result = await invokeInbox<{ configured?: boolean; connection_state?: string }>({ action: 'status', business_id: businessId })
+        if (active) {
+          setConfigured(result.configured === true)
+          setConnectionState(result.connection_state ?? '')
+        }
       } catch {
         if (active) {
           setConfigured(false)
@@ -357,39 +439,37 @@ export function WhatsAppInboxPage() {
   }, [businessId])
 
   useEffect(() => { if (configured) void loadConversations() }, [configured, loadConversations])
+  useEffect(() => { setView(searchParams.get('view') === 'calls' ? 'calls' : 'conversations') }, [searchParams])
+  const loadCalls = useCallback(async () => {
+    if (!configured) return
+    setCallsLoading(true)
+    setCallsError(null)
+    try {
+      const result = await invokeInbox<CallListResponse>({ action: 'calls', business_id: businessId })
+      setCalls(result.calls ?? [])
+    } catch {
+      setCallsError('Não foi possível carregar o registro de chamadas.')
+    } finally {
+      setCallsLoading(false)
+    }
+  }, [businessId, configured])
+  useEffect(() => { if (configured && view === 'calls') void loadCalls() }, [configured, loadCalls, view])
+  useEffect(() => {
+    if (!configured || view !== 'calls') return
+    const interval = window.setInterval(() => { void loadCalls() }, 30_000)
+    return () => window.clearInterval(interval)
+  }, [configured, loadCalls, view])
 
   useEffect(() => {
     if (!configured) return
-    const interval = window.setInterval(() => { void refreshLoadedConversations() }, 30_000)
+    const interval = window.setInterval(() => {
+      void refreshLoadedConversations()
+      void loadBusinessContext()
+    }, 30_000)
     return () => window.clearInterval(interval)
-  }, [configured, refreshLoadedConversations])
+  }, [configured, loadBusinessContext, refreshLoadedConversations])
 
-  useEffect(() => {
-    setSelectedId((selected) => selected && conversations.some((item) => item.id === selected) ? selected : null)
-  }, [conversations])
-
-  useEffect(() => {
-    let active = true
-    async function loadBusinessContext() {
-      if (!configured || !supabaseClient) return
-      setLinkLoading(true)
-      const [customersResult, linksResult] = await Promise.all([
-        supabaseClient.from('customers').select('id, name, phone, whatsapp_phone').eq('business_id', businessId).eq('is_active', true).order('name', { ascending: true }),
-        supabaseClient.from('whatsapp_conversation_links').select('conversation_id, inbox_id, customer_id, order_id').eq('business_id', businessId),
-      ])
-      if (!active) return
-      if (customersResult.error || linksResult.error) {
-        setLinkError('Não foi possível carregar os vínculos com clientes e pedidos.')
-      } else {
-        setCustomers((customersResult.data ?? []) as Customer[])
-        setLinks(Object.fromEntries(((linksResult.data ?? []) as ConversationLink[]).map((link) => [link.conversation_id, link])))
-        setLinkError(null)
-      }
-      setLinkLoading(false)
-    }
-    void loadBusinessContext()
-    return () => { active = false }
-  }, [businessId, configured])
+  useEffect(() => { void loadBusinessContext() }, [loadBusinessContext])
 
   useEffect(() => {
     if (!selectedId || !configured) {
@@ -430,7 +510,7 @@ export function WhatsAppInboxPage() {
   }, [businessId, configured, selectedId])
 
   const selectedLink = selectedId ? links[selectedId] : undefined
-  const currentConversation = selectedConversation?.id === selectedId && conversations.some((item) => item.id === selectedId)
+  const currentConversation = selectedConversation?.id === selectedId
     ? selectedConversation
     : null
   const [customerDraft, setCustomerDraft] = useState('')
@@ -461,13 +541,24 @@ export function WhatsAppInboxPage() {
   }, [businessId, customerDraft])
 
   const phoneMatches = useMemo(() => {
-    const phone = digitsOnly(currentConversation?.contact.phone)
-    if (phone.length < 8) return []
-    return customers.filter((customer) => [customer.whatsapp_phone, customer.phone].some((value) => {
-      const candidate = digitsOnly(value)
-      return candidate.length >= 8 && (candidate.endsWith(phone) || phone.endsWith(candidate))
-    }))
+    const phone = canonicalBrazilPhone(currentConversation?.contact.phone)
+    if (!phone) return []
+    return customers.filter((customer) => [customer.whatsapp_phone, customer.phone]
+      .some((value) => canonicalBrazilPhone(value) === phone))
   }, [customers, currentConversation?.contact.phone])
+
+  useEffect(() => {
+    if (selectedLink?.match_method === 'manual' || selectedLink?.customer_id || phoneMatches.length !== 1) return
+    setCustomerDraft(phoneMatches[0].id)
+  }, [phoneMatches, selectedLink?.customer_id, selectedLink?.match_method])
+
+  const conversationTimeline = useMemo(() => {
+    if (!currentConversation) return []
+    return [
+      ...currentConversation.messages.map((message) => ({ kind: 'message' as const, sortAt: message.created_at ?? '', message })),
+      ...(currentConversation.calls ?? []).map((call) => ({ kind: 'call' as const, sortAt: call.occurred_at, call })),
+    ].sort((left, right) => left.sortAt.localeCompare(right.sortAt))
+  }, [currentConversation])
 
   function changeStatusFilter(nextStatus: InboxStatus) {
     const nextScope = conversationScopeKey(nextStatus, search)
@@ -537,6 +628,20 @@ export function WhatsAppInboxPage() {
     }
   }
 
+  async function handleConfigureWebhook() {
+    if (role !== 'owner' || webhookSaving) return
+    setWebhookSaving(true)
+    setWebhookFeedback(null)
+    try {
+      await invokeInbox({ action: 'configure_webhook', business_id: businessId })
+      setWebhookFeedback('Configuração enviada. Envie uma mensagem de teste para confirmar o recebimento.')
+    } catch {
+      setWebhookFeedback('Não foi possível configurar o recebimento. Confira a URL e os secrets do servidor.')
+    } finally {
+      setWebhookSaving(false)
+    }
+  }
+
   async function handleSaveLink(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const client = supabaseClient
@@ -544,26 +649,24 @@ export function WhatsAppInboxPage() {
     setLinkSaving(true)
     setLinkError(null)
     setLinkMessage(null)
+    const { data: authData, error: authError } = await client.auth.getUser()
+    if (authError || !authData.user) {
+      setLinkSaving(false)
+      setLinkError('Sua sessão expirou. Entre novamente para salvar o vínculo.')
+      return
+    }
     const row = {
       business_id: businessId,
       conversation_id: currentConversation.id,
-      inbox_id: currentConversation.inbox_id,
       customer_id: customerDraft || null,
       order_id: orderDraft || null,
+      match_method: !selectedLink?.customer_id && phoneMatches.length === 1 && customerDraft === phoneMatches[0].id ? 'phone' as const : 'manual' as const,
+      updated_by: authData.user.id,
     }
-    const updateLink = () => client.from('whatsapp_conversation_links')
-      .update({ inbox_id: row.inbox_id, customer_id: row.customer_id, order_id: row.order_id })
-      .eq('business_id', row.business_id)
-      .eq('conversation_id', row.conversation_id)
-      .select('conversation_id, inbox_id, customer_id, order_id')
+    const result = await client.from('whatsapp_conversation_contexts')
+      .upsert(row, { onConflict: 'business_id,conversation_id' })
+      .select('conversation_id, customer_id, order_id, match_method')
       .single()
-    let result = selectedLink
-      ? await updateLink()
-      : await client.from('whatsapp_conversation_links')
-        .insert(row)
-        .select('conversation_id, inbox_id, customer_id, order_id')
-        .single()
-    if (!selectedLink && result.error?.code === '23505') result = await updateLink()
     setLinkSaving(false)
     if (result.error || !result.data) {
       setLinkError('Não foi possível salvar o vínculo. Confira a seleção e tente novamente.')
@@ -583,28 +686,53 @@ export function WhatsAppInboxPage() {
     && loadedListScope === currentListScope && conversations.length > 0
 
   const connectedScreen = connectionChecking ? (
-    <section className="surface-panel whatsapp-connection-state" role="status"><span className="empty-icon"><Icon name="clock" /></span><h2>Verificando a conexão segura…</h2><p>O sistema consulta a configuração do Chatwoot no servidor.</p></section>
+    <section className="surface-panel whatsapp-connection-state" role="status"><span className="empty-icon"><Icon name="clock" /></span><h2>Verificando a conexão segura…</h2><p>O Shalom consulta a Evolution API no servidor.</p></section>
   ) : !configured ? (
     <section className="surface-panel whatsapp-connection-state" aria-labelledby="whatsapp-pending-title">
       <span className="empty-icon"><Icon name="message" /></span>
       <p className="eyebrow">{connectionError ? 'CONEXÃO INDISPONÍVEL' : 'ETAPA 1 · CAIXA DE ENTRADA'}</p>
-      <h2 id="whatsapp-pending-title">{connectionError ? 'Não foi possível verificar a integração' : 'A caixa de entrada está preparada; falta conectar o Chatwoot'}</h2>
-      <p>{connectionError ?? 'Esta tela vai reunir as conversas do WhatsApp dentro do Shalom e permitir associá-las a clientes e pedidos. Nenhuma conversa foi simulada; nenhuma mensagem é enviada enquanto o Chatwoot e a conta WhatsApp Business não estiverem configurados.'}</p>
+      <h2 id="whatsapp-pending-title">{connectionError ? 'Não foi possível verificar a integração' : 'A caixa está pronta; falta configurar a Evolution API'}</h2>
+      <p>{connectionError ?? 'Esta tela reúne conversas e chamadas recebidas pela Evolution API. Configure os secrets do servidor e conecte um número de teste para começar.'}</p>
       <ol className="whatsapp-setup-steps">
-        <li><span>1</span><div><strong>Configurar a conexão segura</strong><small>Endereço, conta e token do Chatwoot ficam nos secrets da função Supabase, nunca no navegador.</small></div><span className="neutral-status">Pendente</span></li>
-        <li><span>2</span><div><strong>Conectar o canal WhatsApp</strong><small>Depende da conta WhatsApp Business, do número e da configuração aprovada na Meta.</small></div><span className="neutral-status">Pendente</span></li>
-        <li><span>3</span><div><strong>Validar mensagens reais</strong><small>Depois da conexão, confirmar recebimento, resposta, status e vínculo com cadastro e pedido.</small></div><span className="neutral-status">Pendente</span></li>
+        <li><span>1</span><div><strong>Configurar a conexão segura</strong><small>Endereço e chave da Evolution ficam nos secrets do servidor, nunca no navegador.</small></div><span className="neutral-status">Pendente</span></li>
+        <li><span>2</span><div><strong>Configurar o webhook</strong><small>O Supabase precisa receber eventos por uma rede local compartilhada ou endpoint HTTPS seguro.</small></div><span className="neutral-status">Pendente</span></li>
+        <li><span>3</span><div><strong>Conectar um número de teste</strong><small>Depois, validar mensagens, chamadas, arquivos e identificação por telefone.</small></div><span className="neutral-status">Pendente</span></li>
       </ol>
-      {connectionError && <button className="button button-secondary" onClick={() => { setConnectionChecking(true); setConnectionError(null); void invokeInbox<{ configured?: boolean }>({ action: 'status', business_id: businessId }).then((result) => setConfigured(result.configured === true)).catch(() => setConnectionError('Não foi possível verificar a conexão com o servidor.')).finally(() => setConnectionChecking(false)) }} type="button">Tentar novamente</button>}
+      {connectionError && <button className="button button-secondary" onClick={() => { setConnectionChecking(true); setConnectionError(null); void invokeInbox<{ configured?: boolean; connection_state?: string }>({ action: 'status', business_id: businessId }).then((result) => { setConfigured(result.configured === true); setConnectionState(result.connection_state ?? '') }).catch(() => setConnectionError('Não foi possível verificar a conexão com o servidor.')).finally(() => setConnectionChecking(false)) }} type="button">Tentar novamente</button>}
       <Link className="quiet-link" to="/configuracoes">Ver preparação da conexão <Icon name="arrow" /></Link>
     </section>
   ) : (
     <section className="whatsapp-inbox" aria-label="Caixa de entrada WhatsApp">
+      <div className="surface-panel whatsapp-connection-banner">
+        <span className={`whatsapp-connection-dot${connectionState.toLowerCase() === 'open' ? ' is-connected' : ''}`} aria-hidden="true" />
+        <div><strong>Evolution API</strong><span role="status">{connectionStateLabel(connectionState)}</span></div>
+        {webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}
+        {role === 'owner' && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Configurar recebimento'}</button>}
+      </div>
       <aside className={`surface-panel whatsapp-conversation-panel${selectedId ? ' is-mobile-hidden' : ''}`} aria-label="Lista de conversas">
         <div className="whatsapp-list-heading">
-          <div><p className="eyebrow">CHATWOOT · WHATSAPP</p><h2>Conversas</h2></div>
-          <button aria-label="Atualizar conversas" className="icon-button" disabled={listLoading} onClick={() => void refreshLoadedConversations()} type="button"><Icon name="clock" /></button>
+          <div><p className="eyebrow">EVOLUTION API · WHATSAPP</p><h2>{view === 'calls' ? 'Chamadas' : 'Conversas'}</h2></div>
+          <button aria-label={view === 'calls' ? 'Atualizar chamadas' : 'Atualizar conversas'} className="icon-button" disabled={view === 'calls' ? callsLoading : listLoading} onClick={() => view === 'calls' ? void loadCalls() : void refreshLoadedConversations()} type="button"><Icon name="clock" /></button>
         </div>
+        <div className="whatsapp-inbox-kind-tabs" aria-label="Tipo de atendimento" role="group">
+          <button aria-pressed={view === 'conversations'} onClick={() => changeView('conversations')} type="button">Conversas</button>
+          <button aria-pressed={view === 'calls'} onClick={() => changeView('calls')} type="button">Chamadas</button>
+        </div>
+        {view === 'calls' ? (
+          <>
+            {callsError && <div className="inline-state inline-state-error" role="alert"><p>{callsError}</p><button className="text-button" onClick={() => void loadCalls()} type="button">Tentar novamente</button></div>}
+            {callsLoading && <p className="inline-state" role="status">Carregando chamadas…</p>}
+            {!callsLoading && !callsError && calls.length === 0 && <div className="whatsapp-list-empty"><Icon name="message" /><strong>Nenhuma chamada registrada</strong><span>Chamadas recebidas pela Evolution aparecerão aqui quando o evento estiver disponível.</span></div>}
+            <ul className="whatsapp-conversation-list">
+              {calls.map((call) => <li key={call.id}><button className="whatsapp-conversation-item" onClick={() => { setSelectedConversation(null); setSelectedId(call.conversation_id) }} type="button">
+                <span className="whatsapp-contact-avatar" aria-hidden="true">{call.is_video ? 'V' : '☎'}</span>
+                <span className="whatsapp-conversation-copy"><strong>{call.customer_name || call.contact.name || call.contact.phone || 'Contato sem identificação'}</strong><small>{call.contact.phone || 'Telefone indisponível'} · {call.status_label}{call.is_video ? ' · vídeo' : ''}{(call.event_count ?? 1) > 1 ? ` · ${call.event_count} eventos` : ''}</small></span>
+                <span className="whatsapp-conversation-meta"><time>{timestampLabel(call.occurred_at)}</time></span>
+              </button></li>)}
+            </ul>
+            <p className="whatsapp-call-note">Eventos agrupados pelo identificador enviado pela Evolution. O Shalom não grava áudio nem atende chamadas pelo navegador.</p>
+          </>
+        ) : <>
         <form className="whatsapp-search" onSubmit={(event) => void handleSearch(event)} role="search">
           <Icon name="search" />
           <input aria-label="Buscar no conteúdo das mensagens" onChange={(event) => setSearchInput(event.target.value)} placeholder="Buscar mensagem" value={searchInput} />
@@ -629,6 +757,7 @@ export function WhatsAppInboxPage() {
           </ul>
         )}
         {hasMore && <button className="button button-secondary whatsapp-load-more" disabled={listLoading} onClick={() => void loadConversations(listPage + 1, true)} type="button">{listLoading ? 'Carregando…' : 'Carregar mais conversas'}</button>}
+        </>}
       </aside>
 
       <section className={`surface-panel whatsapp-chat-panel${selectedId ? ' is-mobile-visible' : ''}`} aria-label="Conversa selecionada">
@@ -645,14 +774,20 @@ export function WhatsAppInboxPage() {
           {detailError && <div className="inline-state inline-state-error" role="alert">{detailError}</div>}
           <div className="whatsapp-message-history" aria-live="polite" aria-label="Histórico de mensagens">
             {detailLoading && <p className="inline-state" role="status">Carregando histórico…</p>}
-            {!detailLoading && currentConversation?.messages.map((message) => <article className={`whatsapp-message${message.message_type === 'outgoing' ? ' is-outgoing' : ''}${message.private ? ' is-private' : ''}`} key={message.id}>
-              {message.private && <span className="whatsapp-message-label">Nota interna</span>}
-              {message.content && <p>{message.content}</p>}
-              {!message.content && message.attachments.length === 0 && <p className="whatsapp-message-attachment">{message.message_type === 'activity' ? 'Atualização da conversa' : 'Mensagem sem texto'}</p>}
-              {message.attachments.map((attachment) => <MessageAttachment attachment={attachment} businessId={businessId} conversationId={currentConversation.id} key={attachment.id} messageId={message.id} />)}
-              <footer><span>{message.message_type === 'outgoing' ? 'Equipe' : message.sender.name || currentConversation?.contact.name || 'Cliente'}</span><time>{timestampLabel(message.created_at)}</time>{message.message_type === 'outgoing' && !message.private && message.status && <span className={`whatsapp-message-delivery is-${message.status}`}>{messageDeliveryLabel(message.status)}</span>}</footer>
-            </article>)}
-            {!detailLoading && currentConversation?.messages.length === 0 && <p className="whatsapp-chat-empty-history">Ainda não há mensagens nesta conversa.</p>}
+            {!detailLoading && conversationTimeline.map((event) => event.kind === 'call'
+              ? <article className="whatsapp-call-event" key={`call-${event.call.id}`}>
+                  <span className="whatsapp-call-event-icon" aria-hidden="true">{event.call.is_video ? 'V' : '☎'}</span>
+                  <div><strong>{event.call.status_label}{event.call.is_video ? ' · vídeo' : ''}</strong><time>{timestampLabel(event.call.occurred_at)}</time></div>
+                  <small>Registro do provedor</small>
+                </article>
+              : <article className={`whatsapp-message${event.message.message_type === 'outgoing' ? ' is-outgoing' : ''}${event.message.private ? ' is-private' : ''}`} key={`message-${event.message.id}`}>
+                  {event.message.private && <span className="whatsapp-message-label">Nota interna</span>}
+                  {event.message.content && <p>{event.message.content}</p>}
+                  {!event.message.content && event.message.attachments.length === 0 && <p className="whatsapp-message-attachment">{event.message.message_type === 'activity' ? 'Atualização da conversa' : messageKindLabel(event.message.message_kind)}</p>}
+                  {event.message.attachments.map((attachment) => <MessageAttachment attachment={attachment} businessId={businessId} conversationId={currentConversation?.id ?? ''} key={attachment.id} messageId={event.message.id} />)}
+                  <footer><span>{event.message.message_type === 'outgoing' ? 'Equipe' : event.message.sender.name || currentConversation?.contact.name || 'Cliente'}</span><time>{timestampLabel(event.message.created_at)}</time>{event.message.message_type === 'outgoing' && !event.message.private && event.message.status && <span className={`whatsapp-message-delivery is-${event.message.status}`}>{messageDeliveryLabel(event.message.status)}</span>}</footer>
+                </article>)}
+            {!detailLoading && conversationTimeline.length === 0 && <p className="whatsapp-chat-empty-history">Ainda não há mensagens ou chamadas nesta conversa.</p>}
           </div>
 
           {actionError && <p className="form-message form-message-error whatsapp-action-error" role="alert">{actionError}</p>}
@@ -664,10 +799,13 @@ export function WhatsAppInboxPage() {
           </form>
 
           <form className="whatsapp-context-panel" onSubmit={(event) => void handleSaveLink(event)}>
-            <div className="whatsapp-context-heading"><div><p className="eyebrow">CONTEXTO SHALOM</p><h3>Cliente e pedido</h3></div><span className="neutral-status">Vínculo manual</span></div>
+            <div className="whatsapp-context-heading"><div><p className="eyebrow">CONTEXTO SHALOM</p><h3>Cliente e pedido</h3></div><span className="neutral-status">{selectedLink?.match_method === 'phone' ? 'Telefone reconhecido' : selectedLink?.customer_id ? 'Vínculo manual' : 'Sem vínculo'}</span></div>
             {linkError && <p className="form-message form-message-error" role="alert">{linkError}</p>}
             {linkMessage && <p className="form-message form-message-success" role="status">{linkMessage}</p>}
-            {phoneMatches.length > 0 && !customerDraft && <p className="whatsapp-match-hint">{phoneMatches.length === 1 ? `Telefone correspondente ao cadastro de ${phoneMatches[0].name}.` : `${phoneMatches.length} cadastros usam este telefone; escolha o cliente correto.`} A associação só será salva após sua confirmação.</p>}
+            {selectedLink?.match_method === 'phone' && selectedLink.customer_id && <p className="whatsapp-match-hint">Cliente identificado automaticamente por um telefone único. Você pode trocar o cadastro se precisar.</p>}
+            {currentConversation && !currentConversation.contact.phone && <p className="whatsapp-match-hint">O WhatsApp não enviou um número para este contato. Vincule o cadastro manualmente para identificar esta pessoa.</p>}
+            {!selectedLink?.customer_id && phoneMatches.length === 1 && customerDraft === phoneMatches[0].id && <p className="whatsapp-match-hint">Telefone único reconhecido. Salve o vínculo para manter este cliente nesta conversa.</p>}
+            {phoneMatches.length > 0 && !customerDraft && <p className="whatsapp-match-hint">{phoneMatches.length === 1 ? `Telefone correspondente ao cadastro de ${phoneMatches[0].name}.` : `${phoneMatches.length} cadastros usam este telefone; escolha o cliente correto.`} {phoneMatches.length > 1 ? 'A associação precisa de escolha manual.' : 'Confira o cadastro antes de salvar.'}</p>}
             <label className="whatsapp-context-field"><span>Cliente</span><select disabled={!currentConversation || linkLoading || role !== 'owner'} onChange={(event) => { setCustomerDraft(event.target.value); setOrderDraft('') }} value={customerDraft}><option value="">Sem cliente associado</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
             <label className="whatsapp-context-field"><span>Pedido relacionado</span><select disabled={!currentConversation || !customerDraft || role !== 'owner'} onChange={(event) => setOrderDraft(event.target.value)} value={orderDraft}><option value="">Sem pedido associado</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
             {role === 'owner' ? <button className="button button-secondary" disabled={!currentConversation || linkSaving || linkLoading} type="submit">{linkSaving ? 'Salvando…' : 'Salvar vínculo'}</button> : <p className="section-footnote">Somente a gestão pode alterar vínculos de atendimento.</p>}
@@ -688,7 +826,7 @@ export function WhatsAppInboxPage() {
         <div>
           <p className="eyebrow">ATENDIMENTO</p>
           <h1>WhatsApp</h1>
-          <p className="page-description">Conversas do Chatwoot com contexto de clientes e pedidos do Shalom.</p>
+          <p className="page-description">Conversas e registros de chamadas recebidos pela Evolution API.</p>
         </div>
         <span className="module-heading-icon"><Icon name="message" /></span>
       </header>

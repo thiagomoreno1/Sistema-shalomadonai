@@ -1,0 +1,13 @@
+services:
+  evolution-api:
+    networks:
+      default: {}
+      supabase-functions:
+        aliases:
+          - evolution-api
+
+networks:
+  default: {}
+  supabase-functions:
+    name: ${SUPABASE_DOCKER_NETWORK:?Set SUPABASE_DOCKER_NETWORK to the local Supabase Docker network}
+    external: true

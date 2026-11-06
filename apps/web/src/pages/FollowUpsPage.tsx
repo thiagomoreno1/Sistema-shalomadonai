@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
+import { WhatsAppCallEventsCard } from '../components/WhatsAppCallEventsCard'
 import { businessLocalDateTimeToIso, businessToday, currentTimestamp, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
@@ -332,6 +333,8 @@ export function FollowUpsPage() {
           <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar retorno'}</button>
         </form>
       )}
+
+      <WhatsAppCallEventsCard />
 
       <section className="surface-panel record-panel" aria-labelledby="follow-up-list-title">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">FILA DE ATENDIMENTO</p><h2 id="follow-up-list-title">Pendentes</h2></div><span className="neutral-status">{tasks.length} {tasks.length === 1 ? 'retorno' : 'retornos'}</span></div>
