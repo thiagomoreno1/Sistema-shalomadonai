@@ -1151,9 +1151,6 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .dashboard-chart-empty-state { display: flex; min-height: 68px; align-items: center; justify-content: center; gap: 9px; margin: 8px 0 4px; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); text-align: center; }
 .dashboard-chart-empty-state > svg { width: 17px; height: 17px; flex: 0 0 auto; color: var(--quiet); }
 .dashboard-chart-empty-state p { margin: 0; font-size: 12px; line-height: 1.45; }
-.dashboard-profit-details { margin-top: 11px; }
-.dashboard-profit-detail-content { padding: 0 14px 13px; border-top: 1px solid var(--line); }
-.dashboard-profit-detail-content .dashboard-profit-heading { margin-top: 13px; }
 .dashboard-action-details { margin-top: 8px; border-top: 1px solid var(--line); }
 .dashboard-action-details > summary { display: flex; min-height: 43px; align-items: center; gap: 8px; color: var(--accent); font-size: 12px; font-weight: 620; list-style: none; cursor: pointer; }
 .dashboard-action-details > summary::-webkit-details-marker { display: none; }
@@ -1217,16 +1214,6 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .dashboard-chart-axis { display: flex; height: 180px; flex-direction: column; align-items: flex-end; justify-content: space-between; color: var(--quiet); font-size: 11px; font-variant-numeric: tabular-nums; line-height: 1; white-space: nowrap; }
 .dashboard-chart-body { min-width: 0; }
 .dashboard-chart-plot { position: relative; height: 180px; }
-.dashboard-profit-heading { margin: 17px 0 0; color: var(--ink); font-size: 13px; font-weight: 620; }
-.dashboard-profit-plot .dashboard-chart-guides span:nth-child(2) { border-color: var(--line-strong); }
-.dashboard-profit-days { position: absolute; inset: 0; display: flex; }
-.dashboard-profit-day { position: relative; display: flex; flex: 1; min-width: 0; height: 100%; justify-content: center; }
-.dashboard-profit-bar { position: absolute; left: 50%; width: min(24px, 70%); transform: translateX(-50%); }
-.dashboard-profit-bar.is-positive { bottom: 50%; border-radius: 3px 3px 0 0; background: var(--accent); }
-.dashboard-profit-bar.is-negative { top: 50%; border-radius: 0 0 3px 3px; background: var(--muted); }
-.dashboard-profit-day.is-unavailable::after { position: absolute; top: calc(50% - 2px); width: 5px; height: 5px; border: 1px dashed var(--quiet); border-radius: 50%; content: ''; }
-.dashboard-profit-zero-line { position: absolute; top: 50%; right: 0; left: 0; border-top: 1px solid var(--line-strong); pointer-events: none; }
-.dashboard-profit-chart.is-long-period .dashboard-profit-bar { width: min(12px, 75%); }
 .dashboard-revenue-details { margin-top: 12px; }
 .dashboard-revenue-details .dashboard-trend-table { min-width: 900px; }
 .dashboard-chart-guides { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }

@@ -567,6 +567,39 @@ export function DashboardPage() {
 
       {role === 'owner' ? <>
 
+      <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
+        <Link className="dashboard-summary-link is-followups" to="/atendimento">
+          <span className="dashboard-summary-icon"><Icon name="phone" /></span>
+          <span className="dashboard-summary-copy"><strong>Retornos prioritários</strong><small>Atrasados ou de hoje</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.follow_ups.pending_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
+        <Link className="dashboard-summary-link is-overdue" to="/financeiro">
+          <span className="dashboard-summary-icon"><Icon name="coin" /></span>
+          <span className="dashboard-summary-copy"><strong>Pagamentos atrasados</strong><small>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.receivables.overdue_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
+        <Link className="dashboard-summary-link is-due-today" to="/financeiro">
+          <span className="dashboard-summary-icon"><Icon name="clock" /></span>
+          <span className="dashboard-summary-copy"><strong>Parcelas que vencem hoje</strong><small>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.receivables.due_today_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
+        <Link className="dashboard-summary-link is-deliveries" to="/entregas">
+          <span className="dashboard-summary-icon"><Icon name="truck" /></span>
+          <span className="dashboard-summary-copy"><strong>Entregas em atenção</strong><small>Precisam de atualização</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.deliveries.pending_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
+        <Link className="dashboard-summary-link is-stock" to="/estoque">
+          <span className="dashboard-summary-icon"><Icon name="box" /></span>
+          <span className="dashboard-summary-copy"><strong>Estoque em atenção</strong><small>Abaixo do mínimo ou negativo</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.inventory.attention_count : '—'}</span>
+          <Icon className="dashboard-summary-arrow" name="arrow" />
+        </Link>
+      </nav>
+
       <div className="dashboard-command-grid dashboard-command-priorities">
         <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
           <div className="section-heading">
@@ -662,39 +695,6 @@ export function DashboardPage() {
         </section>
 
       </div>
-
-      <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
-        <Link className="dashboard-summary-link is-followups" to="/atendimento">
-          <span className="dashboard-summary-icon"><Icon name="phone" /></span>
-          <span className="dashboard-summary-copy"><strong>Retornos prioritários</strong><small>Atrasados ou de hoje</small></span>
-          <span className="dashboard-summary-count">{priorities ? priorities.follow_ups.pending_count : '—'}</span>
-          <Icon className="dashboard-summary-arrow" name="arrow" />
-        </Link>
-        <Link className="dashboard-summary-link is-overdue" to="/financeiro">
-          <span className="dashboard-summary-icon"><Icon name="coin" /></span>
-          <span className="dashboard-summary-copy"><strong>Pagamentos atrasados</strong><small>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
-          <span className="dashboard-summary-count">{priorities ? priorities.receivables.overdue_count : '—'}</span>
-          <Icon className="dashboard-summary-arrow" name="arrow" />
-        </Link>
-        <Link className="dashboard-summary-link is-due-today" to="/financeiro">
-          <span className="dashboard-summary-icon"><Icon name="clock" /></span>
-          <span className="dashboard-summary-copy"><strong>Parcelas que vencem hoje</strong><small>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
-          <span className="dashboard-summary-count">{priorities ? priorities.receivables.due_today_count : '—'}</span>
-          <Icon className="dashboard-summary-arrow" name="arrow" />
-        </Link>
-        <Link className="dashboard-summary-link is-deliveries" to="/entregas">
-          <span className="dashboard-summary-icon"><Icon name="truck" /></span>
-          <span className="dashboard-summary-copy"><strong>Entregas em atenção</strong><small>Precisam de atualização</small></span>
-          <span className="dashboard-summary-count">{priorities ? priorities.deliveries.pending_count : '—'}</span>
-          <Icon className="dashboard-summary-arrow" name="arrow" />
-        </Link>
-        <Link className="dashboard-summary-link is-stock" to="/estoque">
-          <span className="dashboard-summary-icon"><Icon name="box" /></span>
-          <span className="dashboard-summary-copy"><strong>Estoque em atenção</strong><small>Abaixo do mínimo ou negativo</small></span>
-          <span className="dashboard-summary-count">{priorities ? priorities.inventory.attention_count : '—'}</span>
-          <Icon className="dashboard-summary-arrow" name="arrow" />
-        </Link>
-      </nav>
 
         <section className="dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
           <div className="section-heading dashboard-financial-heading">

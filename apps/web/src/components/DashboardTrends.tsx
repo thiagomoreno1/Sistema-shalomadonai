@@ -205,66 +205,6 @@ function RevenueLineChart({ days, monthly, dateRange }: { days: DashboardTrendDa
   )
 }
 
-type ProfitPoint = { business_date: string; value: bigint | null }
-
-function groupProfitByMonth(days: DashboardRevenueTrendDay[]): ProfitPoint[] {
-  const months = new Map<string, ProfitPoint>()
-  for (const day of days) {
-    const businessDate = `${day.business_date.slice(0, 7)}-01`
-    const month = months.get(businessDate)
-    if (!month) {
-      months.set(businessDate, { business_date: businessDate, value: day.gross_profit_cents })
-    } else if (month.value !== null && day.gross_profit_cents !== null) {
-      month.value += day.gross_profit_cents
-    } else {
-      month.value = null
-    }
-  }
-  return [...months.values()]
-}
-
-function DailyProfitBars({ days, monthly, dateRange }: { days: DashboardRevenueTrendDay[]; monthly: boolean; dateRange: string }) {
-  const points: ProfitPoint[] = monthly ? groupProfitByMonth(days) : days.map((day) => ({ business_date: day.business_date, value: day.gross_profit_cents }))
-  const maximum = points.reduce((largest, point) => {
-    if (point.value === null) return largest
-    const absolute = point.value < 0n ? -point.value : point.value
-    return absolute > largest ? absolute : largest
-  }, 0n)
-  const hasKnownPoint = points.some((point) => point.value !== null)
-  const hasUnknownPoint = points.some((point) => point.value === null)
-  const labelPoints = monthly || points.length <= 7 ? points : [points[0], points[Math.floor((points.length - 1) / 2)], points[points.length - 1]]
-  const barHeightPercent = (value: bigint) => maximum === 0n ? 0 : Number((value < 0n ? -value : value) * 5_000n / maximum) / 100
-
-  if (maximum === 0n) return <div className="dashboard-chart-empty-state" role="status"><Icon name="chart" /><p>{hasUnknownPoint ? 'Há dias sem custo confirmado.' : hasKnownPoint ? 'Sem lucro ou prejuízo no período.' : 'Faturamento líquido indisponível.'}</p></div>
-
-  return (
-    <div className={`dashboard-chart dashboard-profit-chart${points.length > 7 ? ' is-long-period' : ''}${monthly ? ' is-monthly' : ''}`} role="img" aria-label={`Faturamento líquido por ${monthly ? 'mês' : 'dia'}, de ${dateRange}. O valor é calculado após descontos e custo dos produtos; pode haver prejuízo.`}>
-      <div className="dashboard-chart-axis" aria-hidden="true">
-        <span>{maximum > 0n ? moneyAxisFormatter.format(Number(maximum) / 100) : ''}</span>
-        <span>R$ 0</span>
-        <span>{maximum > 0n ? `−${moneyAxisFormatter.format(Number(maximum) / 100)}` : ''}</span>
-      </div>
-      <div className="dashboard-chart-body">
-        <div className="dashboard-chart-plot dashboard-profit-plot" aria-hidden="true">
-          <div className="dashboard-chart-guides"><span /><span /><span /></div>
-          <div className="dashboard-profit-days">
-            {points.map((point) => point.value === null
-              ? <span className="dashboard-profit-day is-unavailable" key={point.business_date} title={`${chartDateLabel(point.business_date, monthly)} — faturamento líquido indisponível`} />
-              : <span className="dashboard-profit-day" key={point.business_date} title={`${chartDateLabel(point.business_date, monthly)} — ${formatBRLExact(point.value)}`}>
-                {point.value !== 0n && <span className={`dashboard-profit-bar${point.value < 0n ? ' is-negative' : ' is-positive'}`} style={{ height: `${barHeightPercent(point.value)}%` }} />}
-              </span>)}
-          </div>
-          <span className="dashboard-profit-zero-line" />
-          {maximum === 0n && <p className="dashboard-chart-empty-label">{hasUnknownPoint ? 'Há dias sem custo confirmado' : hasKnownPoint ? 'Sem lucro ou prejuízo no período' : 'Faturamento líquido indisponível'}</p>}
-        </div>
-        <div className={`dashboard-chart-dates${points.length > 7 ? ' is-long-period' : ''}${monthly ? ' is-monthly' : ''}`} style={{ gridTemplateColumns: `repeat(${labelPoints.length}, minmax(0, 1fr))` }}>
-          {labelPoints.map((point) => <span key={point.business_date}>{chartDateLabel(point.business_date, monthly)}</span>)}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function RevenueCompositionPanel({ days, loading, error, onRetry, dateRange }: {
   days: DashboardRevenueTrendDay[]
   loading: boolean
@@ -349,7 +289,11 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
   const missingCostCount = revenueDays.reduce((total, day) => total + day.missing_cost_line_count, 0)
   const returnedOrderCount = revenueDays.reduce((total, day) => total + day.returned_order_count, 0)
   const dateRange = `${formatBusinessDate(startOn)} a ${formatBusinessDate(endOn)}`
-  const timeUnit = monthly ? 'mês' : 'dia'
+  const chartGranularity = monthly ? 'por mês' : 'por dia'
+  const selectedPeriod = period === 'today' ? 'hoje' : periodLabel.toLocaleLowerCase('pt-BR')
+  const chartPeriodDescription = period === 'today' ? 'hoje' : `${chartGranularity}, no período de ${dateRange}`
+  const revenueUnitLabel = period === 'today' ? 'R$ hoje' : `R$ ${chartGranularity} · ${selectedPeriod}`
+  const orderUnitLabel = period === 'today' ? 'Pedidos hoje' : `Pedidos ${chartGranularity} · ${selectedPeriod}`
 
   return (
     <section className="dashboard-trends" aria-labelledby={headingId}>
@@ -363,7 +307,7 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
 
       <div className={`dashboard-trends-grid${embedded ? ' is-financial-embedded' : ' is-dashboard-overview'}`} aria-busy={loading}>
         <figure className="surface-panel dashboard-trend-panel" aria-labelledby={salesHeadingId}>
-          <div className="dashboard-trend-heading"><h3 id={salesHeadingId}>Faturamento e custo</h3><span>R$ por {timeUnit}</span></div>
+          <div className="dashboard-trend-heading"><h3 id={salesHeadingId}>Faturamento e custo</h3><span>{revenueUnitLabel}</span></div>
           {revenueLoading ? <ChartState loading onRetry={onRetryRevenue} errorMessage="Não foi possível carregar as vendas deste período." /> : revenueError ? <ChartState loading={false} onRetry={onRetryRevenue} errorMessage="Não foi possível carregar as vendas deste período." /> : <>
             <dl className="dashboard-trend-totals revenue-trend-totals">
               <div><dt><span className="dashboard-chart-key is-gross-sale" aria-hidden="true" />Faturamento bruto</dt><dd>{formatBRLExact(grossSalesTotal)}</dd></div>
@@ -374,10 +318,6 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
             </dl>
             <RevenueLineChart days={revenueChartDays} monthly={monthly} dateRange={dateRange} />
             {(missingCostCount > 0 || returnedOrderCount > 0) && <p className="dashboard-trend-warning" role="status">{missingCostCount > 0 ? `Falta informar o custo de ${missingCostCount} item(ns). ` : ''}{returnedOrderCount > 0 ? `${returnedOrderCount} pedido(s) têm devolução sem ajuste financeiro.` : ''} O faturamento líquido ficará indisponível até os dados serem conferidos.</p>}
-            <details className="dashboard-trend-details dashboard-profit-details">
-              <summary>Ver faturamento líquido por dia <span>{revenueDays.length} dias</span></summary>
-              <div className="dashboard-profit-detail-content"><h4 className="dashboard-profit-heading">Faturamento líquido por dia</h4><DailyProfitBars days={revenueDays} monthly={monthly} dateRange={dateRange} /></div>
-            </details>
             <details className="dashboard-trend-details dashboard-revenue-details">
               <summary>Ver vendas e custos por dia <span>{revenueDays.length} dias</span></summary>
               <div className="dashboard-trend-table-wrap" role="region" aria-label="Vendas e custos diários" tabIndex={0}>
@@ -395,13 +335,13 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
         <RevenueCompositionPanel days={revenueDays} error={revenueError} loading={revenueLoading} onRetry={onRetryRevenue} dateRange={dateRange} />
 
         <figure className="surface-panel dashboard-trend-panel" aria-labelledby={ordersHeadingId}>
-          <div className="dashboard-trend-heading"><h3 id={ordersHeadingId}>Vendas concluídas</h3><span>Pedidos por {timeUnit}</span></div>
+          <div className="dashboard-trend-heading"><h3 id={ordersHeadingId}>Vendas concluídas</h3><span>{orderUnitLabel}</span></div>
           {!revenueLoading && !revenueError ? <>
             <div className="dashboard-order-total"><strong>{integerFormatter.format(revenueChartDays.reduce((total, day) => total + day.order_count, 0n))}</strong><span>concluídas no período</span></div>
             <DailyBars
               days={revenueChartDays}
               series={orderSeries}
-              label={`Vendas concluídas por ${timeUnit}, de ${dateRange}.`}
+              label={`Vendas concluídas ${chartPeriodDescription}.`}
               emptyMessage="Nenhuma venda concluída neste período"
               formatValue={(value) => integerFormatter.format(value)}
               monthly={monthly}
@@ -413,7 +353,7 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
         <details className="surface-panel dashboard-trend-panel dashboard-cash-panel">
           <summary className="dashboard-cash-summary"><span><strong id={moneyHeadingId}>Caixa informado</strong><small>Opcional · só use se quiser acompanhar os valores registrados</small></span><span>Ver caixa <span aria-hidden="true">＋</span></span></summary>
           <div className="dashboard-cash-content">
-          <div className="dashboard-trend-heading"><span>R$ por {timeUnit}</span><Link className="quiet-link" to="/financeiro">Abrir financeiro <Icon name="arrow" /></Link></div>
+          <div className="dashboard-trend-heading"><span>{revenueUnitLabel}</span><Link className="quiet-link" to="/financeiro">Abrir financeiro <Icon name="arrow" /></Link></div>
           {ready ? <>
             <dl className="dashboard-trend-totals">
               <div><dt><span className="dashboard-chart-key is-receipt" aria-hidden="true" />Pagamentos recebidos</dt><dd>{formatBRLExact(receipts)}</dd></div>
@@ -422,7 +362,7 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
             <DailyBars
               days={chartDays}
               series={moneySeries}
-              label={`Pagamentos recebidos e gastos pagos por ${timeUnit}, de ${dateRange}. Totais: ${formatBRLExact(receipts)} recebidos e ${formatBRLExact(outflows)} pagos. O detalhamento diário está na tabela abaixo.`}
+              label={`Pagamentos recebidos e gastos pagos ${chartPeriodDescription}. Totais: ${formatBRLExact(receipts)} recebidos e ${formatBRLExact(outflows)} pagos. O detalhamento diário está na tabela abaixo.`}
               emptyMessage="Nenhuma movimentação neste período"
               formatValue={formatBRLExact}
               formatAxisValue={(value) => moneyAxisFormatter.format(Number(value) / 100)}
