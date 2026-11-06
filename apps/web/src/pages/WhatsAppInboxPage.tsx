@@ -280,6 +280,7 @@ export function WhatsAppInboxPage() {
   const [connectionState, setConnectionState] = useState('')
   const [instanceExists, setInstanceExists] = useState(false)
   const [pairingLoading, setPairingLoading] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
   const [pairingError, setPairingError] = useState<string | null>(null)
   const [qrImage, setQrImage] = useState<string | null>(null)
   const [webhookSaving, setWebhookSaving] = useState(false)
@@ -714,6 +715,22 @@ export function WhatsAppInboxPage() {
     }
   }
 
+  async function handleCheckConnection() {
+    setConnectionChecking(true)
+    setConnectionError(null)
+    try {
+      const result = await invokeInbox<{ configured?: boolean; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
+      setConfigured(result.configured === true)
+      setConnectionState(result.connection_state ?? '')
+      setInstanceExists(result.instance_exists === true)
+    } catch {
+      setConnectionError('Não foi possível consultar a Evolution. Confira se o computador e o túnel estão ligados.')
+      setConnectionState('unavailable')
+    } finally {
+      setConnectionChecking(false)
+    }
+  }
+
   async function handleConnectWhatsApp() {
     if (role !== 'owner' || pairingLoading) return
     setPairingLoading(true)
@@ -746,6 +763,23 @@ export function WhatsAppInboxPage() {
       setPairingError('Não foi possível falar com a Evolution. A instância pode ter sido criada; tente novamente. Nenhum número é pareado sem escanear o QR.')
     } finally {
       setPairingLoading(false)
+    }
+  }
+
+  async function handleDisconnectWhatsApp() {
+    if (role !== 'owner' || disconnecting || !window.confirm('Desconectar o número atual? O histórico continuará salvo e você poderá parear outro número.')) return
+    setDisconnecting(true)
+    setPairingError(null)
+    setWebhookFeedback(null)
+    try {
+      const result = await invokeInbox<{ connection_state?: string }>({ action: 'disconnect', business_id: businessId })
+      setQrImage(null)
+      setConnectionState(result.connection_state ?? 'close')
+      setWebhookFeedback('Número desconectado. Clique em conectar para parear qualquer outro número pelo QR Code.')
+    } catch {
+      setPairingError('Não foi possível desconectar o número. Confira se a Evolution está acessível e tente novamente.')
+    } finally {
+      setDisconnecting(false)
     }
   }
 
@@ -814,12 +848,15 @@ export function WhatsAppInboxPage() {
         <span className={`whatsapp-connection-dot${connectionState.toLowerCase() === 'open' ? ' is-connected' : ''}`} aria-hidden="true" />
         <div><strong>Evolution API</strong><span role="status">{connectionStateLabel(connectionState)}</span></div>
         {webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}
-        {role === 'owner' && connectionState.toLowerCase() !== 'open' && <button className="button button-primary" disabled={pairingLoading} onClick={() => void handleConnectWhatsApp()} type="button">{pairingLoading ? 'Preparando…' : instanceExists ? 'Conectar número' : 'Criar e conectar WhatsApp'}</button>}
+        {connectionState.toLowerCase() === 'unavailable' && <span className="whatsapp-webhook-feedback" role="alert">Ligue a Evolution e tente verificar novamente.</span>}
+        {role === 'owner' && connectionState.toLowerCase() === 'unavailable' && <button className="button button-secondary" disabled={connectionChecking} onClick={() => void handleCheckConnection()} type="button">{connectionChecking ? 'Verificando…' : 'Verificar conexão'}</button>}
+        {role === 'owner' && connectionState.toLowerCase() !== 'open' && connectionState.toLowerCase() !== 'unavailable' && <button className="button button-primary" disabled={pairingLoading} onClick={() => void handleConnectWhatsApp()} type="button">{pairingLoading ? 'Preparando…' : instanceExists ? 'Conectar número' : 'Criar e conectar WhatsApp'}</button>}
+        {role === 'owner' && connectionState.toLowerCase() === 'open' && <button className="button button-secondary" disabled={disconnecting} onClick={() => void handleDisconnectWhatsApp()} type="button">{disconnecting ? 'Desconectando…' : 'Desconectar / trocar número'}</button>}
         {role === 'owner' && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
       </div>
       {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
       {qrImage && <section className="surface-panel whatsapp-qr-panel" aria-labelledby="whatsapp-qr-title" aria-live="polite">
-        <div><p className="eyebrow">PAREAMENTO EXPLÍCITO</p><h2 id="whatsapp-qr-title">Escaneie com o WhatsApp</h2><p>Abra esta página em outro dispositivo. No telefone que será conectado, abra <strong>Aparelhos conectados</strong> e escaneie o código. A conexão só é concluída depois da leitura.</p></div>
+        <div><p className="eyebrow">PAREAMENTO EXPLÍCITO</p><h2 id="whatsapp-qr-title">Escaneie com o WhatsApp</h2><p>Abra esta página em outro dispositivo. No telefone com o número que deseja usar, abra <strong>Aparelhos conectados</strong> e escaneie o código. Para trocar de número depois, desconecte o atual nesta tela e repita o pareamento.</p></div>
         <img alt="QR Code temporário para conectar o WhatsApp" src={qrImage} />
         <button className="button button-secondary" disabled={pairingLoading} onClick={() => void handleConnectWhatsApp()} type="button">Atualizar QR Code</button>
       </section>}

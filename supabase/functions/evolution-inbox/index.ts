@@ -130,7 +130,7 @@ async function setEvolutionWebhook(config: EvolutionConfig): Promise<void> {
   if (!validWebhookPath || !safeWebhookUrl || (parsedUrl.protocol !== 'https:' && !localWebhookHost)) {
     throw new RequestError(503, 'webhook_url_invalid')
   }
-  await evolutionRequest(config, `/event/webhook/set/${encodeURIComponent(config.instanceName)}`, {
+  await evolutionRequest(config, `/webhook/set/${encodeURIComponent(config.instanceName)}`, {
     method: 'POST',
     body: JSON.stringify({ webhook: {
       enabled: true,
@@ -323,7 +323,7 @@ export default {
     const businessId = body.business_id
     const userId = text(context.userClaims?.id, 64)
     if (!userId || !isUuid(businessId)) return json({ error: 'invalid_request' }, 400)
-    if (!['status', 'list', 'calls', 'conversation', 'mark_read', 'send', 'send_media', 'set_status', 'attachment', 'configure_webhook', 'connect'].includes(action ?? '')) {
+    if (!['status', 'list', 'calls', 'conversation', 'mark_read', 'send', 'send_media', 'set_status', 'attachment', 'configure_webhook', 'connect', 'disconnect'].includes(action ?? '')) {
       return json({ error: 'invalid_action' }, 400)
     }
 
@@ -395,6 +395,12 @@ export default {
         }
         const qrImage = imageValue.startsWith('data:image/') ? imageValue : `data:image/png;base64,${imageValue}`
         return json({ connected: false, instance_exists: true, connection_state: 'connecting', qr_image: qrImage })
+      }
+
+      if (action === 'disconnect') {
+        if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        await evolutionRequest(config, `/instance/logout/${encodeURIComponent(config.instanceName)}`, { method: 'DELETE' })
+        return json({ connected: false, instance_exists: true, connection_state: 'close' })
       }
 
       if (action === 'list') {

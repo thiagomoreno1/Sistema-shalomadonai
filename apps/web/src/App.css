@@ -1309,7 +1309,7 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 @media (max-width: 760px) {
   .whatsapp-inbox { display: block; }
   .whatsapp-connection-banner { flex-wrap: wrap; margin-bottom: 10px; }
-  .whatsapp-webhook-feedback { width: 100%; margin-left: 19px; }
+  .whatsapp-webhook-feedback { width: calc(100% - 19px); margin-left: 19px; }
   .whatsapp-conversation-panel, .whatsapp-chat-panel { min-height: min(650px, calc(100dvh - 235px)); max-height: none; }
   .whatsapp-conversation-panel.is-mobile-hidden, .whatsapp-chat-panel:not(.is-mobile-visible) { display: none; }
   .whatsapp-chat-panel { min-height: min(720px, calc(100dvh - 220px)); }

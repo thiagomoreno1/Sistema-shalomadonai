@@ -16,7 +16,7 @@ O Shalom usa a Evolution API diretamente. O conjunto disponível depende da vers
 | Vínculo manual de cliente e pedido | Integrado | A gestão pode escolher outro cadastro ou pedido. Um vínculo manual não é substituído pela sincronização. |
 | Histórico inicial | Integrado por evento | `MESSAGES_SET` é importado sem somar o histórico antigo como mensagens não lidas. A quantidade de histórico depende do que a Evolution sincronizar. |
 | Resolver/reabrir conversa | Integrado | Estado operacional do Shalom; não altera o status do chat no aplicativo conectado. |
-| Configurar instância e exibir QR | Integrado | O botão da gestão cria a instância sem parear; só solicita e mostra o QR quando a pessoa escolhe conectar. |
+| Configurar instância, exibir QR e trocar número | Integrado | A gestão pede o QR explicitamente, desconecta a sessão atual e pode parear outro número escaneando o novo QR. |
 
 ## Limites e próximas funções
 
