@@ -1,6 +1,6 @@
 # Plano do faturamento no Dashboard
 
-**Status:** regra proposta para a próxima etapa do Dashboard. Este documento registra a regra de negócio; não altera os cálculos existentes.
+**Status:** regra aplicada ao cálculo de faturamento, aos custos congelados nos pedidos, às entradas de compra e aos gráficos financeiros. Ainda falta o detalhamento de faturamento por produto e o rateio do desconto entre as linhas.
 
 ## Objetivo
 
@@ -30,8 +30,8 @@ Exemplo: um produto é vendido por **R$ 200**, sem desconto nem taxa de entrega,
 
 - Cada produto tem um custo unitário. O custo é salvo como fotografia no pedido; mudar o cadastro depois não altera vendas antigas.
 - Combo usa o custo próprio informado no cadastro do combo. **Não** soma o custo dos produtos da composição para o faturamento. A composição continua servindo para movimentar o estoque.
-- O cadastro já tem um campo de custo e os pedidos já guardam uma fotografia desse custo. Hoje, receber uma compra aumenta o saldo de estoque, mas não registra o custo de aquisição de cada recebimento; portanto, não atualiza automaticamente o custo do produto.
-- Para automatizar o custo de compra, a próxima etapa deve registrar quantidade e custo unitário na entrada e calcular o custo médio ponderado: `(saldo anterior × custo médio anterior + quantidade recebida × custo unitário da compra) ÷ saldo após a entrada`. O custo inicial do estoque precisa ser informado uma vez. O novo custo vale para pedidos criados depois; pedidos antigos conservam a fotografia já salva.
+- O cadastro tem o custo médio unitário e os pedidos guardam uma fotografia desse custo. Cada recebimento salva quantidade e custo unitário; o sistema atualiza o custo médio ponderado: `(saldo anterior × custo médio anterior + quantidade recebida × custo unitário da compra) ÷ saldo após a entrada`. O custo de abertura precisa ser informado para saldos iniciais positivos. O novo custo vale para pedidos criados depois; pedidos antigos conservam a fotografia já salva.
+- Se houver saldo positivo sem custo cadastrado, o recebimento não presume um custo para esse saldo. Primeiro, o custo-base deve ser informado no Catálogo. Quando o saldo for zero ou negativo, o custo da compra recebida estabelece o novo custo-base.
 - Se faltar custo, o sistema deve sinalizar o item e não inventar um valor. O faturamento líquido e o resultado devem indicar que o cálculo está incompleto até o custo ser informado.
 
 ## Compras, pagamentos e devoluções
@@ -46,15 +46,15 @@ Exemplo: um produto é vendido por **R$ 200**, sem desconto nem taxa de entrega,
 
 - **Indicadores no topo:** faturamento bruto, descontos, custo dos produtos vendidos, faturamento líquido, despesas pagas, entregas pagas e resultado do período.
 - No cartão **Faturamento líquido**, mostrar uma explicação curta: “depois dos descontos e do custo dos produtos”.
-- **Gráfico de evolução:** por dia, semana ou mês, comparando faturamento bruto, custo dos produtos e faturamento líquido, com a taxa de entrega identificada separadamente.
+- **Gráficos financeiros:** evolução diária de faturamento bruto, vendas após descontos, custo dos produtos e faturamento líquido; gráfico de pizza com a divisão das vendas após descontos entre custo dos produtos e faturamento líquido. O gráfico de pizza fica oculto quando há custo desconhecido, devolução sem ajuste ou faturamento líquido negativo.
 - **Detalhe por produto:** unidades vendidas, faturamento bruto, desconto atribuído, custo total e faturamento líquido de cada produto; combos aparecem como um produto com seu próprio custo.
 - **Resumo de despesas:** despesas operacionais e custos de entrega, separados do custo dos produtos.
 - **Filtro de período:** hoje, últimos 7 dias, mês atual, últimos 30 dias, ano e intervalo personalizado. Todos os cartões, gráficos e listas devem usar as mesmas datas de entrega/retirada.
 
-## Sequência de implementação
+## Situação atual e próximas etapas
 
-1. Confirmar o custo inicial dos produtos com o cadastro existente e validar que o custo gravado no pedido permanece imutável.
-2. Adicionar custo unitário às entradas de compra e aplicar custo médio ponderado para os produtos simples; manter o custo próprio dos combos.
-3. Conferir os centavos do desconto rateado e disponibilizar totais por item e por período.
-4. Montar cartões, gráfico de evolução e lista de produtos no Dashboard, sem extrato bancário ou integração financeira externa.
-5. Conferir casos de pedido parcelado, entrega, retirada, cancelamento, falta de custo, combo e devolução antes de liberar o cálculo como completo.
+1. Aplicados: custo médio nas entradas e fotografia do custo no pedido; combo continua com custo próprio; gráficos diários e de pizza disponíveis na Central do dia e no Dashboard financeiro.
+2. Próximo: ratear descontos entre linhas e montar totais de faturamento por produto.
+3. Depois: conferir com dados reais da empresa os casos de parcelamento, entrega, retirada, cancelamento, custos ausentes, combo e devolução.
+
+Nenhuma etapa depende de extrato bancário, OFX, Open Finance ou conciliação.

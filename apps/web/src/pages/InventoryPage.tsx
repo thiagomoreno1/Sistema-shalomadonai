@@ -8,13 +8,13 @@ import { supabaseClient } from '../lib/supabase'
 
 const PAGE_SIZE = 40
 
-type Product = { id: string; name: string; inventory_unit: string | null; inventory_tracked: boolean; is_combo: boolean; is_active: boolean }
+type Product = { id: string; name: string; inventory_unit: string | null; inventory_tracked: boolean; is_combo: boolean; is_active: boolean; cost_cents: number | null }
 type Balance = { product_id: string; product_name: string; inventory_unit: string; minimum_stock: number | null; quantity_on_hand: number }
 type Movement = { id: string; product_id: string; movement_type: 'opening' | 'receipt' | 'adjustment' | 'loss' | 'dispatch' | 'return'; quantity_delta: number; reason: string; order_id: string | null; receipt_id: string | null; occurred_at: string; actor_id: string }
 type Receipt = { id: string; supplier_name: string | null; purchase_reference: string | null; received_on: string }
 type ReturnCandidate = { id: string; customer_name_snapshot: string; fulfillment_type: 'delivery' | 'pickup' }
 type ReturnableItem = { product_id: string; product_name: string; inventory_unit: string; remaining_quantity: number }
-type ReceiptLineDraft = { key: string; productId: string; quantity: string }
+type ReceiptLineDraft = { key: string; productId: string; quantity: string; unitCost: string }
 type InventoryCountDraft = { productId: string; productName: string; inventoryUnit: string; expectedQuantity: number; quantity: string }
 type MovementKind = 'adjustment' | 'loss' | 'return'
 
@@ -43,6 +43,17 @@ function parseCountQuantity(value: string, unit?: string | null) {
   return isDiscreteInventoryUnit(unit) && !Number.isSafeInteger(quantity) ? null : quantity
 }
 
+function parseUnitCostCents(value: string) {
+  const match = /^(\d+)(?:[,.](\d{1,2}))?$/.exec(value.trim())
+  if (!match) return null
+  const cents = BigInt(match[1]) * 100n + BigInt((match[2] ?? '').padEnd(2, '0'))
+  return cents <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(cents) : null
+}
+
+function unitCostInput(cents: number | null | undefined) {
+  return cents === null || cents === undefined ? '' : (cents / 100).toFixed(2).replace('.', ',')
+}
+
 function formatQuantity(value: number) {
   return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(Number(value))
 }
@@ -55,7 +66,7 @@ function movementLabel(type: Movement['movement_type']) {
   return ({ opening: 'Contagem inicial', receipt: 'Recebimento de compra', adjustment: 'Ajuste', loss: 'Perda ou avaria', dispatch: 'Despacho de pedido', return: 'Retorno conferido' })[type]
 }
 
-function newLine(productId = ''): ReceiptLineDraft { return { key: newRequestId(), productId, quantity: '' } }
+function newLine(productId = '', unitCost = ''): ReceiptLineDraft { return { key: newRequestId(), productId, quantity: '', unitCost } }
 
 export function InventoryPage() {
   const { id: businessId } = useBusiness()
@@ -124,7 +135,7 @@ export function InventoryPage() {
     if (showLoading) setLoading(true)
     try {
       const [productsResult, balancesResult, movementsResult, receiptsResult, deliveriesResult, pickupEventsResult] = await Promise.all([
-        supabaseClient.from('products').select('id, name, inventory_unit, inventory_tracked, is_combo, is_active')
+        supabaseClient.from('products').select('id, name, inventory_unit, inventory_tracked, is_combo, is_active, cost_cents')
           .eq('business_id', businessId).order('name', { ascending: true }),
         supabaseClient.from('inventory_balances').select('product_id, product_name, inventory_unit, minimum_stock, quantity_on_hand')
           .eq('business_id', businessId).order('product_name', { ascending: true }),
@@ -228,7 +239,7 @@ export function InventoryPage() {
     setReceiptDate(businessToday())
     setReceiptNotes('')
     const uniqueProductIds = [...new Set(productIds ?? [])].filter((id) => trackedProducts.some((product) => product.id === id))
-    setReceiptLines(uniqueProductIds.length > 0 ? uniqueProductIds.map((id) => newLine(id)) : [newLine()])
+    setReceiptLines(uniqueProductIds.length > 0 ? uniqueProductIds.map((id) => newLine(id, unitCostInput(trackedProducts.find((product) => product.id === id)?.cost_cents))) : [newLine()])
     receiptRequestIdRef.current = newRequestId()
   }
 
@@ -258,8 +269,8 @@ export function InventoryPage() {
         return
       }
       setReceiptSupplier((current) => current.trim() ? current : sourceReceipt.supplier_name ?? '')
-      setReceiptLines(productIds.map((id) => newLine(id)))
-      setReceiptSuggestionNotice('Produtos carregados sem quantidades. Confira o fornecedor e informe somente o que chegou agora.')
+      setReceiptLines(productIds.map((id) => newLine(id, unitCostInput(trackedProducts.find((product) => product.id === id)?.cost_cents))))
+      setReceiptSuggestionNotice('Produtos e custos atuais preenchidos. Confira o custo unitário e informe somente as quantidades que chegaram agora.')
     } catch {
       setFormError('Não foi possível carregar os produtos do recebimento anterior. Você pode seguir preenchendo a compra manualmente.')
     } finally {
@@ -463,9 +474,10 @@ export function InventoryPage() {
     const itemPayload = receiptLines.map((line) => ({
       product_id: line.productId,
       quantity: parseQuantity(line.quantity, trackedProducts.find((product) => product.id === line.productId)?.inventory_unit),
+      unit_cost_cents: parseUnitCostCents(line.unitCost),
     }))
-    if (itemPayload.length === 0 || itemPayload.some((item) => !item.product_id || item.quantity === null)) {
-      setFormError('Escolha um produto e informe a quantidade recebida. Produtos por unidade precisam de números inteiros.')
+    if (itemPayload.length === 0 || itemPayload.some((item) => !item.product_id || item.quantity === null || item.unit_cost_cents === null)) {
+      setFormError('Escolha o produto, informe a quantidade recebida e confira o custo por unidade. Produtos por unidade precisam de números inteiros.')
       return
     }
     if (new Set(itemPayload.map((item) => item.product_id)).size !== itemPayload.length) {
@@ -487,7 +499,9 @@ export function InventoryPage() {
       if (rpcError) {
         if (status >= 400 && status < 500) {
           receiptRequestIdRef.current = newRequestId()
-          setFormError('O recebimento não foi registrado. Confira os itens e tente novamente.')
+          setFormError(rpcError.message.includes('Existing positive stock requires a baseline unit cost')
+            ? 'Este produto já tem saldo sem custo cadastrado. Informe o custo atual no Catálogo antes de receber uma nova compra.'
+            : 'O recebimento não foi registrado. Confira produtos, quantidades e custo por unidade e tente novamente.')
         } else {
           setUncertain(true)
           setFormError('Não foi possível confirmar se o recebimento foi registrado. Tente novamente sem alterar os dados.')
@@ -718,7 +732,7 @@ export function InventoryPage() {
 
       {showReceiptForm && <form className="surface-panel record-form" onSubmit={(event) => void handleReceiptSubmit(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA FÍSICA</p><h2 ref={receiptHeadingRef} tabIndex={-1}>Registrar compra recebida</h2></div><button className="text-button" disabled={receiptFormDisabled} onClick={() => setShowReceiptForm(false)} type="button">Fechar</button></div>
-        <p className="section-footnote inventory-form-hint">Informe os produtos e as quantidades que chegaram fisicamente. Atualiza o estoque; o pagamento é registrado separadamente.</p>
+        <p className="section-footnote inventory-form-hint">Informe quantidade e custo unitário recebido. O custo médio atualiza os próximos pedidos; compras antigas não alteram vendas já registradas.</p>
         {trackedProducts.length === 0 ? <p className="inline-state">Edite um produto no <Link to="/catalogo">Catálogo</Link> e informe sua unidade e quantidade física para registrar compras recebidas.</p> : <>
           {receipts[0] && <button className="text-button" disabled={saving || uncertain || repeatingReceipt || receiptHasProductLines} onClick={() => void repeatLastReceiptProducts()} type="button">{repeatingReceipt ? 'Carregando produtos…' : 'Repetir produtos da última compra'}</button>}
           {receiptSuggestionNotice && <p className="form-message form-message-success" role="status">{receiptSuggestionNotice}</p>}
@@ -726,8 +740,13 @@ export function InventoryPage() {
             {receiptLines.map((line, index) => {
               const selected = trackedProducts.find((product) => product.id === line.productId)
               return <div className="inventory-line-row" key={line.key}>
-                <label className="record-field"><span className="field-label">Produto {index + 1}</span><select className="text-input" disabled={receiptFormDisabled} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, productId: event.target.value } : row))} required value={line.productId}><option value="">Selecione um produto</option>{trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
+                <label className="record-field"><span className="field-label">Produto {index + 1}</span><select className="text-input" disabled={receiptFormDisabled} onChange={(event) => setReceiptLines((current) => current.map((row) => {
+                  if (row.key !== line.key) return row
+                  const product = trackedProducts.find((item) => item.id === event.target.value)
+                  return { ...row, productId: event.target.value, unitCost: unitCostInput(product?.cost_cents) }
+                }))} required value={line.productId}><option value="">Selecione um produto</option>{trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
                 <label className="record-field"><span className="field-label">Quantidade recebida{selected?.inventory_unit ? ' · ' + selected.inventory_unit : ''}</span><input className="text-input" disabled={receiptFormDisabled} inputMode={isDiscreteInventoryUnit(selected?.inventory_unit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required value={line.quantity} /></label>
+                <label className="record-field"><span className="field-label">Custo por unidade · R$</span><input className="text-input" disabled={receiptFormDisabled} inputMode="decimal" maxLength={16} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, unitCost: event.target.value } : row))} placeholder="0,00" required value={line.unitCost} /><small className="field-optional">{selected?.cost_cents !== null && selected?.cost_cents !== undefined ? 'Pré-preenchido com o custo atual.' : 'Informe o custo da compra.'}</small></label>
                 <button aria-label={'Remover produto ' + (index + 1)} className="text-button order-remove-button" disabled={receiptFormDisabled || receiptLines.length === 1} onClick={() => setReceiptLines((current) => current.filter((row) => row.key !== line.key))} type="button">Remover</button>
               </div>
             })}

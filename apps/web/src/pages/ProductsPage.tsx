@@ -441,6 +441,10 @@ export function ProductsPage() {
       setFormError('Confira os valores. Use até duas casas decimais, por exemplo 12,50.')
       return
     }
+    if ((isActive || isCombo) && cost === null) {
+      setFormError('Informe o custo unitário para ativar o produto. O faturamento usa esse valor nos próximos pedidos.')
+      return
+    }
     if (isActive && salePrice === null) {
       setFormError('Informe o preço de venda ou deixe o produto inativo enquanto completa o cadastro.')
       return
@@ -451,6 +455,10 @@ export function ProductsPage() {
         ? `Para ${inventoryUnit || 'unidade/peça'}, use um número inteiro.`
         : 'Para medidas como kg e litros, use até 3 casas decimais.'
       setFormError(`Escolha a unidade e informe a quantidade atual. ${quantityGuidance} Use 0 se estiver sem saldo.`)
+      return
+    }
+    if (!isCombo && !editingProduct?.inventory_tracked && opening !== null && opening > 0 && cost === null) {
+      setFormError('Informe o custo unitário atual para registrar o saldo inicial do estoque.')
       return
     }
     if (!isCombo && minimumStock.trim() && minimum === null) {
@@ -766,7 +774,7 @@ export function ProductsPage() {
             <label className="record-field"><span className="field-label">Categoria <span className="field-optional">opcional</span></span><select className="text-input" defaultValue={editingProduct?.category_id ?? ''} name="category_id"><option value="">Sem categoria</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
             <div className="record-field record-field-actions"><span className="field-label">Categorias</span><button className="text-button" onClick={() => { setShowCategoryForm((value) => !value); setCategoryError(null) }} type="button">{showCategoryForm ? 'Fechar categorias' : 'Cadastrar categoria'}</button></div>
             <label className="record-field"><span className="field-label">Preço de venda <span className="field-optional">R$</span></span><input className="text-input" defaultValue={editingProduct?.sale_price_cents === null || !editingProduct ? '' : (editingProduct.sale_price_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="sale_price" placeholder="0,00" /></label>
-            <label className="record-field"><span className="field-label">Custo atual <span className="field-optional">R$ · opcional</span></span><input className="text-input" defaultValue={editingProduct?.cost_cents === null || !editingProduct ? '' : (editingProduct.cost_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="cost" placeholder="0,00" /></label>
+            <label className="record-field"><span className="field-label">Custo médio unitário <span className="field-optional">R$ · {comboEnabled || productIsActive ? 'obrigatório para ativar' : 'necessário para faturamento'}</span></span><input className="text-input" defaultValue={editingProduct?.cost_cents === null || !editingProduct ? '' : (editingProduct.cost_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="cost" placeholder="0,00" /><small className="field-optional">Combos usam o custo informado no próprio cadastro.</small></label>
             {editingProduct && <div className="record-field record-field-wide"><ProductPriceHistory businessId={businessId} productId={editingProduct.id} refreshToken={priceHistoryRefreshToken} /></div>}
             <label className="record-field record-field-wide"><span className="field-label">Descrição <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" defaultValue={editingProduct?.description ?? ''} maxLength={2000} name="description" rows={3} /></label>
             <div className="record-field record-field-wide product-photo-field">

@@ -48,6 +48,7 @@ const revenueSeries: ChartSeries[] = [
   { key: 'paid_outflows_cents', label: 'Custo dos produtos', className: 'is-cost' },
 ]
 const integerFormatter = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 })
+const percentageFormatter = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 })
 const moneyAxisFormatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact', maximumFractionDigits: 1 })
 const shortDateFormatter = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'America/Sao_Paulo' })
 const monthFormatter = new Intl.DateTimeFormat('pt-BR', { month: 'short', timeZone: 'America/Sao_Paulo' })
@@ -201,6 +202,45 @@ function DailyProfitBars({ days, monthly, dateRange }: { days: DashboardRevenueT
   )
 }
 
+function RevenueCompositionPanel({ days, loading, error, onRetry, dateRange }: {
+  days: DashboardRevenueTrendDay[]
+  loading: boolean
+  error: boolean
+  onRetry: () => void
+  dateRange: string
+}) {
+  const netSales = days.reduce((total, day) => total + day.net_sales_cents, 0n)
+  const costIsComplete = days.every((day) => day.item_cost_cents !== null)
+  const profitIsComplete = days.every((day) => day.gross_profit_cents !== null)
+  const productCost = costIsComplete ? days.reduce((total, day) => total + (day.item_cost_cents ?? 0n), 0n) : null
+  const netBilling = profitIsComplete ? days.reduce((total, day) => total + (day.gross_profit_cents ?? 0n), 0n) : null
+  const missingCostCount = days.reduce((total, day) => total + day.missing_cost_line_count, 0)
+  const returnedOrderCount = days.reduce((total, day) => total + day.returned_order_count, 0)
+  const costPercentage = productCost !== null && netSales > 0n ? Number(productCost * 10_000n / netSales) / 100 : 0
+  const netPercentage = 100 - costPercentage
+  const headingId = useId()
+
+  return (
+    <figure className="surface-panel dashboard-trend-panel dashboard-composition-panel" aria-labelledby={headingId}>
+      <div className="dashboard-trend-heading"><h3 id={headingId}>Para onde vão as vendas</h3><span>Após descontos</span></div>
+      {loading ? <div className="dashboard-composition-state" role="status"><Icon name="clock" /><p>Carregando a composição…</p></div> : error ? <div className="dashboard-composition-state" role="alert"><Icon name="chart" /><p>Não foi possível carregar a composição das vendas.</p><button className="text-button" onClick={onRetry} type="button">Tentar novamente</button></div> : missingCostCount > 0 || returnedOrderCount > 0 || productCost === null || netBilling === null ? <div className="dashboard-composition-state" role="status"><Icon name="chart" /><p>{missingCostCount > 0 ? `Falta informar o custo de ${missingCostCount} item(ns). ` : ''}{returnedOrderCount > 0 ? `${returnedOrderCount} pedido(s) têm devolução sem ajuste financeiro. ` : ''}A divisão entre custo e faturamento líquido ficará disponível quando os dados forem conferidos.</p></div> : netSales === 0n ? <div className="dashboard-composition-state" role="status"><Icon name="chart" /><p>Nenhuma venda concluída neste período para dividir.</p></div> : netBilling < 0n ? <div className="dashboard-composition-state" role="status"><Icon name="chart" /><p>O custo dos produtos superou as vendas após descontos em {formatBRLExact(-netBilling)}. O gráfico de pizza não representa valores negativos.</p></div> : <>
+        <p className="dashboard-composition-range">{dateRange}</p>
+        <p className="dashboard-composition-total"><span>Vendas após descontos</span><strong>{formatBRLExact(netSales)}</strong></p>
+        <div className="dashboard-composition-layout">
+          <div className="dashboard-composition-donut" role="img" aria-label={`Composição das vendas após descontos em ${dateRange}: custo dos produtos ${formatBRLExact(productCost)} (${percentageFormatter.format(costPercentage)} por cento); faturamento líquido ${formatBRLExact(netBilling)} (${percentageFormatter.format(netPercentage)} por cento).`} style={{ background: `conic-gradient(var(--muted) 0 ${costPercentage}%, var(--accent) ${costPercentage}% 100%)` }}>
+            <div><span>Divisão</span><strong>100%</strong><span>das vendas</span></div>
+          </div>
+          <ul className="dashboard-composition-legend">
+            <li><span className="dashboard-composition-key is-cost" aria-hidden="true" /><span><strong>Custo dos produtos</strong><small>{percentageFormatter.format(costPercentage)}% das vendas</small></span><b>{formatBRLExact(productCost)}</b></li>
+            <li><span className="dashboard-composition-key is-net" aria-hidden="true" /><span><strong>Faturamento líquido</strong><small>{percentageFormatter.format(netPercentage)}% das vendas</small></span><b>{formatBRLExact(netBilling)}</b></li>
+          </ul>
+        </div>
+      </>}
+      <figcaption className="dashboard-composition-caption">Vendas após descontos = custo dos produtos + faturamento líquido.</figcaption>
+    </figure>
+  )
+}
+
 function ChartState({ loading, onRetry, errorMessage = 'Não foi possível carregar este período.' }: { loading: boolean; onRetry: () => void; errorMessage?: string }) {
   return (
     <div className={`dashboard-chart-state${loading ? ' is-loading' : ' is-error'}`} role="status">
@@ -297,6 +337,8 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
           </>}
           <figcaption className="dashboard-trend-footer"><p>O bruto inclui taxa de entrega; combo usa o custo do catálogo.</p><Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link></figcaption>
         </figure>
+
+        <RevenueCompositionPanel days={revenueDays} error={revenueError} loading={revenueLoading} onRetry={onRetryRevenue} dateRange={dateRange} />
 
         <figure className="surface-panel dashboard-trend-panel" aria-labelledby={moneyHeadingId}>
           <div className="dashboard-trend-heading"><h3 id={moneyHeadingId}>Caixa informado</h3><span>R$ por {timeUnit}</span></div>
