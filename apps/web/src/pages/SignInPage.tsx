@@ -24,28 +24,34 @@ export function SignInPage() {
     setError(null)
     setMessage(null)
 
-    if (mode === 'signin') {
-      const { error: signInError } = await client.auth.signInWithPassword({
-        email: email.trim(),
-        password,
+    try {
+      if (mode === 'signin') {
+        const { error: signInError } = await client.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        })
+
+        if (signInError) setError('Não foi possível entrar. Confira os dados e tente novamente.')
+        return
+      }
+
+      const redirectTo = new URL('/redefinir-senha', window.location.origin).toString()
+      const { error: recoveryError } = await client.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo,
       })
 
-      if (signInError) setError('Não foi possível entrar. Confira os dados e tente novamente.')
+      if (recoveryError) {
+        setError('Não foi possível solicitar a recuperação agora. Tente novamente mais tarde.')
+      } else {
+        setMessage('Se o e-mail estiver cadastrado, você receberá instruções para recuperar o acesso.')
+      }
+    } catch {
+      setError(mode === 'signin'
+        ? 'Falha de conexão ao entrar. Confira sua internet e tente novamente.'
+        : 'Falha de conexão ao solicitar a recuperação. Confira sua internet e tente novamente.')
+    } finally {
       setSubmitting(false)
-      return
     }
-
-    const redirectTo = new URL('/redefinir-senha', window.location.origin).toString()
-    const { error: recoveryError } = await client.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo,
-    })
-
-    if (recoveryError) {
-      setError('Não foi possível solicitar a recuperação agora. Tente novamente mais tarde.')
-    } else {
-      setMessage('Se o e-mail estiver cadastrado, você receberá instruções para recuperar o acesso.')
-    }
-    setSubmitting(false)
   }
 
   const isRecovery = mode === 'recovery'
@@ -161,17 +167,20 @@ export function PasswordRecoveryPage() {
     }
     setSubmitting(true)
     setError(null)
+    try {
+      const { error: updateError } = await supabaseClient.auth.updateUser({ password })
+      if (updateError) {
+        setError('O link pode ter expirado. Solicite uma nova recuperação de senha.')
+        return
+      }
 
-    const { error: updateError } = await supabaseClient.auth.updateUser({ password })
-    setSubmitting(false)
-
-    if (updateError) {
-      setError('O link pode ter expirado. Solicite uma nova recuperação de senha.')
-      return
+      completeRecovery()
+      setSuccess(true)
+    } catch {
+      setError('Falha de conexão ao salvar a nova senha. Confira a internet e tente novamente.')
+    } finally {
+      setSubmitting(false)
     }
-
-    completeRecovery()
-    setSuccess(true)
   }
 
   if (success) {

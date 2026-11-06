@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { CustomerSearchSelect } from '../components/CustomerSearchSelect'
@@ -21,6 +22,103 @@ type ScheduleTemplate = { id: string; name: string; schedule: ScheduleEntry[] }
 type CustomComboOrderCapability = 'available' | 'unavailable' | 'unknown'
 type InstallmentSuggestionStatus = 'pending' | 'applied' | 'preserved' | 'incompatible' | 'none' | 'chosen_other'
 type CustomerOrderSuggestion = { customerName: string; sourceOrderId: string; sourceCreatedAt: string; copiedItems: number; customCompositionsCopied: number; legacyCompositionsReviewCount: number; skippedItems: number; itemsApplied: boolean; addressApplied: boolean; deliveryApplied: boolean; feeApplied: boolean; installmentStatus: InstallmentSuggestionStatus; preservedFields: string[] }
+
+type NewOrderDraft = {
+  version: 1
+  requestId: string
+  submissionPending: boolean
+  customerId: string
+  selectedAddressId: string
+  requiresDelivery: boolean
+  deliveryWorkerId: string
+  deliveryAddress: string
+  deliveryFee: string
+  discount: string
+  notes: string
+  items: ItemDraft[]
+  installments: InstallmentDraft[]
+  selectedScheduleTemplateId: string
+  scheduleBaseDate: string
+  newTemplateName: string
+}
+type NewOrderDraftStatus = 'restored' | 'saved' | 'unavailable' | null
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function writeNewOrderDraft(storageKey: string, draft: NewOrderDraft) {
+  if (typeof window === 'undefined') return false
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(draft))
+    return true
+  } catch {
+    return false
+  }
+}
+
+function hasOrderDraftContent(draft: NewOrderDraft) {
+  return Boolean(draft.submissionPending || draft.customerId || draft.selectedAddressId || draft.requiresDelivery || draft.deliveryWorkerId
+    || draft.deliveryAddress.trim() || draft.deliveryFee.trim() || draft.discount.trim() || draft.notes.trim()
+    || draft.selectedScheduleTemplateId || draft.newTemplateName.trim()
+    || draft.items.some((item) => item.productId || item.quantity !== '1' || item.components?.length)
+    || draft.installments.some((installment) => installment.amount.trim() || installment.dueOn || installment.paymentMethod.trim()))
+}
+
+function readNewOrderDraft(storageKey: string): NewOrderDraft | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const value = window.localStorage.getItem(storageKey)
+    if (!value) return null
+    const parsed = JSON.parse(value) as Partial<NewOrderDraft> | null
+    const validItems = Array.isArray(parsed?.items) && parsed.items.length > 0 && parsed.items.length <= 120
+      && parsed.items.every((item) => item && typeof item.key === 'string' && typeof item.productId === 'string'
+        && typeof item.quantity === 'string' && (item.components === undefined || Array.isArray(item.components)
+          && item.components.every((component) => component && typeof component.productId === 'string' && typeof component.quantityPerCombo === 'string')))
+    const validInstallments = Array.isArray(parsed?.installments) && parsed.installments.length > 0 && parsed.installments.length <= 120
+      && parsed.installments.every((installment) => installment && typeof installment.key === 'string'
+        && typeof installment.amount === 'string' && typeof installment.dueOn === 'string' && typeof installment.paymentMethod === 'string')
+    if (!parsed || parsed.version !== 1 || !isUuid(parsed.requestId) || typeof parsed.submissionPending !== 'boolean' || !validItems || !validInstallments
+      || typeof parsed.customerId !== 'string' || typeof parsed.selectedAddressId !== 'string'
+      || typeof parsed.requiresDelivery !== 'boolean' || typeof parsed.deliveryWorkerId !== 'string'
+      || typeof parsed.deliveryAddress !== 'string' || typeof parsed.deliveryFee !== 'string'
+      || typeof parsed.discount !== 'string' || typeof parsed.notes !== 'string'
+      || typeof parsed.selectedScheduleTemplateId !== 'string' || typeof parsed.scheduleBaseDate !== 'string'
+      || typeof parsed.newTemplateName !== 'string') {
+      window.localStorage.removeItem(storageKey)
+      return null
+    }
+    const draft: NewOrderDraft = {
+      version: 1,
+      requestId: parsed.requestId,
+      submissionPending: parsed.submissionPending,
+      customerId: parsed.customerId,
+      selectedAddressId: parsed.selectedAddressId,
+      requiresDelivery: parsed.requiresDelivery,
+      deliveryWorkerId: parsed.deliveryWorkerId,
+      deliveryAddress: parsed.deliveryAddress,
+      deliveryFee: parsed.deliveryFee,
+      discount: parsed.discount,
+      notes: parsed.notes,
+      items: parsed.items as ItemDraft[],
+      installments: parsed.installments as InstallmentDraft[],
+      selectedScheduleTemplateId: parsed.selectedScheduleTemplateId,
+      scheduleBaseDate: parsed.scheduleBaseDate,
+      newTemplateName: parsed.newTemplateName,
+    }
+    if (!hasOrderDraftContent(draft)) {
+      window.localStorage.removeItem(storageKey)
+      return null
+    }
+    return draft
+  } catch {
+    return null
+  }
+}
+
+function createNewOrderDraftStorageKey(businessId: string, userId: string) {
+  return `shalom-adonai:new-order-draft:v1:${[businessId, userId].map(encodeURIComponent).join(':')}`
+}
 
 function newKey() {
   return crypto.randomUUID()
@@ -174,10 +272,21 @@ function centsToInput(cents: bigint) {
 
 export function NewOrderPage() {
   const { id: businessId, timezone, role } = useBusiness()
+  const { session } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const requestedCustomerId = searchParams.get('cliente') ?? ''
   const sourceOrderId = searchParams.get('origem') ?? ''
+  const orderDraftStorageKey = session?.user.id
+    ? createNewOrderDraftStorageKey(businessId, session.user.id)
+    : null
+  const [initialOrderDraft] = useState(() => orderDraftStorageKey ? readNewOrderDraft(orderDraftStorageKey) : null)
+  const [draftStatus, setDraftStatus] = useState<NewOrderDraftStatus>(initialOrderDraft ? 'restored' : null)
+  const [draftActionError, setDraftActionError] = useState<string | null>(null)
+  const draftRestoredRef = useRef(Boolean(initialOrderDraft))
+  const draftClearedRef = useRef(false)
+  const firstDraftWriteRef = useRef(Boolean(initialOrderDraft))
+  const draftTouchedRef = useRef(Boolean(initialOrderDraft))
   const [customers, setCustomers] = useState<Customer[]>([])
   const [deliveryWorkers, setDeliveryWorkers] = useState<DeliveryWorkerChoice[]>([])
   const [deliveryWorkersLoadError, setDeliveryWorkersLoadError] = useState(false)
@@ -196,41 +305,70 @@ export function NewOrderPage() {
   const [customerPaymentPattern, setCustomerPaymentPattern] = useState<ScheduleEntry[] | null>(null)
   const [customerPrefillNotice, setCustomerPrefillNotice] = useState<string | null>(null)
   const [customerPrefillLoading, setCustomerPrefillLoading] = useState(false)
-  const [customerId, setCustomerId] = useState(requestedCustomerId)
+  const [customerId, setCustomerId] = useState(initialOrderDraft?.customerId ?? requestedCustomerId)
   const [customerSearchPending, setCustomerSearchPending] = useState(false)
   const [customerAddresses, setCustomerAddresses] = useState<CustomerAddress[]>([])
   const [customerAddressesLoading, setCustomerAddressesLoading] = useState(false)
   const [customerAddressesError, setCustomerAddressesError] = useState<string | null>(null)
-  const [selectedAddressId, setSelectedAddressId] = useState('')
-  const [requiresDelivery, setRequiresDelivery] = useState(false)
-  const [deliveryWorkerId, setDeliveryWorkerId] = useState('')
-  const [deliveryAddress, setDeliveryAddress] = useState('')
-  const [deliveryFee, setDeliveryFee] = useState('')
-  const [discount, setDiscount] = useState('')
-  const [notes, setNotes] = useState('')
-  const [items, setItems] = useState<ItemDraft[]>([{ key: newKey(), productId: '', quantity: '1' }])
-  const [installments, setInstallments] = useState<InstallmentDraft[]>([{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
+  const [selectedAddressId, setSelectedAddressId] = useState(initialOrderDraft?.selectedAddressId ?? '')
+  const [requiresDelivery, setRequiresDelivery] = useState(initialOrderDraft?.requiresDelivery ?? false)
+  const [deliveryWorkerId, setDeliveryWorkerId] = useState(initialOrderDraft?.deliveryWorkerId ?? '')
+  const [deliveryAddress, setDeliveryAddress] = useState(initialOrderDraft?.deliveryAddress ?? '')
+  const [deliveryFee, setDeliveryFee] = useState(initialOrderDraft?.deliveryFee ?? '')
+  const [discount, setDiscount] = useState(initialOrderDraft?.discount ?? '')
+  const [notes, setNotes] = useState(initialOrderDraft?.notes ?? '')
+  const [items, setItems] = useState<ItemDraft[]>(initialOrderDraft?.items ?? [{ key: newKey(), productId: '', quantity: '1' }])
+  const [installments, setInstallments] = useState<InstallmentDraft[]>(initialOrderDraft?.installments ?? [{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
   const [scheduleTemplates, setScheduleTemplates] = useState<ScheduleTemplate[]>([])
   const [scheduleTemplateLoadError, setScheduleTemplateLoadError] = useState<string | null>(null)
-  const [selectedScheduleTemplateId, setSelectedScheduleTemplateId] = useState('')
-  const [scheduleBaseDate, setScheduleBaseDate] = useState(() => businessDateForTimestamp(new Date(), timezone))
-  const [newTemplateName, setNewTemplateName] = useState('')
+  const [selectedScheduleTemplateId, setSelectedScheduleTemplateId] = useState(initialOrderDraft?.selectedScheduleTemplateId ?? '')
+  const [scheduleBaseDate, setScheduleBaseDate] = useState(() => initialOrderDraft?.scheduleBaseDate ?? businessDateForTimestamp(new Date(), timezone))
+  const [newTemplateName, setNewTemplateName] = useState(initialOrderDraft?.newTemplateName ?? '')
   const [scheduleTemplateMessage, setScheduleTemplateMessage] = useState<string | null>(null)
   const [scheduleTemplateError, setScheduleTemplateError] = useState<string | null>(null)
   const [templateSaving, setTemplateSaving] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [uncertain, setUncertain] = useState(false)
-  const [formError, setFormError] = useState<string | null>(null)
+  const [uncertain, setUncertain] = useState(Boolean(initialOrderDraft?.submissionPending))
+  const [formError, setFormError] = useState<string | null>(initialOrderDraft?.submissionPending
+    ? 'Uma tentativa anterior não teve confirmação. Os campos estão bloqueados; tente novamente sem alterar os dados para evitar duplicidade.'
+    : null)
   const legacyCompositionReviewCount = items.filter((item) => item.requiresCompositionReview).length
-  const requestIdRef = useRef(newKey())
+  const requestIdRef = useRef(initialOrderDraft?.requestId ?? newKey())
+  const submissionPendingRef = useRef(Boolean(initialOrderDraft?.submissionPending))
   const choicesRequestIdRef = useRef(0)
-  const autoScheduleRef = useRef(true)
+  const autoScheduleRef = useRef(!initialOrderDraft)
   const scheduleTemplateBusinessRef = useRef<string | null>(null)
   const customerOrderRequestRef = useRef(0)
   const customerAddressRequestRef = useRef(0)
   const initialCustomerPrefillRef = useRef('')
-  const customerPrefillManualRef = useRef({ items: false, address: false, delivery: false, fee: false, installments: false, baseDate: false })
+  const customerPrefillManualRef = useRef({
+    items: Boolean(initialOrderDraft),
+    address: Boolean(initialOrderDraft),
+    delivery: Boolean(initialOrderDraft),
+    fee: Boolean(initialOrderDraft),
+    installments: Boolean(initialOrderDraft),
+    baseDate: Boolean(initialOrderDraft),
+  })
   const disabled = saving || uncertain
+  const createCurrentOrderDraft = useCallback((): NewOrderDraft => ({
+    version: 1,
+    requestId: requestIdRef.current,
+    submissionPending: submissionPendingRef.current,
+    customerId,
+    selectedAddressId,
+    requiresDelivery,
+    deliveryWorkerId,
+    deliveryAddress,
+    deliveryFee,
+    discount,
+    notes,
+    items,
+    installments,
+    selectedScheduleTemplateId,
+    scheduleBaseDate,
+    newTemplateName,
+  }), [customerId, selectedAddressId, requiresDelivery, deliveryWorkerId, deliveryAddress, deliveryFee,
+    discount, notes, items, installments, selectedScheduleTemplateId, scheduleBaseDate, newTemplateName])
 
   const loadChoices = useCallback(async () => {
     const requestId = ++choicesRequestIdRef.current
@@ -301,7 +439,7 @@ export function NewOrderPage() {
       setStockProducts(activeStockProducts)
       setDeliveryWorkers((deliveryWorkersResult.data ?? []) as DeliveryWorkerChoice[])
       setDeliveryWorkersLoadError(Boolean(deliveryWorkersResult.error))
-      setDeliveryWorkerId('')
+      if (!draftRestoredRef.current) setDeliveryWorkerId('')
       setComboDefaults(defaults)
       if (templatesUnavailable) {
         setScheduleTemplates([])
@@ -310,16 +448,16 @@ export function NewOrderPage() {
         setScheduleTemplates(loadedTemplates)
         setScheduleTemplateLoadError(null)
         if (scheduleTemplateBusinessRef.current !== businessId) {
-          setSelectedScheduleTemplateId('')
+          if (!draftRestoredRef.current) setSelectedScheduleTemplateId('')
           autoScheduleRef.current = false
           scheduleTemplateBusinessRef.current = businessId
         }
       }
       const preselectedCustomer = activeCustomers.find((customer) => customer.id === requestedCustomerId)
-      if (!sourceOrderId && preselectedCustomer) setDeliveryAddress(preselectedCustomer.delivery_address ?? '')
+      if (!sourceOrderId && preselectedCustomer && !draftRestoredRef.current) setDeliveryAddress(preselectedCustomer.delivery_address ?? '')
       setChoiceError(null)
 
-      if (sourceOrderId) {
+      if (sourceOrderId && !draftRestoredRef.current) {
         try {
           const { data: sourceOrder, error: sourceOrderError } = await supabaseClient.from('orders')
             .select('id, customer_id, status')
@@ -440,7 +578,7 @@ export function NewOrderPage() {
     const nextCustomerId = customerId
     // oxlint-disable-next-line react/set-state-in-effect
     setCustomerAddresses([])
-    setSelectedAddressId('')
+    if (!customerPrefillManualRef.current.address) setSelectedAddressId('')
     setCustomerAddressesError(null)
     setCustomerAddressesLoading(Boolean(nextCustomerId && supabaseClient))
     if (!nextCustomerId || !supabaseClient) {
@@ -897,6 +1035,27 @@ export function NewOrderPage() {
     applyScheduleTemplate(true)
   }, [applyScheduleTemplate, scheduleTemplates.length, selectedScheduleTemplateId])
 
+  useEffect(() => {
+    if (!orderDraftStorageKey || loadingChoices || saving || draftClearedRef.current
+      || (customerPrefillLoading && !draftTouchedRef.current)) return
+    try {
+      const draft = createCurrentOrderDraft()
+      if (!hasOrderDraftContent(draft)) {
+        window.localStorage.removeItem(orderDraftStorageKey)
+        setDraftStatus(null)
+        return
+      }
+      if (!writeNewOrderDraft(orderDraftStorageKey, draft)) throw new Error('Storage indisponível')
+      if (firstDraftWriteRef.current) {
+        firstDraftWriteRef.current = false
+        return
+      }
+      setDraftStatus('saved')
+    } catch {
+      setDraftStatus('unavailable')
+    }
+  }, [orderDraftStorageKey, loadingChoices, saving, customerPrefillLoading, draftTouchedRef, createCurrentOrderDraft])
+
   async function saveScheduleTemplate() {
     if (!supabaseClient || templateSaving) return
     const name = newTemplateName.trim()
@@ -952,6 +1111,72 @@ export function NewOrderPage() {
     } finally {
       setTemplateSaving(false)
     }
+  }
+
+  function discardOrderDraft() {
+    if (!window.confirm('Descartar este rascunho e começar um pedido novo? Os dados preenchidos serão removidos.')) return
+    setDraftActionError(null)
+    if (submissionPendingRef.current) {
+      setDraftActionError('Esta tentativa pode já ter criado o pedido. Tente novamente sem alterar os dados ou confira a lista de pedidos antes de descartar.')
+      return
+    }
+    if (!orderDraftStorageKey) {
+      setDraftActionError('Não foi possível identificar este rascunho. Seus dados continuam no formulário.')
+      return
+    }
+    try {
+      window.localStorage.removeItem(orderDraftStorageKey)
+    } catch {
+      writeNewOrderDraft(orderDraftStorageKey, createCurrentOrderDraft())
+      setDraftActionError('Não foi possível descartar o rascunho. Seus dados foram preservados; tente novamente.')
+      return
+    }
+
+    draftClearedRef.current = false
+    draftRestoredRef.current = false
+    firstDraftWriteRef.current = false
+    draftTouchedRef.current = false
+    requestIdRef.current = newKey()
+    submissionPendingRef.current = false
+    customerOrderRequestRef.current += 1
+    customerAddressRequestRef.current += 1
+    initialCustomerPrefillRef.current = ''
+    customerPrefillManualRef.current = { items: false, address: false, delivery: false, fee: false, installments: false, baseDate: false }
+    autoScheduleRef.current = false
+
+    setDraftStatus(null)
+    setDraftActionError(null)
+    setChoiceError(null)
+    setOrderCopySummary(null)
+    setOrderCopyWarning(null)
+    setCustomerOrderSuggestion(null)
+    setCustomerSuggestedItems([])
+    setCustomerPaymentPattern(null)
+    setCustomerPrefillNotice(null)
+    setCustomerPrefillLoading(false)
+    setCustomerId('')
+    setCustomerSearchPending(false)
+    setCustomerAddresses([])
+    setCustomerAddressesLoading(false)
+    setCustomerAddressesError(null)
+    setSelectedAddressId('')
+    setRequiresDelivery(false)
+    setDeliveryWorkerId('')
+    setDeliveryAddress('')
+    setDeliveryFee('')
+    setDiscount('')
+    setNotes('')
+    setItems([{ key: newKey(), productId: '', quantity: '1' }])
+    setInstallments([{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
+    setSelectedScheduleTemplateId('')
+    setScheduleBaseDate(businessDateForTimestamp(new Date(), timezone))
+    setNewTemplateName('')
+    setScheduleTemplateMessage(null)
+    setScheduleTemplateError(null)
+    setLegacyCompositionReviewConfirmed(false)
+    setFormError(null)
+    setUncertain(false)
+    navigate('/pedidos/novo', { replace: true })
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1081,6 +1306,17 @@ export function NewOrderPage() {
       return
     }
 
+    const wasAlreadyPending = submissionPendingRef.current
+    const submissionRequestId = requestIdRef.current
+    const submittedDraft = { ...createCurrentOrderDraft(), requestId: submissionRequestId, submissionPending: true }
+    if (!orderDraftStorageKey || !writeNewOrderDraft(orderDraftStorageKey, submittedDraft)) {
+      setDraftStatus('unavailable')
+      setFormError('Não foi possível salvar a tentativa com segurança neste dispositivo. O pedido não foi enviado e seus dados continuam no formulário. Confira o armazenamento do navegador e tente novamente.')
+      return
+    }
+
+    submissionPendingRef.current = true
+    setDraftStatus('saved')
     setSaving(true)
     setFormError(null)
     try {
@@ -1094,15 +1330,20 @@ export function NewOrderPage() {
         p_notes: notes.trim() || null,
         p_items: itemPayload,
         p_installments: installmentPayload,
-        p_request_id: requestIdRef.current,
+        p_request_id: submissionRequestId,
       })
       if (rpcError) {
-        if (rpcStatus >= 400 && rpcStatus < 500) {
+        if (rpcStatus >= 400 && rpcStatus < 500 && !wasAlreadyPending) {
+          submissionPendingRef.current = false
           requestIdRef.current = newKey()
+          if (!writeNewOrderDraft(orderDraftStorageKey, createCurrentOrderDraft())) setDraftStatus('unavailable')
+          setUncertain(false)
           setFormError('O pedido não foi salvo. Revise os dados informados e tente novamente.')
         } else {
           setUncertain(true)
-          setFormError('Não foi possível confirmar se o pedido foi salvo. Tente novamente sem alterar os dados para evitar duplicidade.')
+          setFormError(wasAlreadyPending
+            ? 'A tentativa anterior ainda pode ter sido salva. Os dados continuam bloqueados; confira a lista de pedidos ou tente novamente sem alterar o formulário.'
+            : 'Não foi possível confirmar se o pedido foi salvo. Tente novamente sem alterar os dados para evitar duplicidade.')
         }
         return
       }
@@ -1111,7 +1352,21 @@ export function NewOrderPage() {
         setFormError('A resposta do pedido não chegou completa. Seus dados foram preservados; tente novamente sem alterar o formulário.')
         return
       }
+      draftClearedRef.current = true
+      let draftRemoved = false
+      if (orderDraftStorageKey) {
+        try {
+          window.localStorage.removeItem(orderDraftStorageKey)
+          draftRemoved = true
+        } catch {
+          setDraftStatus('unavailable')
+        }
+      }
+      if (draftRemoved) setDraftStatus(null)
       let successMessage = 'Pedido criado. Nenhum recebimento foi registrado; se já recebeu, registre-o manualmente nesta tela.'
+      if (!draftRemoved) {
+        successMessage += ' O pedido já foi criado, mas o rascunho não pôde ser apagado neste dispositivo. Se ele voltar a aparecer, os campos ficarão bloqueados; tente novamente sem alterar para abrir o mesmo pedido.'
+      }
       if (requiresDelivery && deliveryWorkerId) {
         try {
           const { data: delivery, error: deliveryError } = await supabaseClient.from('deliveries')
@@ -1167,6 +1422,17 @@ export function NewOrderPage() {
       <header className="page-heading">
         <div><p className="eyebrow">VENDAS</p><h1>Novo pedido</h1><p className="page-description">Registre os itens atuais do catálogo e informe cada vencimento combinado.</p></div>
       </header>
+      {draftStatus && <div className={`form-message ${draftStatus === 'unavailable' ? 'form-message-warning' : 'form-message-success'}`}>
+        <p role="status">{uncertain
+          ? 'Uma tentativa anterior não teve confirmação. Os dados estão bloqueados; repita sem alterar para abrir o mesmo pedido com segurança.'
+          : draftStatus === 'restored'
+            ? 'Rascunho restaurado. As alterações ficam salvas automaticamente neste dispositivo.'
+            : draftStatus === 'saved'
+              ? 'Rascunho salvo automaticamente neste dispositivo.'
+              : 'Não foi possível salvar o rascunho neste dispositivo. Mantenha esta tela aberta até criar o pedido.'}</p>
+        {!uncertain && <button className="text-button" disabled={saving} onClick={discardOrderDraft} type="button">Descartar rascunho</button>}
+      </div>}
+      {draftActionError && <p className="form-message form-message-error" role="alert">{draftActionError}</p>}
 
       {choiceError && <div className="inline-state inline-state-error" role="alert"><p>{choiceError}</p><button className="text-button" onClick={() => void loadChoices()} type="button">Tentar novamente</button></div>}
       {orderCopySummary && <div className="form-message form-message-success" role="status">
@@ -1189,7 +1455,7 @@ export function NewOrderPage() {
         {(customerOrderSuggestion.installmentStatus === 'preserved' || customerOrderSuggestion.installmentStatus === 'pending') && customerPaymentPattern && <button className="text-button" disabled={disabled} onClick={applyCustomerPaymentSuggestion} type="button">Usar as parcelas deste pedido, recalculadas para hoje</button>}
       </div>}
       {loadingChoices ? <p className="inline-state" aria-live="polite">Carregando clientes e produtos ativos…</p> : (
-        <form className="order-create-form" onSubmit={handleSubmit}>
+        <form className="order-create-form" onChangeCapture={() => { draftTouchedRef.current = true; setDraftActionError(null) }} onClickCapture={() => { draftTouchedRef.current = true; setDraftActionError(null) }} onSubmit={handleSubmit}>
           <section className="surface-panel record-form" aria-labelledby="order-customer-heading">
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">01 · CLIENTE</p><h2 id="order-customer-heading">Entrega e observações</h2></div></div>
             {customers.length === 0 ? <p className="inline-state">Cadastre um cliente ativo antes de criar um pedido. <Link to="/clientes">Abrir clientes</Link></p> : (
