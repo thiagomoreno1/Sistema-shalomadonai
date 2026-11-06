@@ -662,7 +662,7 @@ export function FinancialOutflowsPage() {
         <div>
           <p className="eyebrow">FINANCEIRO · GASTOS PAGOS</p>
           <h1>Gastos pagos</h1>
-          <p className="page-description">Registre compras de produtos, gastos da empresa e pagamentos de entrega depois que o dinheiro sair.</p>
+          <p className="page-description">Opcional: registre compras, gastos da empresa e pagamentos de entrega se quiser incluí-los nos relatórios.</p>
         </div>
         <button className="button button-primary" disabled={Boolean(voidTarget)} onClick={() => { resetForm(); setNotice(null); setVoidNotice(null); setShowForm(true) }} ref={formTriggerRef} type="button">Registrar gasto pago</button>
       </header>

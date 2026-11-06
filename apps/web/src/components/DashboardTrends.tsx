@@ -301,7 +301,7 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
         </div>
       </div>}
 
-      <div className="dashboard-trends-grid" aria-busy={loading}>
+      <div className={`dashboard-trends-grid${embedded ? ' is-financial-embedded' : ' is-dashboard-overview'}`} aria-busy={loading}>
         <figure className="surface-panel dashboard-trend-panel" aria-labelledby={salesHeadingId}>
           <div className="dashboard-trend-heading"><h3 id={salesHeadingId}>Faturamento e custo</h3><span>R$ por {timeUnit}</span></div>
           {revenueLoading ? <ChartState loading onRetry={onRetryRevenue} errorMessage="Não foi possível carregar as vendas deste período." /> : revenueError ? <ChartState loading={false} onRetry={onRetryRevenue} errorMessage="Não foi possível carregar as vendas deste período." /> : <>
@@ -335,13 +335,15 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
               </div>
             </details>
           </>}
-          <figcaption className="dashboard-trend-footer"><p>O bruto inclui taxa de entrega; combo usa o custo do catálogo.</p><Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link></figcaption>
+          <figcaption className="dashboard-trend-footer"><p>O bruto inclui taxa de entrega; combo usa o custo do catálogo.</p><Link className="quiet-link" to="/relatorios/financeiro">Ver relatório financeiro <Icon name="arrow" /></Link></figcaption>
         </figure>
 
         <RevenueCompositionPanel days={revenueDays} error={revenueError} loading={revenueLoading} onRetry={onRetryRevenue} dateRange={dateRange} />
 
-        <figure className="surface-panel dashboard-trend-panel" aria-labelledby={moneyHeadingId}>
-          <div className="dashboard-trend-heading"><h3 id={moneyHeadingId}>Caixa informado</h3><span>R$ por {timeUnit}</span></div>
+        <details className="surface-panel dashboard-trend-panel dashboard-cash-panel">
+          <summary className="dashboard-cash-summary"><span><strong id={moneyHeadingId}>Caixa informado</strong><small>Opcional · só use se quiser acompanhar os valores registrados</small></span><span>Ver caixa <span aria-hidden="true">＋</span></span></summary>
+          <div className="dashboard-cash-content">
+          <div className="dashboard-trend-heading"><span>R$ por {timeUnit}</span><Link className="quiet-link" to="/financeiro">Abrir financeiro <Icon name="arrow" /></Link></div>
           {ready ? <>
             <dl className="dashboard-trend-totals">
               <div><dt><span className="dashboard-chart-key is-receipt" aria-hidden="true" />Pagamentos recebidos</dt><dd>{formatBRLExact(receipts)}</dd></div>
@@ -357,10 +359,10 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
               monthly={monthly}
             />
             <p className="dashboard-trend-insight">Entradas menos gastos: <strong>{formatBRLExact(receipts - outflows)}</strong></p>
-            {receipts === 0n && outflows === 0n && <p className="dashboard-trend-empty-copy">Registre pagamentos recebidos e gastos pagos para acompanhar o dinheiro ao longo do período.</p>}
+            <p className="dashboard-trend-empty-copy">Os gastos são opcionais. Valores não informados não entram neste resumo; isso não representa saldo bancário.</p>
           </> : <ChartState loading={loading} onRetry={onRetry} />}
-          <figcaption className="dashboard-trend-footer"><p>Valores registrados manualmente; não são o saldo bancário.</p><Link className="quiet-link" to="/financeiro">Abrir financeiro <Icon name="arrow" /></Link></figcaption>
-        </figure>
+          </div>
+        </details>
 
         {!embedded && <figure className="surface-panel dashboard-trend-panel" aria-labelledby={ordersHeadingId}>
           <div className="dashboard-trend-heading"><h3 id={ordersHeadingId}>Pedidos registrados</h3><span>Pedidos por {timeUnit}</span></div>

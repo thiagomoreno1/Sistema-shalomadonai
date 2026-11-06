@@ -485,7 +485,6 @@ export function DashboardPage() {
               {trendPeriodOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
-          <Link className="dashboard-reference-link" to="/referencias-central"><Icon name="chart" /> Comparar visuais</Link>
         </div>}
       </header>
 
