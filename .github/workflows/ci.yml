@@ -34,7 +34,7 @@ jobs:
         run: npm test
 
       - name: Check Edge Function types
-        run: npx --yes deno@2.9.6 check supabase/functions/belvo-open-finance/index.ts supabase/functions/belvo-sandbox-webhook/index.ts supabase/functions/chatwoot-inbox/index.ts
+        run: npx --yes deno@2.9.6 check supabase/functions/belvo-open-finance/index.ts supabase/functions/belvo-sandbox-webhook/index.ts supabase/functions/evolution-inbox/index.ts supabase/functions/evolution-webhook/index.ts
 
       - name: Run lint
         run: npm run lint
