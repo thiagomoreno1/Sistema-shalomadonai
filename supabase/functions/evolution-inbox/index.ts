@@ -349,8 +349,11 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       else if (!text(existing.contact_name, 160) && fallbackName) update.contact_name = fallbackName
       if (group) update.contact_phone = null
       else if (phone) update.contact_phone = phone
-      const resolvedAltJid = [jidAlt, jid].find((candidate) => candidate && candidate !== existing.remote_jid)
-      if (resolvedAltJid) update.remote_jid_alt = resolvedAltJid
+      const resolvedAltJid = group ? null : await safeAlternateJid(
+        admin, businessId, config.instanceName, conversationId, existing.remote_jid,
+        jidAlt, jid, text(existing.remote_jid_alt, 256),
+      )
+      update.remote_jid_alt = resolvedAltJid
       if (!existing.last_activity_at || activity > String(existing.last_activity_at)) update.last_activity_at = activity
       if (unread > 0) update.unread_count = unread
       if (Object.keys(update).length) {
@@ -359,11 +362,12 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
         if (error) throw new RequestError(500, 'history_sync_failed')
       }
     } else {
+      const safeAltJid = await safeAlternateJid(admin, businessId, config.instanceName, null, jid, jidAlt)
       const { data, error } = await admin.from('whatsapp_conversations').upsert({
         business_id: businessId,
         instance_name: config.instanceName,
         remote_jid: jid,
-        remote_jid_alt: jidAlt,
+        remote_jid_alt: safeAltJid,
         contact_name: group ? null : name ?? text(chat.pushName, 160),
         group_subject: group ? savedName : null,
         contact_phone: phone,
@@ -585,24 +589,71 @@ async function findConversationByJidOrAlias(
 
   const aliases = [...new Set([remoteJid, remoteJidAlt].filter(isDirectWhatsAppJid).map((value) => value.toLowerCase()))]
   if (!aliases.length) return null
+  const primaryJid = isDirectWhatsAppJid(remoteJid) ? remoteJid.toLowerCase() : null
   const { data: aliasRows, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
-    .select('conversation_id')
+    .select('remote_jid, conversation_id')
     .eq('business_id', businessId).eq('instance_name', instanceName).in('remote_jid', aliases).limit(3)
   if (aliasError) throw new RequestError(500, 'history_sync_failed')
-  const aliasedConversationIds = [...new Set((aliasRows ?? []).map((row: JsonRecord) => String(row.conversation_id)))]
-  if (aliasedConversationIds.length > 1) throw new RequestError(409, 'conversation_identity_ambiguous')
-  if (aliasedConversationIds.length === 1) {
-    const { data, error } = await selection().eq('id', aliasedConversationIds[0]).maybeSingle()
+  const primaryAlias = (aliasRows ?? []).find((row: JsonRecord) => row.remote_jid === primaryJid)
+  if (primaryAlias) {
+    const { data, error } = await selection().eq('id', String(primaryAlias.conversation_id)).maybeSingle()
     if (error) throw new RequestError(500, 'history_sync_failed')
     if (data) return data
   }
+  if (primaryJid) {
+    const { data: primaryAlternateRows, error } = await selection().eq('remote_jid_alt', primaryJid).limit(2)
+    if (error) throw new RequestError(500, 'history_sync_failed')
+    if ((primaryAlternateRows ?? []).length === 1) return primaryAlternateRows[0]
+    if ((primaryAlternateRows ?? []).length > 1) throw new RequestError(409, 'conversation_identity_ambiguous')
+  }
+  const prioritizedAlias = (aliasRows ?? []).length === 1 ? aliasRows[0] : null
+  if (prioritizedAlias) {
+    const { data, error } = await selection().eq('id', String(prioritizedAlias.conversation_id)).maybeSingle()
+    if (error) throw new RequestError(500, 'history_sync_failed')
+    if (data) return data
+  }
+  const aliasedConversationIds = [...new Set((aliasRows ?? []).map((row: JsonRecord) => String(row.conversation_id)))]
   const candidates = aliases.join(',')
   const { data, error } = await selection()
     .or(`remote_jid.in.(${candidates}),remote_jid_alt.in.(${candidates})`)
-    .limit(2)
+    .limit(4)
   if (error) throw new RequestError(500, 'history_sync_failed')
-  if ((data ?? []).length > 1) throw new RequestError(409, 'conversation_identity_ambiguous')
+  const primaryMatches = (data ?? []).filter((row: JsonRecord) =>
+    String(row.remote_jid).toLowerCase() === primaryJid
+      || String(row.remote_jid_alt ?? '').toLowerCase() === primaryJid)
+  if (primaryMatches.length === 1) return primaryMatches[0]
+  if (primaryMatches.length > 1 || aliasedConversationIds.length > 1 || (data ?? []).length > 1) {
+    throw new RequestError(409, 'conversation_identity_ambiguous')
+  }
   return data?.[0] ?? null
+}
+
+async function safeAlternateJid(
+  admin: any,
+  businessId: string,
+  instanceName: string,
+  conversationId: string | null,
+  canonicalJid: string,
+  ...candidates: (string | null)[]
+): Promise<string | null> {
+  for (const candidate of candidates) {
+    if (!isDirectWhatsAppJid(candidate) || candidate.toLowerCase() === canonicalJid.toLowerCase()) continue
+    const normalized = candidate.toLowerCase()
+    const { data: alias, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
+      .select('conversation_id')
+      .eq('business_id', businessId).eq('instance_name', instanceName).eq('remote_jid', normalized).maybeSingle()
+    if (aliasError) throw new RequestError(500, 'history_sync_failed')
+    if (alias && alias.conversation_id !== conversationId) continue
+    const { data: rows, error } = await admin.from('whatsapp_conversations')
+      .select('id')
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .or(`remote_jid.eq.${normalized},remote_jid_alt.eq.${normalized}`)
+      .limit(2)
+    if (error) throw new RequestError(500, 'history_sync_failed')
+    if ((rows ?? []).some((row: JsonRecord) => row.id !== conversationId)) continue
+    return candidate
+  }
+  return null
 }
 
 async function registerConversationJidAliases(

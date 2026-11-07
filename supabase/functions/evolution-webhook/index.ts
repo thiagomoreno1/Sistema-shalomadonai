@@ -104,6 +104,88 @@ async function registerConversationJidAliases(
   if (error) throw new Error('conversation_alias_save_failed')
 }
 
+async function safeAlternateJid(
+  admin: AdminClient,
+  businessId: string,
+  instanceName: string,
+  conversationId: string | null,
+  canonicalJid: string,
+  ...candidates: (string | null)[]
+): Promise<string | null> {
+  for (const candidate of candidates) {
+    if (!isDirectWhatsAppJid(candidate) || candidate.toLowerCase() === canonicalJid.toLowerCase()) continue
+    const normalized = candidate.toLowerCase()
+    const { data: alias, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
+      .select('conversation_id')
+      .eq('business_id', businessId).eq('instance_name', instanceName).eq('remote_jid', normalized).maybeSingle()
+    if (aliasError) throw new Error('conversation_alias_lookup_failed')
+    if (alias && alias.conversation_id !== conversationId) continue
+    const { data: rows, error } = await admin.from('whatsapp_conversations')
+      .select('id')
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .or(`remote_jid.eq.${normalized},remote_jid_alt.eq.${normalized}`)
+      .limit(2)
+    if (error) throw new Error('conversation_alias_lookup_failed')
+    if ((rows ?? []).some((row: JsonRecord) => row.id !== conversationId)) continue
+    return candidate
+  }
+  return null
+}
+
+async function findConversationByJidOrAlias(
+  admin: AdminClient,
+  businessId: string,
+  instanceName: string,
+  remoteJid: string,
+  remoteJidAlt: string | null,
+) {
+  const selection = () => admin.from('whatsapp_conversations')
+    .select('id, remote_jid, remote_jid_alt, contact_phone, contact_name, group_subject')
+    .eq('business_id', businessId).eq('instance_name', instanceName)
+  const { data: exact, error: exactError } = await selection().eq('remote_jid', remoteJid).maybeSingle()
+  if (exactError) throw new Error('conversation_lookup_failed')
+  if (exact?.id || isGroupJid(remoteJid)) return exact
+
+  const aliases = [...new Set([remoteJid, remoteJidAlt].filter(isDirectWhatsAppJid).map((value) => value.toLowerCase()))]
+  if (!aliases.length) return null
+  const primaryJid = isDirectWhatsAppJid(remoteJid) ? remoteJid.toLowerCase() : null
+  const { data: aliasRows, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
+    .select('remote_jid, conversation_id')
+    .eq('business_id', businessId).eq('instance_name', instanceName).in('remote_jid', aliases).limit(3)
+  if (aliasError) throw new Error('conversation_alias_lookup_failed')
+  const primaryAlias = (aliasRows ?? []).find((row: JsonRecord) => row.remote_jid === primaryJid)
+  if (primaryAlias) {
+    const { data, error } = await selection().eq('id', String(primaryAlias.conversation_id)).maybeSingle()
+    if (error) throw new Error('conversation_alias_lookup_failed')
+    if (data) return data
+  }
+  if (primaryJid) {
+    const { data: primaryAlternateRows, error } = await selection().eq('remote_jid_alt', primaryJid).limit(2)
+    if (error) throw new Error('conversation_alias_lookup_failed')
+    if ((primaryAlternateRows ?? []).length === 1) return primaryAlternateRows[0]
+    if ((primaryAlternateRows ?? []).length > 1) throw new Error('conversation_identity_ambiguous')
+  }
+  const prioritizedAlias = (aliasRows ?? []).length === 1 ? aliasRows[0] : null
+  if (prioritizedAlias) {
+    const { data, error } = await selection().eq('id', String(prioritizedAlias.conversation_id)).maybeSingle()
+    if (error) throw new Error('conversation_alias_lookup_failed')
+    if (data) return data
+  }
+  const aliasedConversationIds = [...new Set((aliasRows ?? []).map((row: JsonRecord) => String(row.conversation_id)))]
+  const { data, error } = await selection()
+    .or(`remote_jid.in.(${aliases.join(',')}),remote_jid_alt.in.(${aliases.join(',')})`)
+    .limit(4)
+  if (error) throw new Error('conversation_alias_lookup_failed')
+  const primaryMatches = (data ?? []).filter((row: JsonRecord) =>
+    String(row.remote_jid).toLowerCase() === primaryJid
+      || String(row.remote_jid_alt ?? '').toLowerCase() === primaryJid)
+  if (primaryMatches.length === 1) return primaryMatches[0]
+  if (primaryMatches.length > 1 || aliasedConversationIds.length > 1 || (data ?? []).length > 1) {
+    throw new Error('conversation_identity_ambiguous')
+  }
+  return data?.[0] ?? null
+}
+
 function evolutionContactName(row: JsonRecord, isGroup: boolean): string | null {
   const candidates = isGroup
     ? [row.subject, row.name, row.verifiedName]
@@ -289,43 +371,7 @@ async function upsertConversation(
 ) {
   const isGroup = isGroupJid(remoteJid)
   const safePhone = isGroup ? null : phone
-  const { data: exact, error: lookupError } = await admin.from('whatsapp_conversations')
-    .select('id, remote_jid, remote_jid_alt, contact_phone, contact_name, group_subject')
-    .eq('business_id', businessId).eq('instance_name', instanceName).eq('remote_jid', remoteJid).maybeSingle()
-  if (lookupError) throw new Error('conversation_lookup_failed')
-  let existing = exact
-  if (!existing && !isGroup) {
-  const aliases = [...new Set([remoteJid, remoteJidAlt].filter(isDirectWhatsAppJid).map((value) => value.toLowerCase()))]
-    if (aliases.length) {
-      const { data: aliasRows, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
-        .select('conversation_id')
-        .eq('business_id', businessId).eq('instance_name', instanceName).in('remote_jid', aliases).limit(3)
-      if (aliasError) throw new Error('conversation_alias_lookup_failed')
-      const conversationIds = [...new Set((aliasRows ?? []).map((row: JsonRecord) => String(row.conversation_id)))]
-      if (conversationIds.length > 1) throw new Error('conversation_identity_ambiguous')
-      if (conversationIds.length === 1) {
-        const { data, error } = await admin.from('whatsapp_conversations')
-          .select('id, remote_jid, remote_jid_alt, contact_phone, contact_name, group_subject')
-          .eq('business_id', businessId).eq('instance_name', instanceName).eq('id', conversationIds[0]).maybeSingle()
-        if (error) throw new Error('conversation_alias_lookup_failed')
-        existing = data
-      }
-    }
-  }
-  if (!existing && !isGroup) {
-    const aliases = [...new Set([remoteJid, remoteJidAlt].filter(isDirectWhatsAppJid))]
-    if (aliases.length) {
-      const candidates = aliases.join(',')
-      const { data, error } = await admin.from('whatsapp_conversations')
-        .select('id, remote_jid, remote_jid_alt, contact_phone, contact_name, group_subject')
-        .eq('business_id', businessId).eq('instance_name', instanceName)
-        .or(`remote_jid.in.(${candidates}),remote_jid_alt.in.(${candidates})`)
-        .limit(2)
-      if (error) throw new Error('conversation_alias_lookup_failed')
-      if ((data ?? []).length > 1) throw new Error('conversation_identity_ambiguous')
-      existing = data?.[0] ?? null
-    }
-  }
+  const existing = await findConversationByJidOrAlias(admin, businessId, instanceName, remoteJid, remoteJidAlt)
 
   if (existing?.id) {
     const update: JsonRecord = {}
@@ -337,8 +383,11 @@ async function upsertConversation(
     }
     if (isGroup) update.contact_phone = null
     else if (safePhone) update.contact_phone = safePhone
-    const resolvedAltJid = [remoteJidAlt, remoteJid].find((candidate) => candidate && candidate !== existing.remote_jid)
-    if (resolvedAltJid) update.remote_jid_alt = resolvedAltJid
+    const resolvedAltJid = await safeAlternateJid(
+      admin, businessId, instanceName, existing.id as string, existing.remote_jid,
+      remoteJidAlt, remoteJid, stringValue(existing.remote_jid_alt, 256),
+    )
+    update.remote_jid_alt = resolvedAltJid
     const existingPhone = stringValue(existing.contact_phone, 64)
     const existingJidAlt = stringValue(existing.remote_jid_alt, 256)
     const matchingPhone = isGroup ? null : safePhone
@@ -361,11 +410,12 @@ async function upsertConversation(
     return existing.id as string
   }
 
+  const safeAltJid = isGroup ? null : await safeAlternateJid(admin, businessId, instanceName, null, remoteJid, remoteJidAlt)
   const row: JsonRecord = {
     business_id: businessId,
     instance_name: instanceName,
     remote_jid: remoteJid,
-    remote_jid_alt: remoteJidAlt,
+    remote_jid_alt: safeAltJid,
     contact_name: isGroup ? null : name,
     group_subject: isGroup ? name : null,
     contact_phone: safePhone,
@@ -556,45 +606,13 @@ async function processChatOrContactEvent(
     const update: JsonRecord = {}
     if (name) update.contact_name = name
     if (phone) update.contact_phone = phone
-    const { data: conversation, error: conversationLookupError } = await admin.from('whatsapp_conversations')
-      .select('id, remote_jid')
-      .eq('business_id', businessId).eq('instance_name', instanceName).eq('remote_jid', jid).maybeSingle()
-    if (conversationLookupError) throw new Error('contact_update_save_failed')
-    let matchedConversation = conversation
-    if (!matchedConversation) {
-      const aliases = [...new Set([jid, jidAlt].filter(isDirectWhatsAppJid))]
-      if (aliases.length) {
-        const { data: aliasRows, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
-          .select('conversation_id')
-          .eq('business_id', businessId).eq('instance_name', instanceName).in('remote_jid', aliases).limit(3)
-        if (aliasError) throw new Error('contact_alias_lookup_failed')
-        const conversationIds = [...new Set((aliasRows ?? []).map((alias: JsonRecord) => String(alias.conversation_id)))]
-        if (conversationIds.length > 1) throw new Error('contact_alias_lookup_failed')
-        if (conversationIds.length === 1) {
-          const { data, error } = await admin.from('whatsapp_conversations')
-            .select('id, remote_jid')
-            .eq('business_id', businessId).eq('instance_name', instanceName).eq('id', conversationIds[0]).maybeSingle()
-          if (error) throw new Error('contact_alias_lookup_failed')
-          matchedConversation = data
-        }
-      }
-    }
-    if (!matchedConversation) {
-      const aliases = [...new Set([jid, jidAlt].filter(isDirectWhatsAppJid))]
-      if (aliases.length) {
-        const candidates = aliases.join(',')
-        const { data, error } = await admin.from('whatsapp_conversations')
-          .select('id, remote_jid')
-          .eq('business_id', businessId).eq('instance_name', instanceName)
-          .or(`remote_jid.in.(${candidates}),remote_jid_alt.in.(${candidates})`)
-          .limit(2)
-        if (error || (data ?? []).length > 1) throw new Error('contact_alias_lookup_failed')
-        matchedConversation = data?.[0] ?? null
-      }
-    }
+    const matchedConversation = await findConversationByJidOrAlias(admin, businessId, instanceName, jid, jidAlt)
     if (!matchedConversation) continue
-    const resolvedAltJid = [jidAlt, jid].find((candidate) => candidate && candidate !== matchedConversation?.remote_jid)
-    if (resolvedAltJid) update.remote_jid_alt = resolvedAltJid
+    const resolvedAltJid = await safeAlternateJid(
+      admin, businessId, instanceName, matchedConversation.id, matchedConversation.remote_jid,
+      jidAlt, jid, stringValue(matchedConversation.remote_jid_alt, 256),
+    )
+    update.remote_jid_alt = resolvedAltJid
     if (Object.keys(update).length) {
       const { error } = await admin.from('whatsapp_conversations').update(update)
         .eq('business_id', businessId).eq('id', matchedConversation.id)
