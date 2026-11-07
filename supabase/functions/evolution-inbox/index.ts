@@ -29,6 +29,7 @@ const recentLegacySync = new Map<string, { at: number; result: JsonRecord }>()
 type ContactDirectory = Map<string, string>
 const recentContactNames = new Map<string, { at: number; directory: ContactDirectory }>()
 const recentGroupMetadata = new Map<string, { at: number; subject: string | null; pictureUrl: string | null }>()
+const recentGroupDirectory = new Map<string, { at: number; directory: Map<string, GroupMetadata> }>()
 
 type JsonRecord = Record<string, unknown>
 type EvolutionConfig = {
@@ -284,7 +285,7 @@ async function setEvolutionWebhook(config: EvolutionConfig): Promise<void> {
       enabled: true,
       url: config.webhookUrl,
       headers: { Authorization: `Bearer ${config.webhookSecret}` },
-      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
+      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUPS_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
       byEvents: false,
       base64: false,
     } }),
@@ -464,10 +465,16 @@ function evolutionInstanceName(entry: unknown): string | null {
   return text(instance.instanceName ?? instance.name, 120)
 }
 
-function conversationResponse(row: JsonRecord, lastMessage: JsonRecord | null, savedContactNames?: Map<string, string>) {
+function conversationResponse(
+  row: JsonRecord,
+  lastMessage: JsonRecord | null,
+  savedContactNames?: Map<string, string>,
+  groupDirectory?: Map<string, GroupMetadata>,
+) {
   const remoteJid = text(row.remote_jid, 256)
   const remoteJidAlt = text(row.remote_jid_alt, 256)
   const isGroup = isGroupJid(remoteJid)
+  const groupMetadata = remoteJid ? groupDirectory?.get(remoteJid.toLowerCase()) : null
   const canReply = Boolean(remoteJid && !remoteJid.startsWith('unknown-call:')
     && (!remoteJid.includes('@lid') || (remoteJidAlt && phoneFromWhatsAppJid(remoteJidAlt))))
   return {
@@ -478,7 +485,7 @@ function conversationResponse(row: JsonRecord, lastMessage: JsonRecord | null, s
     can_reply: canReply,
     unread_count: Number(row.unread_count) || 0,
     contact: {
-      name: isGroup ? row.group_subject ?? null : savedNameForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt),
+      name: isGroup ? groupMetadata?.subject ?? row.group_subject ?? null : savedNameForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt),
       phone: isGroup ? null : row.contact_phone ?? phoneFromWhatsAppJid(remoteJidAlt ?? '') ?? phoneFromWhatsAppJid(remoteJid ?? ''),
     },
     last_activity_at: row.last_activity_at,
@@ -491,7 +498,7 @@ function phoneFromWhatsAppJid(value: string): string | null {
   if (value.toLowerCase().includes('@lid') || isGroupJid(value)) return null
   const digits = value.split('@', 1)[0].split(':', 1)[0].replace(/\D/g, '')
   if (digits.length === 10 || digits.length === 11) return `+55${digits}`
-  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) return `+${digits}`
+  if (digits.length >= 8 && digits.length <= 15) return `+${digits}`
   return null
 }
 
@@ -584,8 +591,8 @@ function recordsFromEvolution(value: unknown, keys: string[]): JsonRecord[] {
 
 function evolutionName(row: JsonRecord, group: boolean): string | null {
   const candidates = group
-    ? [row.subject, row.name]
-    : [row.name]
+    ? [row.subject, row.groupSubject, row.group_subject]
+    : [row.name, row.pushName]
   for (const candidate of candidates) {
     const value = text(candidate, 160)
     if (value) return value
@@ -594,9 +601,9 @@ function evolutionName(row: JsonRecord, group: boolean): string | null {
 }
 
 function savedContactName(row: JsonRecord): string | null {
-  // Evolution's `name` is the local address-book label. `notify`,
-  // `verifiedName`, and `pushName` are remote profile labels and can be wrong.
-  return text(row.name, 160)
+  // Evolution serializes Baileys contact.name as `pushName` in its contact API.
+  // This only receives contact-directory records, never message-level pushName.
+  return text(row.name, 160) ?? text(row.pushName, 160) ?? text(row.verifiedName, 160)
 }
 
 type GroupMetadata = { subject: string | null; pictureUrl: string | null }
@@ -611,7 +618,7 @@ function groupMetadataFromEvolution(value: unknown): GroupMetadata {
     const row = queue.shift()!
     if (visited.has(row)) continue
     visited.add(row)
-    subject ??= text(row.subject ?? row.groupSubject ?? row.group_subject ?? row.name, 160)
+    subject ??= text(row.subject ?? row.groupSubject ?? row.group_subject, 160)
     const pictureValue = row.pictureUrl ?? row.profilePictureUrl ?? row.picture_url ?? row.picture
     pictureUrl ??= typeof pictureValue === 'string' ? text(pictureValue, 4096)
       : isRecord(pictureValue) ? text(pictureValue.url ?? pictureValue.pictureUrl, 4096) : null
@@ -622,11 +629,38 @@ function groupMetadataFromEvolution(value: unknown): GroupMetadata {
   return { subject, pictureUrl }
 }
 
+async function loadGroupDirectory(config: EvolutionConfig): Promise<Map<string, GroupMetadata>> {
+  const cacheKey = `${config.businessId}:${config.instanceName}`
+  const cached = recentGroupDirectory.get(cacheKey)
+  if (cached && Date.now() - cached.at < 5 * 60_000) return cached.directory
+  try {
+    const response = await evolutionRequest(config,
+      `/group/fetchAllGroups/${encodeURIComponent(config.instanceName)}?getParticipants=false`,
+      { method: 'GET', signal: AbortSignal.timeout(8_000) })
+    const groups = recordsFromEvolution(response, ['groups', 'records', 'data'])
+    const directory = new Map<string, GroupMetadata>()
+    for (const group of groups) {
+      const jid = text(group.id ?? group.groupJid ?? group.remoteJid ?? group.jid, 256)
+      if (!jid || !isGroupJid(jid)) continue
+      directory.set(jid.toLowerCase(), groupMetadataFromEvolution(group))
+    }
+    recentGroupDirectory.set(cacheKey, { at: Date.now(), directory })
+    return directory
+  } catch {
+    return new Map()
+  }
+}
+
 async function loadGroupMetadata(config: EvolutionConfig, remoteJid: string): Promise<GroupMetadata> {
   const cacheKey = `${config.businessId}:${config.instanceName}:${remoteJid.toLowerCase()}`
   const cached = recentGroupMetadata.get(cacheKey)
   if (cached && Date.now() - cached.at < 5 * 60_000) {
     return { subject: cached.subject, pictureUrl: cached.pictureUrl }
+  }
+  const fromDirectory = (await loadGroupDirectory(config)).get(remoteJid.toLowerCase())
+  if (fromDirectory && (fromDirectory.subject || fromDirectory.pictureUrl)) {
+    recentGroupMetadata.set(cacheKey, { at: Date.now(), ...fromDirectory })
+    return fromDirectory
   }
   try {
     const response = await evolutionRequest(config,
@@ -1333,10 +1367,12 @@ export default {
           }
         }
         const savedNames = await loadSavedContactNames(config)
+        const groupDirectory = await loadGroupDirectory(config)
         const conversations = (rows ?? []).map((row: JsonRecord) => conversationResponse(
           row,
           latestByConversation.get(String(row.id)) ?? null,
           savedNames,
+          groupDirectory,
         ))
         return json({ conversations, meta: {
           page,
@@ -1347,7 +1383,7 @@ export default {
 
       if (action === 'calls') {
         const { data: callRows, error } = await admin.from('whatsapp_call_events')
-          .select('id, conversation_id, caller_phone, call_state, is_video, occurred_at, provider_call_id')
+          .select('id, conversation_id, caller_jid, caller_phone, call_state, is_video, occurred_at, provider_call_id')
           .eq('business_id', businessId).eq('instance_name', config.instanceName)
           .order('occurred_at', { ascending: false })
           .limit(100)
@@ -1403,9 +1439,10 @@ export default {
             id: typeof row.provider_call_id === 'string' && row.provider_call_id ? row.provider_call_id : row.id,
             conversation_id: row.conversation_id,
             contact: {
-              name: savedNameForJids(savedNames, conversation?.remote_jid, conversation?.remote_jid_alt),
+              name: savedNameForJids(savedNames, conversation?.remote_jid, conversation?.remote_jid_alt, row.caller_jid),
               phone: row.caller_phone ?? conversation?.contact_phone
-                ?? phoneFromWhatsAppJid(String(conversation?.remote_jid_alt ?? conversation?.remote_jid ?? '')),
+                ?? phoneFromWhatsAppJid(String(conversation?.remote_jid_alt ?? conversation?.remote_jid ?? ''))
+                ?? phoneFromWhatsAppJid(String(row.caller_jid ?? '')),
             },
             customer_name: customerName,
             status: latest.call_state,
@@ -1585,6 +1622,7 @@ export default {
         .order('provider_timestamp', { ascending: false }).order('id', { ascending: false }).limit(500)
       if (reactionError) throw new RequestError(500, 'message_history_failed')
       const savedNames = await loadSavedContactNames(config)
+      const groupDirectory = await loadGroupDirectory(config)
       const messages = attachMessageReactions(initialRows, reactionRows ?? [], savedNames)
       const { data: callRows, error: callsError } = await admin.from('whatsapp_call_events')
         .select('id, call_state, is_video, occurred_at')
@@ -1600,7 +1638,7 @@ export default {
         occurred_at: row.occurred_at,
       }))
       return json({ conversation: {
-        ...conversationResponse(freshConversation as JsonRecord, null, savedNames),
+        ...conversationResponse(freshConversation as JsonRecord, null, savedNames, groupDirectory),
         last_message: messages.at(-1) ?? null,
         messages,
         calls,

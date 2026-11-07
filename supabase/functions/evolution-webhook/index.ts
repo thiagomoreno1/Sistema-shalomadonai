@@ -72,7 +72,7 @@ function phoneFromJid(value: string | null): string | null {
   const localPart = value.split('@', 1)[0].split(':', 1)[0]
   const digits = digitsOnly(localPart)
   if (digits.length === 10 || digits.length === 11) return `+55${digits}`
-  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) return `+${digits}`
+  if (digits.length >= 8 && digits.length <= 15) return `+${digits}`
   return null
 }
 
@@ -188,8 +188,8 @@ async function findConversationByJidOrAlias(
 
 function evolutionContactName(row: JsonRecord, isGroup: boolean): string | null {
   const candidates = isGroup
-    ? [row.subject, row.name]
-    : [row.name]
+    ? [row.subject, row.groupSubject, row.group_subject]
+    : [row.name, row.pushName, row.verifiedName]
   for (const candidate of candidates) {
     const name = stringValue(candidate, 160)
     if (name) return name
@@ -282,8 +282,8 @@ function messagePayload(value: unknown): JsonRecord | null {
   const fromMe = key?.fromMe === true
   const isGroup = isGroupJid(remoteJid)
   const senderName = stringValue(value.pushName, 160)
-  const participantJid = stringValue(key?.participant ?? key?.participantAlt, 256)
-  const participantAltJid = stringValue(key?.participantAlt, 256)
+  const participantJid = stringValue(key?.participant ?? key?.participantLid ?? key?.participantAlt, 256)
+  const participantAltJid = stringValue(key?.participantAlt ?? key?.participantPn ?? key?.senderPn, 256)
   if (isGroup && senderName) mediaMetadata.sender_name = senderName
   if (participantJid) mediaMetadata.participant_jid = participantJid
   if (participantAltJid) mediaMetadata.participant_alt_jid = participantAltJid
@@ -531,19 +531,32 @@ async function processMessageDelete(admin: AdminClient, businessId: string, inst
 async function processCallEvent(admin: AdminClient, businessId: string, instanceName: string, value: unknown) {
   const callData = isRecord(value) && isRecord(value.packet) ? value.packet : value
   if (!isRecord(callData)) return
-  const callerJid = stringValue(callData.from ?? callData.remoteJid, 256)
-  const callerJidAlt = stringValue(callData.remoteJidAlt ?? callData.fromAlt, 256)
-  const providerCallId = stringValue(callData.id ?? callData.callId, 256)
-  const callState = stringValue(callData.status ?? callData.state ?? callData.event, 64)
-  const timestampValue = callData.date ?? callData.timestamp ?? callData.messageTimestamp
+  const packetAttrs = isRecord(callData.attrs) ? callData.attrs : {}
+  const children = Array.isArray(callData.content) ? callData.content.filter(isRecord) : []
+  const callChild = children.find((child) => isRecord(child.attrs)
+    && ['offer', 'terminate', 'reject', 'accept', 'ringing'].includes(stringValue(child.tag, 32)?.toLowerCase() ?? ''))
+    ?? children[0]
+  const childAttrs = callChild && isRecord(callChild.attrs) ? callChild.attrs : {}
+  const callerJid = stringValue(packetAttrs.from ?? callData.from ?? callData.remoteJid, 256)
+  const callerJidAlt = stringValue(childAttrs.caller_pn ?? childAttrs.callerPn
+    ?? packetAttrs.caller_pn ?? callData.remoteJidAlt ?? callData.fromAlt, 256)
+  const providerCallId = stringValue(childAttrs['call-id'] ?? packetAttrs['call-id']
+    ?? callData.id ?? callData.callId, 256)
+  const callState = stringValue(callChild?.tag ?? packetAttrs.state ?? callData.status ?? callData.state ?? callData.event, 64)
+  const timestampValue = packetAttrs.t ?? childAttrs.t ?? callData.date ?? callData.timestamp ?? callData.messageTimestamp
   const occurredAt = isoTimestamp(timestampValue)
-  const isVideo = typeof callData.isVideo === 'boolean' ? callData.isVideo
-    : typeof callData.is_video === 'boolean' ? callData.is_video : null
+  const videoValue = callChild?.tag === 'video' ? true
+    : callData.isVideo ?? callData.is_video ?? childAttrs.video ?? packetAttrs.video
+  const isVideo = typeof videoValue === 'boolean' ? videoValue
+    : typeof videoValue === 'string' && ['true', '1', 'video'].includes(videoValue.toLowerCase()) ? true
+      : typeof videoValue === 'string' && ['false', '0', 'audio'].includes(videoValue.toLowerCase()) ? false
+        : null
   const stableIdentity = providerCallId
     ? `${providerCallId}|${callState ?? ''}`
     : [callerJid ?? '', callState ?? '', stringValue(timestampValue, 128) ?? JSON.stringify(callData)].join('|')
   const eventKey = await hashKey(stableIdentity)
-  const remoteJid = callerJid ?? `unknown-call:${eventKey}`
+  const remoteJid = callerJid ?? callerJidAlt ?? `unknown-call:${eventKey}`
+  const callerPhone = phoneFromJid(callerJidAlt) ?? phoneFromJid(callerJid)
   const conversationId = await upsertConversation(
     admin,
     businessId,
@@ -551,7 +564,7 @@ async function processCallEvent(admin: AdminClient, businessId: string, instance
     remoteJid,
     callerJidAlt,
     null,
-    phoneFromJid(callerJidAlt) ?? phoneFromJid(callerJid),
+    callerPhone,
     occurredAt,
   )
   const { error } = await admin.from('whatsapp_call_events').upsert({
@@ -560,8 +573,8 @@ async function processCallEvent(admin: AdminClient, businessId: string, instance
     instance_name: instanceName,
     provider_event_key: eventKey,
     provider_call_id: providerCallId,
-    caller_jid: callerJid,
-    caller_phone: phoneFromJid(callerJidAlt) ?? phoneFromJid(callerJid),
+    caller_jid: callerJid ?? callerJidAlt,
+    caller_phone: callerPhone,
     event_name: 'CALL',
     call_state: callState,
     is_video: isVideo,
@@ -590,8 +603,8 @@ async function processChatOrContactEvent(
     const isChatEvent = event.startsWith('CHATS_') || isGroupEvent
     const isGroup = isGroupEvent || isGroupJid(jid)
     const hasProviderSavedName = isGroup
-      ? Boolean(stringValue(row.subject ?? row.name, 160))
-      : isContactEvent && Boolean(stringValue(row.name, 160))
+      ? Boolean(stringValue(row.subject ?? row.groupSubject ?? row.group_subject, 160))
+      : isContactEvent && Boolean(stringValue(row.name ?? row.pushName ?? row.verifiedName, 160))
     const name = isGroup
       ? evolutionContactName(row, true)
       : isContactEvent && hasProviderSavedName ? evolutionContactName(row, false) : null
@@ -606,7 +619,9 @@ async function processChatOrContactEvent(
     if (!isContactEvent) continue
     if (isGroup) continue
     const update: JsonRecord = {}
-    if (Object.prototype.hasOwnProperty.call(row, 'name')) update.contact_name = name
+    if (Object.prototype.hasOwnProperty.call(row, 'name')
+      || Object.prototype.hasOwnProperty.call(row, 'pushName')
+      || Object.prototype.hasOwnProperty.call(row, 'verifiedName')) update.contact_name = name
     if (phone) update.contact_phone = phone
     const matchedConversation = await findConversationByJidOrAlias(admin, businessId, instanceName, jid, jidAlt)
     if (!matchedConversation) continue
