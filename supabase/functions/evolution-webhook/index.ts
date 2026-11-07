@@ -188,8 +188,8 @@ async function findConversationByJidOrAlias(
 
 function evolutionContactName(row: JsonRecord, isGroup: boolean): string | null {
   const candidates = isGroup
-    ? [row.subject, row.name, row.verifiedName]
-    : [row.name, row.notify, row.verifiedName, row.pushName]
+    ? [row.subject, row.name]
+    : [row.name]
   for (const candidate of candidates) {
     const name = stringValue(candidate, 160)
     if (name) return name
@@ -301,9 +301,9 @@ function messagePayload(value: unknown): JsonRecord | null {
     id: messageId,
     remote_jid: remoteJid,
     remote_jid_alt: remoteJidAlt,
-    // pushName is a useful fallback only for individual chats. In groups it is
-    // the participant's name, never the group title.
-    contact_name: isGroup ? null : senderName,
+    // pushName is a profile label, not the name saved in the account's contacts.
+    // CONTACTS_* events provide the authoritative local label.
+    contact_name: null,
     contact_phone: isGroup ? null : phoneFromJid(remoteJidAlt) ?? phoneFromJid(remoteJid),
     direction: fromMe ? 'outgoing' : 'incoming',
     message_kind: kind,
@@ -550,7 +550,7 @@ async function processCallEvent(admin: AdminClient, businessId: string, instance
     instanceName,
     remoteJid,
     callerJidAlt,
-    stringValue(callData.pushName, 160),
+    null,
     phoneFromJid(callerJidAlt) ?? phoneFromJid(callerJid),
     occurredAt,
   )
@@ -590,9 +590,11 @@ async function processChatOrContactEvent(
     const isChatEvent = event.startsWith('CHATS_') || isGroupEvent
     const isGroup = isGroupEvent || isGroupJid(jid)
     const hasProviderSavedName = isGroup
-      ? Boolean(stringValue(row.subject ?? row.name ?? row.verifiedName, 160))
-      : Boolean(stringValue(row.name ?? row.notify ?? row.verifiedName, 160))
-    const name = isContactEvent && !hasProviderSavedName ? null : evolutionContactName(row, isGroup)
+      ? Boolean(stringValue(row.subject ?? row.name, 160))
+      : isContactEvent && Boolean(stringValue(row.name, 160))
+    const name = isGroup
+      ? evolutionContactName(row, true)
+      : isContactEvent && hasProviderSavedName ? evolutionContactName(row, false) : null
     const phone = isGroup ? null : phoneFromJid(jidAlt) ?? phoneFromJid(jid)
     if (isChatEvent) {
       const unread = typeof row.unreadCount === 'number' ? row.unreadCount
@@ -604,7 +606,7 @@ async function processChatOrContactEvent(
     if (!isContactEvent) continue
     if (isGroup) continue
     const update: JsonRecord = {}
-    if (name) update.contact_name = name
+    if (Object.prototype.hasOwnProperty.call(row, 'name')) update.contact_name = name
     if (phone) update.contact_phone = phone
     const matchedConversation = await findConversationByJidOrAlias(admin, businessId, instanceName, jid, jidAlt)
     if (!matchedConversation) continue

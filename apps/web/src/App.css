@@ -1369,14 +1369,12 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .whatsapp-attachment.is-sticker .whatsapp-attachment-load svg { display: none; }
 .whatsapp-attachment.is-sticker .whatsapp-attachment-load span::before { display: block; margin-bottom: 4px; color: #008f72; content: '▧'; font-size: 28px; text-align: center; }
 .whatsapp-attachment-audio { display: block; width: min(100%, 340px); min-height: 44px; }
-.whatsapp-attachment-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
-.whatsapp-attachment-download, .whatsapp-attachment-close { display: inline-flex; min-height: 44px; align-items: center; color: var(--accent); font: inherit; font-weight: 650; }
-.whatsapp-attachment-close { padding: 0; border: 0; background: transparent; cursor: pointer; }
+.whatsapp-attachment-document { display: inline-flex; min-height: 40px; align-items: center; color: var(--accent); font-size: 11px; font-weight: 650; }
 .whatsapp-attachment-status, .whatsapp-attachment-error { display: block; margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .whatsapp-attachment-error { color: var(--danger, #a12c2c); }
 .whatsapp-attachment-preview-region:focus { outline: 2px solid color-mix(in srgb, var(--accent) 54%, transparent); outline-offset: 3px; border-radius: 4px; }
 .whatsapp-message-label { display: block; margin-bottom: 5px; color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.whatsapp-message footer { display: flex; justify-content: flex-end; gap: 9px; margin-top: 6px; color: var(--quiet); font-size: 9px; }
+.whatsapp-message footer { display: flex; align-items: center; justify-content: flex-end; gap: 7px; margin-top: 6px; color: var(--quiet); font-size: 9px; }
 .whatsapp-message-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .whatsapp-reaction-chip { display: inline-flex; min-height: 26px; align-items: center; gap: 4px; padding: 0 7px; border: 1px solid #d7ded9; border-radius: 999px; color: #36423d; background: #fff; font-size: 12px; cursor: pointer; }
 .whatsapp-reaction-chip.is-mine { border-color: #00a884; background: #e7f5ef; }
@@ -1387,9 +1385,14 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .whatsapp-reaction-picker[open] > div { position: absolute; z-index: 2; right: 0; bottom: calc(100% + 5px); display: flex; gap: 3px; padding: 5px; border: 1px solid #d7ded9; border-radius: 9px; background: #fff; box-shadow: 0 4px 14px rgba(24, 43, 34, 0.16); }
 .whatsapp-reaction-picker button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 6px; background: transparent; font-size: 19px; cursor: pointer; }
 .whatsapp-reaction-picker button:hover { background: #e7f5ef; }
-.whatsapp-message-delivery { font-size: 11px; font-weight: 650; white-space: nowrap; }
-.whatsapp-message-delivery.is-sent, .whatsapp-message-delivery.is-delivered, .whatsapp-message-delivery.is-read { color: var(--accent); }
+.whatsapp-message-delivery { display: inline-flex; width: 15px; height: 15px; flex: 0 0 auto; align-items: center; color: #86959d; }
+.whatsapp-message-delivery svg { display: block; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+.whatsapp-message-delivery.is-sent { color: #73818a; }
+.whatsapp-message-delivery.is-delivered { color: #73818a; }
+.whatsapp-message-delivery.is-read, .whatsapp-message-delivery.is-played { color: #34a8e4; }
+.whatsapp-message-delivery.is-pending { color: #71818a; }
 .whatsapp-message-delivery.is-failed { color: var(--danger, #a12c2c); }
+.whatsapp-message-delivery.is-deleted { color: #71818a; }
 .whatsapp-call-event { display: flex; align-self: center; align-items: center; gap: 10px; max-width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--paper); }
 .whatsapp-call-event-icon { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: var(--accent); background: var(--accent-soft); font-size: 11px; font-weight: 700; }
 .whatsapp-call-event div { display: grid; gap: 3px; min-width: 0; }

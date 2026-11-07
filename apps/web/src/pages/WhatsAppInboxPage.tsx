@@ -24,7 +24,7 @@ type Message = {
   message_type: 'incoming' | 'outgoing' | 'activity'
   status: 'pending' | 'sent' | 'delivered' | 'read' | 'played' | 'failed' | 'deleted' | null
   private: boolean
-  sender: { name: string | null }
+  sender: { name: string | null; phone?: string | null }
   attachments: Attachment[]
   message_kind: string | null
   reactions?: { emoji: string; count: number; from_me: boolean }[]
@@ -78,6 +78,13 @@ function messageKindLabel(value: string | null | undefined) {
   return 'Mensagem sem texto'
 }
 
+function attachmentName(attachment: Attachment) {
+  const extension = attachment.extension && /^[a-z0-9]{1,16}$/i.test(attachment.extension)
+    ? `.${attachment.extension}`
+    : ''
+  return `whatsapp-anexo-${attachment.id}${extension}`
+}
+
 function timestampLabel(value: string | null | undefined) {
   if (!value) return 'Agora'
   const date = new Date(value)
@@ -110,9 +117,44 @@ function messageDeliveryLabel(value: Message['status']) {
   if (value === 'delivered') return 'Entregue'
   if (value === 'read') return 'Lida'
   if (value === 'played') return 'Reproduzida'
-  if (value === 'failed') return 'Falhou'
-  if (value === 'deleted') return 'Apagada'
+  if (value === 'failed') return 'Não enviada'
+  if (value === 'deleted') return 'Mensagem apagada'
   return null
+}
+
+function MessageDeliveryIndicator({ status }: { status: Message['status'] }) {
+  const label = messageDeliveryLabel(status)
+  if (!label) return null
+
+  return <span aria-label={label} className={`whatsapp-message-delivery is-${status}`} role="img" title={label}>
+    <svg aria-hidden="true" viewBox={status === 'pending' || status === 'failed' ? '0 0 16 16' : '0 0 20 14'}>
+      {status === 'pending' && <>
+        <circle cx="8" cy="8" r="6.1" />
+        <path d="M8 4.4v3.9l2.6 1.5" />
+      </>}
+      {status === 'failed' && <>
+        <circle cx="8" cy="8" r="6.1" />
+        <path d="M8 4.7v4.1M8 11.2v.1" />
+      </>}
+      {status === 'sent' && <path d="m3 7.5 3.1 3.1L13 3.7" />}
+      {(status === 'delivered' || status === 'read' || status === 'played') && <>
+        <path d="m1.5 7.4 3.1 3.1 6.8-6.9" />
+        <path d="m7.2 7.4 3.1 3.1 6.8-6.9" />
+      </>}
+      {status === 'deleted' && <path d="M5 5l6 6M11 5l-6 6" />}
+    </svg>
+  </span>
+}
+
+function conversationDisplayName(conversation: Conversation | null | undefined, loading = false) {
+  if (!conversation) return loading ? 'Carregando contato…' : 'Conversa'
+  if (conversation.contact.name?.trim()) return conversation.contact.name.trim()
+  if (conversation.is_group) return 'Grupo sem identificação'
+  return conversation.contact.phone || 'Número não disponível'
+}
+
+function senderDisplayName(sender: Message['sender'], fallback: string) {
+  return sender.name?.trim() || sender.phone || fallback
 }
 
 function orderLabel(order: Order) {
@@ -259,13 +301,6 @@ const SAFE_INLINE_ATTACHMENT_TYPES = new Set([
   'video/mp4', 'video/webm', 'video/3gpp',
 ])
 
-function attachmentName(attachment: Attachment) {
-  const extension = attachment.extension && /^[a-z0-9]{1,16}$/i.test(attachment.extension)
-    ? `.${attachment.extension}`
-    : ''
-  return `whatsapp-anexo-${attachment.id}${extension}`
-}
-
 function attachmentSizeLabel(bytes: number | null) {
   if (!bytes || bytes < 1) return ''
   const size = bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -305,9 +340,11 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
   const autoLoading = useRef(false)
   const autoLoadAttempted = useRef(false)
   const focusAfterRequest = useRef(false)
-  const name = attachmentName(attachment)
+  const playbackActive = useRef(false)
+  const previewVisible = useRef(false)
   const isSticker = sticker || attachment.file_type === 'sticker'
   const tooLarge = sizeRejected || (attachment.file_size !== null && attachment.file_size > 10 * 1024 * 1024)
+  const name = attachmentName(attachment)
 
   useEffect(() => {
     mounted.current = true
@@ -339,6 +376,26 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
     observer.observe(container)
     return () => observer.disconnect()
   }, [attachment.file_type, error, file, sticker, tooLarge])
+
+  useEffect(() => {
+    const isInlineMedia = sticker || ['image', 'sticker', 'audio', 'video'].includes(attachment.file_type ?? '')
+    const region = previewRegion.current
+    if (!file || !isInlineMedia || !region || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        previewVisible.current = entry.isIntersecting
+        if (entry.isIntersecting || playbackActive.current || region.contains(document.activeElement)) continue
+        if (objectUrl.current === file.url) {
+          URL.revokeObjectURL(file.url)
+          objectUrl.current = null
+          autoLoadAttempted.current = false
+          setFile(null)
+        }
+      }
+    }, { rootMargin: '180px' })
+    observer.observe(region)
+    return () => observer.disconnect()
+  }, [attachment.file_type, file, sticker])
 
   async function loadAttachment() {
     if (!supabaseClient || loading || file || tooLarge) return
@@ -377,40 +434,40 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
     focusAfterRequest.current = true
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current)
     objectUrl.current = null
+    playbackActive.current = false
     setFile(null)
     setError(true)
   }
 
-  function closePreview() {
-    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current)
-    objectUrl.current = null
-    setFile(null)
-    setError(false)
-    window.requestAnimationFrame(() => loadButton.current?.focus())
+  function handlePlaybackEnd() {
+    playbackActive.current = false
+    if (!previewVisible.current && objectUrl.current === file?.url) {
+      URL.revokeObjectURL(file.url)
+      objectUrl.current = null
+      autoLoadAttempted.current = false
+      setFile(null)
+    }
   }
 
   const label = `${isSticker ? 'Figurinha' : attachmentKindLabel(attachment)}${attachmentSizeLabel(attachment.file_size)}`
   if (!file) return (
-    <div className={`whatsapp-attachment${isSticker ? ' is-sticker' : ''}`} ref={attachmentContainer}>
+    <div aria-busy={loading} className={`whatsapp-attachment${isSticker ? ' is-sticker' : ''}`} ref={attachmentContainer}>
       {tooLarge && <p className="whatsapp-attachment-error" role="alert">Este anexo excede o limite de 10 MiB.</p>}
-      {!tooLarge && <button className="whatsapp-attachment-load" disabled={loading} onClick={() => void loadAttachment()} ref={loadButton} type="button">
+      {!tooLarge && <button aria-label={loading ? `Carregando ${label.toLocaleLowerCase('pt-BR')}` : error ? `Tentar abrir ${label.toLocaleLowerCase('pt-BR')} novamente` : `Abrir ${label.toLocaleLowerCase('pt-BR')}`} className="whatsapp-attachment-load" disabled={loading} onClick={() => void loadAttachment()} ref={loadButton} type="button">
         <Icon name="file" />
         <span>{error ? 'Não foi possível abrir · tentar novamente' : `Abrir ${label}`}</span>
       </button>}
-      {loading && <span className="whatsapp-attachment-status" role="status">Carregando anexo…</span>}
+      {loading && <span aria-live="polite" className="whatsapp-attachment-status" role="status">Carregando anexo…</span>}
       {error && <span className="whatsapp-attachment-error" role="alert">O arquivo não abriu. Você pode tentar carregar novamente.</span>}
     </div>
   )
 
   return (
-    <div aria-label={`${label} carregado`} className={`whatsapp-attachment-preview-region${isSticker ? ' is-sticker' : ''}`} ref={previewRegion} role="group" tabIndex={-1}>
+    <div aria-busy={loading} aria-label={`${label} carregado`} className={`whatsapp-attachment-preview-region${isSticker ? ' is-sticker' : ''}`} ref={previewRegion} role="group" tabIndex={-1}>
       {file.mimeType.startsWith('image/') && <a aria-label={`Abrir ${label} em tamanho maior`} className="whatsapp-image-link" href={file.url} rel="noreferrer" target="_blank"><img className="whatsapp-attachment-preview" alt={label} loading="lazy" onError={handlePreviewError} src={file.url} /></a>}
-      {file.mimeType.startsWith('audio/') && <audio aria-label={label} className="whatsapp-attachment-audio" controls onError={handlePreviewError} preload="metadata" src={file.url}>{`Seu navegador não reproduz ${label.toLocaleLowerCase('pt-BR')}.`}</audio>}
-      {file.mimeType.startsWith('video/') && <video aria-label={label} className="whatsapp-attachment-video" controls onError={handlePreviewError} playsInline preload="metadata" src={file.url}>{`Seu navegador não reproduz ${label.toLocaleLowerCase('pt-BR')}.`}</video>}
-      <div className="whatsapp-attachment-actions">
-        <a className="whatsapp-attachment-download" download={name} href={file.url}>Baixar {label.toLocaleLowerCase('pt-BR')}</a>
-        <button className="whatsapp-attachment-close" onClick={closePreview} type="button">Fechar anexo</button>
-      </div>
+      {file.mimeType.startsWith('audio/') && <audio aria-label={label} className="whatsapp-attachment-audio" controls onEnded={handlePlaybackEnd} onError={handlePreviewError} onPause={handlePlaybackEnd} onPlay={() => { playbackActive.current = true }} preload="metadata" src={file.url}>{`Seu navegador não reproduz ${label.toLocaleLowerCase('pt-BR')}.`}</audio>}
+      {file.mimeType.startsWith('video/') && <video aria-label={label} className="whatsapp-attachment-video" controls onEnded={handlePlaybackEnd} onError={handlePreviewError} onPause={handlePlaybackEnd} onPlay={() => { playbackActive.current = true }} playsInline preload="metadata" src={file.url}>{`Seu navegador não reproduz ${label.toLocaleLowerCase('pt-BR')}.`}</video>}
+      {file.mimeType === 'application/octet-stream' && <a className="whatsapp-attachment-document" download={name} href={file.url}>Baixar arquivo</a>}
     </div>
   )
 }
@@ -1144,7 +1201,7 @@ export function WhatsAppInboxPage() {
             {conversations.map((conversation) => <li key={conversation.id}>
               <button aria-current={selectedId === conversation.id ? 'true' : undefined} className={`whatsapp-conversation-item${selectedId === conversation.id ? ' is-selected' : ''}${conversation.unread_count > 0 ? ' has-unread' : ''}`} onClick={() => { setSelectedConversation(null); setSelectedId(conversation.id) }} type="button">
                 <WhatsAppAvatar businessId={businessId} conversation={conversation} />
-                <span className="whatsapp-conversation-copy"><strong>{conversation.contact.name || (conversation.is_group ? 'Grupo sem nome' : conversation.contact.phone || 'Contato sem nome')}</strong><small>{conversation.is_group && <span className="whatsapp-group-label">Grupo · </span>}{conversation.is_group && conversation.last_message?.message_type === 'incoming' && conversation.last_message.sender.name && <>{conversation.last_message.sender.name}: </>}{conversation.last_message?.content || (conversation.last_message?.attachments.length ? `${conversation.last_message.attachments.length} anexo(s)` : 'Sem mensagem de texto')}</small></span>
+                <span className="whatsapp-conversation-copy"><strong>{conversationDisplayName(conversation)}</strong><small>{conversation.is_group && <span className="whatsapp-group-label">Grupo · </span>}{conversation.is_group && conversation.last_message?.message_type === 'incoming' && <>{senderDisplayName(conversation.last_message.sender, 'Participante')}: </>}{conversation.last_message?.content || (conversation.last_message?.attachments.length ? `${conversation.last_message.attachments.length} anexo(s)` : 'Sem mensagem de texto')}</small></span>
                 <span className="whatsapp-conversation-meta"><span className="whatsapp-conversation-meta-top"><time>{timestampLabel(conversation.last_activity_at)}</time>{conversation.unread_count > 0 && <span aria-label={`${conversation.unread_count} mensagens não lidas`} className="whatsapp-unread-count">{conversation.unread_count > 99 ? '99+' : conversation.unread_count}</span>}</span>{links[conversation.id]?.customer_id && <span className="whatsapp-linked-mark">Cliente vinculado</span>}</span>
               </button>
             </li>)}
@@ -1158,7 +1215,7 @@ export function WhatsAppInboxPage() {
         {!selectedId ? <div className="whatsapp-chat-empty"><Icon name="message" /><h2>Selecione uma conversa</h2><p>O histórico e as ações aparecem aqui.</p></div> : <>
           <header className="whatsapp-chat-heading">
             <button className="text-button whatsapp-back-button" onClick={() => setSelectedId(null)} type="button">← Conversas</button>
-            <div className="whatsapp-chat-contact"><WhatsAppAvatar businessId={businessId} conversation={currentConversation} /><div><h2>{currentConversation?.contact.name || (detailLoading ? 'Carregando contato…' : currentConversation?.is_group ? 'Grupo sem nome' : 'Contato')}</h2><span>{currentConversation?.is_group ? 'Grupo do WhatsApp' : currentConversation?.contact.phone || 'Telefone indisponível'}</span></div></div>
+            <div className="whatsapp-chat-contact"><WhatsAppAvatar businessId={businessId} conversation={currentConversation} /><div><h2>{conversationDisplayName(currentConversation, detailLoading)}</h2><span>{currentConversation?.is_group ? 'Grupo do WhatsApp' : currentConversation?.contact.phone || 'Telefone indisponível'}</span></div></div>
             <div className="whatsapp-chat-actions">
               <span className={`whatsapp-status-pill${currentConversation?.status === 'open' ? '' : ' is-resolved'}`}>{statusLabel(currentConversation?.status)}</span>
               <button className="button button-secondary" disabled={statusSaving || !currentConversation || !['open', 'resolved'].includes(currentConversation.status)} onClick={() => void handleStatusChange(currentConversation?.status === 'resolved' ? 'open' : 'resolved')} type="button">{statusSaving ? 'Salvando…' : currentConversation?.status === 'resolved' ? 'Reabrir' : 'Resolver'}</button>
@@ -1185,7 +1242,7 @@ export function WhatsAppInboxPage() {
                   {!event.message.content && event.message.attachments.length === 0 && <p className="whatsapp-message-attachment">{event.message.message_type === 'activity' ? 'Atualização da conversa' : messageKindLabel(event.message.message_kind)}</p>}
                   {event.message.attachments.map((attachment) => <MessageAttachment attachment={attachment} businessId={businessId} conversationId={currentConversation?.id ?? ''} key={attachment.id} messageId={event.message.id} sticker={event.message.message_kind === 'sticker'} />)}
                   {event.message.reactions && event.message.reactions.length > 0 && <div aria-label="Reações da mensagem" className="whatsapp-message-reactions">{event.message.reactions.map((reaction) => <button aria-label={`${reaction.count} ${reaction.emoji}${reaction.from_me ? ', sua reação. Remover reação' : ''}`} aria-pressed={reaction.from_me} className={`whatsapp-reaction-chip${reaction.from_me ? ' is-mine' : ''}`} disabled={!currentConversation?.can_reply || reactionSavingMessageId === event.message.id} key={reaction.emoji} onClick={() => void handleReactToMessage(event.message.id, reaction.from_me ? '' : reaction.emoji)} type="button"><span aria-hidden="true">{reaction.emoji}</span><span>{reaction.count}</span></button>)}</div>}
-                  <footer><span>{event.message.message_type === 'outgoing' ? 'Você' : event.message.sender.name || (currentConversation?.is_group ? 'Participante' : currentConversation?.contact.name || 'Contato')}</span><time>{timestampLabel(event.message.created_at)}</time>{event.message.message_type === 'outgoing' && !event.message.private && event.message.status && <span className={`whatsapp-message-delivery is-${event.message.status}`}>{messageDeliveryLabel(event.message.status)}</span>}{currentConversation?.can_reply && !event.message.private && event.message.message_type !== 'activity' && <details className="whatsapp-reaction-picker"><summary aria-label="Adicionar reação" title="Adicionar reação">☺</summary><div aria-label="Escolha uma reação" role="group">{COMMON_REACTIONS.map((emoji) => <button aria-label={`Reagir com ${emoji}`} disabled={reactionSavingMessageId === event.message.id} key={emoji} onClick={(clickEvent) => { clickEvent.currentTarget.closest('details')?.removeAttribute('open'); void handleReactToMessage(event.message.id, emoji) }} type="button">{emoji}</button>)}</div></details>}</footer>
+                  <footer><span>{event.message.message_type === 'outgoing' ? 'Você' : senderDisplayName(event.message.sender, currentConversation?.is_group ? 'Participante' : conversationDisplayName(currentConversation))}</span><time>{timestampLabel(event.message.created_at)}</time>{event.message.message_type === 'outgoing' && !event.message.private && <MessageDeliveryIndicator status={event.message.status} />}{currentConversation?.can_reply && !event.message.private && event.message.message_type !== 'activity' && <details className="whatsapp-reaction-picker"><summary aria-label="Adicionar reação" title="Adicionar reação">☺</summary><div aria-label="Escolha uma reação" role="group">{COMMON_REACTIONS.map((emoji) => <button aria-label={`Reagir com ${emoji}`} disabled={reactionSavingMessageId === event.message.id} key={emoji} onClick={(clickEvent) => { clickEvent.currentTarget.closest('details')?.removeAttribute('open'); void handleReactToMessage(event.message.id, emoji) }} type="button">{emoji}</button>)}</div></details>}</footer>
                 </article>)}
             {!detailLoading && conversationTimeline.length === 0 && <p className="whatsapp-chat-empty-history">Ainda não há mensagens ou chamadas nesta conversa.</p>}
           </div>
