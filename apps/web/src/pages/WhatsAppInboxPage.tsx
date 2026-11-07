@@ -5,9 +5,11 @@ import { Icon } from '../components/Icon'
 import { supabaseClient } from '../lib/supabase'
 
 type InboxStatus = 'open' | 'resolved' | 'all'
+type ContactListSegment = 'customers' | 'conversations' | 'hidden'
+type ContactClassification = 'unclassified' | 'customer' | 'personal'
 
-function conversationScopeKey(status: InboxStatus, search: string): string {
-  return JSON.stringify([status, search])
+function conversationScopeKey(status: InboxStatus, search: string, segment: ContactListSegment): string {
+  return JSON.stringify([status, search, segment])
 }
 type Attachment = {
   id: string
@@ -35,6 +37,9 @@ type Conversation = {
   status: string
   can_reply: boolean
   is_group?: boolean
+  display_name_override: string | null
+  contact_classification: ContactClassification
+  hidden_from_inbox: boolean
   unread_count: number
   contact: { name: string | null; phone: string | null }
   last_activity_at: string | null
@@ -45,7 +50,7 @@ type Conversation = {
 type Customer = { id: string; name: string; phone: string | null; whatsapp_phone: string | null }
 type Order = { id: string; created_at: string; status: 'open' | 'cancelled'; total_cents: number }
 type ConversationLink = { conversation_id: string; customer_id: string | null; order_id: string | null; match_method: 'phone' | 'manual' }
-type CallEvent = { id: string; conversation_id: string; contact: { name: string | null; phone: string | null }; customer_name?: string | null; status: string | null; status_label: string; is_video: boolean | null; occurred_at: string; event_count?: number; states?: string[] }
+type CallEvent = { id: string; conversation_id: string; contact: { name: string | null; phone: string | null }; display_name_override?: string | null; contact_classification?: ContactClassification; hidden_from_inbox?: boolean; customer_name?: string | null; status: string | null; status_label: string; is_video: boolean | null; occurred_at: string; event_count?: number; states?: string[] }
 type ConversationListResponse = { conversations?: Conversation[]; meta?: { page?: number; has_more?: boolean; history_sync?: { status?: string; notice?: string } } }
 type ConversationDetailResponse = { conversation?: Conversation; meta?: { has_more?: boolean } }
 type OlderMessagesResponse = { messages?: Message[]; meta?: { has_more?: boolean; notice?: string } }
@@ -163,12 +168,40 @@ function MessageDeliveryIndicator({ status }: { status: Message['status'] }) {
 function conversationDisplayName(conversation: Conversation | null | undefined, loading = false) {
   if (!conversation) return loading ? 'Carregando contato…' : 'Conversa'
   if (conversation.contact.name?.trim()) return conversation.contact.name.trim()
-  if (conversation.is_group) return 'Grupo sem identificação'
-  return conversation.contact.phone || 'Número não disponível'
+  return conversation.is_group ? 'Grupo sem identificação' : 'Contato sem identificação'
+}
+
+function conversationContactSubtitle(conversation: Conversation) {
+  if (conversation.is_group) return 'Grupo do WhatsApp'
+  return conversation.contact.phone || 'Telefone não informado'
+}
+
+function isProviderIdentifier(value: string | null | undefined) {
+  return Boolean(value && /@(lid|g\.us|s\.whatsapp\.net|c\.us|broadcast|newsletter)\b/i.test(value))
+}
+
+function conversationMessagePreview(conversation: Conversation) {
+  const content = conversation.last_message?.content?.trim()
+  if (isProviderIdentifier(content)) return 'Mensagem recebida'
+  if (content) return content
+  if (conversation.last_message?.attachments.length) return `${conversation.last_message.attachments.length} anexo(s)`
+  return 'Sem mensagem de texto'
 }
 
 function senderDisplayName(sender: Message['sender'], fallback: string) {
-  return sender.name?.trim() || sender.phone || fallback
+  const name = sender.name?.trim()
+  if (name && !isProviderIdentifier(name)) {
+    const digits = name.replace(/\D/g, '')
+    const phoneLike = /^[+\d\s().-]+$/.test(name) && digits.length >= 8 && digits.length <= 15
+    if (!phoneLike && (!sender.phone || digits !== sender.phone.replace(/\D/g, ''))) return name
+  }
+  return sender.phone || fallback
+}
+
+function contactClassificationLabel(value: ContactClassification | undefined) {
+  if (value === 'customer') return 'Cliente'
+  if (value === 'personal') return 'Pessoal'
+  return 'Sem categoria'
 }
 
 function orderLabel(order: Order) {
@@ -501,6 +534,7 @@ export function WhatsAppInboxPage() {
   const [webhookFeedback, setWebhookFeedback] = useState<string | null>(null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [status, setStatus] = useState<InboxStatus>('open')
+  const [segment, setSegment] = useState<ContactListSegment>('conversations')
   const [view, setView] = useState<'conversations' | 'calls'>(() => searchParams.get('view') === 'calls' ? 'calls' : 'conversations')
   const [calls, setCalls] = useState<CallEvent[]>([])
   const [callsLoading, setCallsLoading] = useState(false)
@@ -537,12 +571,17 @@ export function WhatsAppInboxPage() {
   const [linkSaving, setLinkSaving] = useState(false)
   const [linkError, setLinkError] = useState<string | null>(null)
   const [linkMessage, setLinkMessage] = useState<string | null>(null)
+  const [displayNameDraft, setDisplayNameDraft] = useState('')
+  const [contactPreferencesSaving, setContactPreferencesSaving] = useState(false)
+  const [contactPreferencesError, setContactPreferencesError] = useState<string | null>(null)
+  const [contactPreferencesMessage, setContactPreferencesMessage] = useState<string | null>(null)
+  const [contactListFeedback, setContactListFeedback] = useState<string | null>(null)
   const detailRequest = useRef(0)
   const messageHistoryRef = useRef<HTMLDivElement>(null)
   const refreshScopeInFlight = useRef<{ scope: string; requestId: number } | null>(null)
   const listRequest = useRef(0)
-  const activeListScope = useRef(conversationScopeKey(status, search))
-  const currentListScope = conversationScopeKey(status, search)
+  const activeListScope = useRef(conversationScopeKey(status, search, segment))
+  const currentListScope = conversationScopeKey(status, search, segment)
   const businessContextLoaded = useRef(false)
 
   const changeView = useCallback((nextView: 'conversations' | 'calls') => {
@@ -580,14 +619,14 @@ export function WhatsAppInboxPage() {
 
   const loadConversations = useCallback(async (page = 1, append = false) => {
     if (!configured) return
-    const requestScope = conversationScopeKey(status, search)
+    const requestScope = conversationScopeKey(status, search, segment)
     if (requestScope !== activeListScope.current) return
     const requestId = ++listRequest.current
     setListLoading(true)
     setListError(null)
     try {
       const result = await invokeInbox<ConversationListResponse>({
-        action: 'list', business_id: businessId, status, page, query: search || undefined,
+        action: 'list', business_id: businessId, status, segment, page, query: search || undefined,
       })
       if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
       const next = result.conversations ?? []
@@ -603,11 +642,11 @@ export function WhatsAppInboxPage() {
     } finally {
       if (requestId === listRequest.current) setListLoading(false)
     }
-  }, [businessId, configured, search, status])
+  }, [businessId, configured, search, segment, status])
 
   const refreshLoadedConversations = useCallback(async () => {
     if (!configured) return
-    const requestScope = conversationScopeKey(status, search)
+    const requestScope = conversationScopeKey(status, search, segment)
     if (requestScope !== activeListScope.current) return
     if (refreshScopeInFlight.current?.scope === requestScope) return
     const requestId = ++listRequest.current
@@ -622,7 +661,7 @@ export function WhatsAppInboxPage() {
       const finalPage = Math.max(1, listPage)
       while (currentPage <= finalPage) {
         const result = await invokeInbox<ConversationListResponse>({
-          action: 'list', business_id: businessId, status, page: currentPage, query: search || undefined,
+          action: 'list', business_id: businessId, status, segment, page: currentPage, query: search || undefined,
         })
         if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
         const pageRows = result.conversations ?? []
@@ -658,7 +697,7 @@ export function WhatsAppInboxPage() {
         setListRefreshing(false)
       }
     }
-  }, [businessId, configured, listPage, search, selectedId, status])
+  }, [businessId, configured, listPage, search, segment, selectedId, status])
 
   useEffect(() => {
     let active = true
@@ -792,6 +831,12 @@ export function WhatsAppInboxPage() {
     ? selectedConversation
     : null
 
+  useEffect(() => {
+    setDisplayNameDraft(currentConversation?.display_name_override ?? '')
+    setContactPreferencesError(null)
+    setContactPreferencesMessage(null)
+  }, [currentConversation?.display_name_override, selectedId])
+
   async function handleLoadOlderMessages() {
     if (!currentConversation || !historyHasMore || olderMessagesLoading) return
     const beforeMessageId = currentConversation.messages[0]?.id
@@ -916,7 +961,7 @@ export function WhatsAppInboxPage() {
   }, [currentConversation])
 
   function changeStatusFilter(nextStatus: InboxStatus) {
-    const nextScope = conversationScopeKey(nextStatus, search)
+    const nextScope = conversationScopeKey(nextStatus, search, segment)
     if (nextScope === activeListScope.current) return
     activeListScope.current = nextScope
     refreshScopeInFlight.current = null
@@ -931,10 +976,27 @@ export function WhatsAppInboxPage() {
     setStatus(nextStatus)
   }
 
+  function changeContactSegment(nextSegment: ContactListSegment) {
+    const nextScope = conversationScopeKey(status, search, nextSegment)
+    if (nextScope === activeListScope.current) return
+    activeListScope.current = nextScope
+    refreshScopeInFlight.current = null
+    listRequest.current += 1
+    setConversations([])
+    setLoadedListScope(null)
+    setListRefreshing(false)
+    setListPage(1)
+    setHasMore(false)
+    setListError(null)
+    setSelectedId(null)
+    setSelectedConversation(null)
+    setSegment(nextSegment)
+  }
+
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const nextSearch = searchInput.trim()
-    const nextScope = conversationScopeKey(status, nextSearch)
+    const nextScope = conversationScopeKey(status, nextSearch, segment)
     if (nextScope === activeListScope.current) {
       await refreshLoadedConversations()
       return
@@ -1013,6 +1075,48 @@ export function WhatsAppInboxPage() {
     } finally {
       setStatusSaving(false)
     }
+  }
+
+  async function handleContactPreferences(
+    preferences: Partial<Pick<Conversation, 'display_name_override' | 'contact_classification' | 'hidden_from_inbox'>>,
+    nextSegment?: ContactListSegment,
+    successMessage = 'Contato atualizado.',
+  ) {
+    if (role !== 'owner' || !currentConversation || contactPreferencesSaving) return
+    setContactPreferencesSaving(true)
+    setContactPreferencesError(null)
+    setContactPreferencesMessage(null)
+    try {
+      await invokeInbox({
+        action: 'update_contact_preferences',
+        business_id: businessId,
+        conversationId: currentConversation.id,
+        ...preferences,
+      })
+      if (nextSegment) {
+        setSelectedId(null)
+        setSelectedConversation(null)
+        changeContactSegment(nextSegment)
+        setContactListFeedback(successMessage)
+      } else {
+        await refreshLoadedConversations()
+      }
+      setContactPreferencesMessage(successMessage)
+    } catch {
+      setContactPreferencesError('Não foi possível salvar as alterações deste contato. Tente novamente.')
+    } finally {
+      setContactPreferencesSaving(false)
+    }
+  }
+
+  async function handleSaveDisplayName(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!currentConversation) return
+    await handleContactPreferences({ display_name_override: displayNameDraft.trim() }, undefined, 'Nome salvo neste sistema.')
+  }
+
+  function segmentForRestoredConversation(conversation: Conversation): ContactListSegment {
+    return conversation.contact_classification === 'customer' ? 'customers' : 'conversations'
   }
 
   async function handleConfigureWebhook() {
@@ -1189,10 +1293,10 @@ export function WhatsAppInboxPage() {
             {callsLoading && <p className="inline-state" role="status">Carregando chamadas…</p>}
             {!callsLoading && !callsError && calls.length === 0 && <div className="whatsapp-list-empty"><Icon name="message" /><strong>Nenhuma chamada registrada</strong><span>Chamadas recebidas pela Evolution aparecerão aqui quando o evento estiver disponível.</span></div>}
             <ul className="whatsapp-conversation-list">
-              {calls.map((call) => <li key={call.id}><button className="whatsapp-conversation-item" onClick={() => { setSelectedConversation(null); setSelectedId(call.conversation_id) }} type="button">
+              {calls.map((call) => <li key={call.id}><button className="whatsapp-conversation-item" onClick={() => { setContactListFeedback(null); setSelectedConversation(null); setSelectedId(call.conversation_id) }} type="button">
                 <span className="whatsapp-contact-avatar" aria-hidden="true">{call.is_video ? 'V' : '☎'}</span>
-                <span className="whatsapp-conversation-copy"><strong>{call.customer_name || call.contact.name || call.contact.phone || 'Contato sem identificação'}</strong><small>{call.contact.phone || 'Telefone indisponível'} · {call.status_label}{call.is_video ? ' · vídeo' : ''}{(call.event_count ?? 1) > 1 ? ` · ${call.event_count} eventos` : ''}</small></span>
-                <span className="whatsapp-conversation-meta"><time>{timestampLabel(call.occurred_at)}</time></span>
+                <span className="whatsapp-conversation-copy"><strong>{call.contact.name || call.customer_name || 'Contato sem identificação'}</strong><small>{call.contact.phone || 'Telefone não informado'} · {call.status_label}{call.is_video ? ' · vídeo' : ''}{(call.event_count ?? 1) > 1 ? ` · ${call.event_count} eventos` : ''}</small><small>{contactClassificationLabel(call.contact_classification)}</small></span>
+                <span className="whatsapp-conversation-meta"><time>{timestampLabel(call.occurred_at)}</time>{call.hidden_from_inbox && <span>Oculta</span>}</span>
               </button></li>)}
             </ul>
             <p className="whatsapp-call-note">Eventos agrupados pelo identificador enviado pela Evolution. O Shalom não grava áudio nem atende chamadas pelo navegador.</p>
@@ -1203,6 +1307,12 @@ export function WhatsAppInboxPage() {
           <input aria-label="Buscar no conteúdo das mensagens" onChange={(event) => setSearchInput(event.target.value)} placeholder="Buscar mensagem" value={searchInput} />
           <button className="text-button" type="submit">Buscar</button>
         </form>
+        <div className="whatsapp-status-tabs whatsapp-contact-segment-tabs" aria-label="Filtrar contatos" role="group">
+          {([
+            ['conversations', 'Conversas'], ['customers', 'Clientes'], ['hidden', 'Ocultas'],
+          ] as const).map(([item, label]) => <button aria-pressed={segment === item} key={item} onClick={() => { setContactListFeedback(null); changeContactSegment(item) }} type="button">{label}</button>)}
+        </div>
+        {contactListFeedback && <p className="whatsapp-contact-feedback" role="status">{contactListFeedback}</p>}
         <div className="whatsapp-status-tabs" aria-label="Filtrar conversas por status">
           {(['open', 'resolved', 'all'] as const).map((item) => <button aria-pressed={status === item} key={item} onClick={() => changeStatusFilter(item)} type="button">{item === 'open' ? 'Abertas' : item === 'resolved' ? 'Resolvidas' : 'Todas'}</button>)}
         </div>
@@ -1214,10 +1324,10 @@ export function WhatsAppInboxPage() {
         {loadedListScope === currentListScope && conversations.length > 0 && (
           <ul className="whatsapp-conversation-list">
             {conversations.map((conversation) => <li key={conversation.id}>
-              <button aria-current={selectedId === conversation.id ? 'true' : undefined} className={`whatsapp-conversation-item${selectedId === conversation.id ? ' is-selected' : ''}${conversation.unread_count > 0 ? ' has-unread' : ''}`} onClick={() => { setSelectedConversation(null); setSelectedId(conversation.id) }} type="button">
+              <button aria-current={selectedId === conversation.id ? 'true' : undefined} className={`whatsapp-conversation-item${selectedId === conversation.id ? ' is-selected' : ''}${conversation.unread_count > 0 ? ' has-unread' : ''}`} onClick={() => { setContactListFeedback(null); setSelectedConversation(null); setSelectedId(conversation.id) }} type="button">
                 <WhatsAppAvatar businessId={businessId} conversation={conversation} />
-                <span className="whatsapp-conversation-copy"><strong>{conversationDisplayName(conversation)}</strong><small>{conversation.is_group && <span className="whatsapp-group-label">Grupo · </span>}{conversation.is_group && conversation.last_message?.message_type === 'incoming' && <>{senderDisplayName(conversation.last_message.sender, 'Participante')}: </>}{conversation.last_message?.content || (conversation.last_message?.attachments.length ? `${conversation.last_message.attachments.length} anexo(s)` : 'Sem mensagem de texto')}</small></span>
-                <span className="whatsapp-conversation-meta"><span className="whatsapp-conversation-meta-top"><time>{timestampLabel(conversation.last_activity_at)}</time>{conversation.unread_count > 0 && <span aria-label={`${conversation.unread_count} mensagens não lidas`} className="whatsapp-unread-count">{conversation.unread_count > 99 ? '99+' : conversation.unread_count}</span>}</span>{links[conversation.id]?.customer_id && <span className="whatsapp-linked-mark">Cliente vinculado</span>}</span>
+                <span className="whatsapp-conversation-copy"><strong>{conversationDisplayName(conversation)}</strong>{!conversation.is_group && <small>{conversationContactSubtitle(conversation)}</small>}<small>{conversation.is_group && <span className="whatsapp-group-label">Grupo · </span>}{conversation.is_group && conversation.last_message?.message_type === 'incoming' && <>{senderDisplayName(conversation.last_message.sender, 'Participante')}: </>}{conversationMessagePreview(conversation)}</small></span>
+                <span className="whatsapp-conversation-meta"><span className="whatsapp-conversation-meta-top"><time>{timestampLabel(conversation.last_activity_at)}</time>{conversation.unread_count > 0 && <span aria-label={`${conversation.unread_count} mensagens não lidas`} className="whatsapp-unread-count">{conversation.unread_count > 99 ? '99+' : conversation.unread_count}</span>}</span>{conversation.contact_classification !== 'unclassified' && <span className="whatsapp-linked-mark">{contactClassificationLabel(conversation.contact_classification)}</span>}{links[conversation.id]?.customer_id && <span className="whatsapp-linked-mark">Cliente vinculado</span>}</span>
               </button>
             </li>)}
           </ul>
@@ -1230,12 +1340,30 @@ export function WhatsAppInboxPage() {
         {!selectedId ? <div className="whatsapp-chat-empty"><Icon name="message" /><h2>Selecione uma conversa</h2><p>O histórico e as ações aparecem aqui.</p></div> : <>
           <header className="whatsapp-chat-heading">
             <button className="text-button whatsapp-back-button" onClick={() => setSelectedId(null)} type="button">← Conversas</button>
-            <div className="whatsapp-chat-contact"><WhatsAppAvatar businessId={businessId} conversation={currentConversation} /><div><h2>{conversationDisplayName(currentConversation, detailLoading)}</h2><span>{currentConversation?.is_group ? 'Grupo do WhatsApp' : currentConversation?.contact.phone || 'Telefone indisponível'}</span></div></div>
+            <div className="whatsapp-chat-contact"><WhatsAppAvatar businessId={businessId} conversation={currentConversation} /><div><h2>{conversationDisplayName(currentConversation, detailLoading)}</h2><span>{currentConversation ? conversationContactSubtitle(currentConversation) : 'Contato carregando'}</span></div></div>
             <div className="whatsapp-chat-actions">
               <span className={`whatsapp-status-pill${currentConversation?.status === 'open' ? '' : ' is-resolved'}`}>{statusLabel(currentConversation?.status)}</span>
               <button className="button button-secondary" disabled={statusSaving || !currentConversation || !['open', 'resolved'].includes(currentConversation.status)} onClick={() => void handleStatusChange(currentConversation?.status === 'resolved' ? 'open' : 'resolved')} type="button">{statusSaving ? 'Salvando…' : currentConversation?.status === 'resolved' ? 'Reabrir' : 'Resolver'}</button>
             </div>
           </header>
+
+          <details className="whatsapp-context-disclosure" key={`contact-preferences-${selectedId}`}>
+            <summary><span><strong>Identificação e lista</strong><small>Nome e classificação deste contato</small></span><span className="whatsapp-context-status">{contactClassificationLabel(currentConversation?.contact_classification)}</span></summary>
+            <form className="whatsapp-context-panel" onSubmit={(event) => void handleSaveDisplayName(event)}>
+              {contactPreferencesError && <p className="form-message form-message-error" role="alert">{contactPreferencesError}</p>}
+              {contactPreferencesMessage && <p className="form-message form-message-success" role="status">{contactPreferencesMessage}</p>}
+              <label className="whatsapp-context-field"><span>Nome neste sistema</span><input autoComplete="off" className="text-input" disabled={!currentConversation || role !== 'owner' || contactPreferencesSaving} maxLength={160} onChange={(event) => setDisplayNameDraft(event.target.value)} placeholder={currentConversation?.is_group ? 'Nome do grupo' : 'Nome salvo para esta conversa'} value={displayNameDraft} /></label>
+              {role === 'owner' ? <button className="button button-secondary" disabled={!currentConversation || contactPreferencesSaving || displayNameDraft.trim() === (currentConversation?.display_name_override ?? '')} type="submit">{contactPreferencesSaving ? 'Salvando…' : 'Salvar nome'}</button> : <p className="section-footnote">Somente a gestão pode alterar o nome e a classificação.</p>}
+              <p className="whatsapp-match-hint">O nome fica salvo no Shalom e tem prioridade sobre o nome recebido da Evolution. O telefone, quando confiável, aparece separado. A classificação não cria nem altera cadastro de cliente.</p>
+              {role === 'owner' && currentConversation && <>
+                {!currentConversation.hidden_from_inbox && currentConversation.contact_classification !== 'customer' && <button className="button button-secondary" disabled={contactPreferencesSaving} onClick={() => void handleContactPreferences({ contact_classification: 'customer', hidden_from_inbox: false }, 'customers', 'Contato movido para Clientes.')} type="button">Marcar como cliente</button>}
+                {!currentConversation.hidden_from_inbox && currentConversation.contact_classification === 'customer' && <button className="button button-secondary" disabled={contactPreferencesSaving} onClick={() => void handleContactPreferences({ contact_classification: 'unclassified', hidden_from_inbox: false }, 'conversations', 'Contato movido para Conversas.')} type="button">Mover para conversas</button>}
+                {!currentConversation.hidden_from_inbox && <button className="button button-secondary" disabled={contactPreferencesSaving} onClick={() => void handleContactPreferences({ contact_classification: 'personal', hidden_from_inbox: true }, 'hidden', 'Conversa ocultada; o histórico continua salvo.')} type="button">Marcar como pessoal e ocultar</button>}
+                {currentConversation.hidden_from_inbox && <button className="button button-secondary" disabled={contactPreferencesSaving} onClick={() => void handleContactPreferences({ hidden_from_inbox: false }, segmentForRestoredConversation(currentConversation), 'Conversa restaurada.')} type="button">Restaurar conversa</button>}
+              </>}
+              <p className="section-footnote whatsapp-match-hint">Ocultar só tira a conversa das listas ativas do Shalom. Nenhuma mensagem é apagada, e você pode restaurá-la pela aba Ocultas.</p>
+            </form>
+          </details>
 
           {detailError && <div className="inline-state inline-state-error" role="alert">{detailError}</div>}
           <div className="whatsapp-message-history" aria-live="polite" aria-label="Histórico de mensagens" ref={messageHistoryRef}>

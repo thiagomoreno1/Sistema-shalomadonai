@@ -483,13 +483,12 @@ export function DashboardPage() {
   }, [loadFinancialSummary])
 
   const financialSummary = currentFinancialSummary.data?.managerial_result
-  const grossSalesCents = financialSummary
+  const grossBillingCents = financialSummary
     ? BigInt(financialSummary.product_subtotal_cents) + BigInt(financialSummary.customer_delivery_fee_cents)
     : null
-  const netSalesCents = financialSummary ? BigInt(financialSummary.sales_cents) : null
+  const netBillingCents = financialSummary ? BigInt(financialSummary.sales_cents) : null
   const productCostCents = financialSummary?.item_cost_cents === null || !financialSummary ? null : BigInt(financialSummary.item_cost_cents)
-  const grossProfitCents = financialSummary?.available && productCostCents !== null && netSalesCents !== null ? netSalesCents - productCostCents : null
-  const paidExpenseCents = financialSummary ? BigInt(financialSummary.operating_expense_cents) + BigInt(financialSummary.delivery_cost_cents) : null
+  const grossProfitCents = financialSummary?.available && productCostCents !== null && netBillingCents !== null ? netBillingCents - productCostCents : null
   const totalPriorityActionCount = priorities
     ? priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count
     : null
@@ -709,30 +708,31 @@ export function DashboardPage() {
           {!currentFinancialSummary.loading && currentFinancialSummary.error && <div className="dashboard-panel-state" role="alert"><p>Não foi possível carregar os indicadores financeiros.</p><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
           {!currentFinancialSummary.loading && !currentFinancialSummary.error && currentFinancialSummary.data && <>
             <div className="indicator-grid dashboard-financial-indicators">
-              <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossSalesCents === null ? '—' : formatBRLExact(grossSalesCents)}</strong><span>Produtos e entrega</span></article>
-              <article className="indicator-card"><p>Vendas após descontos</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</strong><span>Depois dos descontos</span></article>
-              <article className="indicator-card"><p>Custo dos produtos</p><strong>{productCostCents === null ? 'Indisponível' : formatBRLExact(productCostCents)}</strong><span>Combo usa o custo do catálogo</span></article>
-              <article className="indicator-card"><p>Faturamento líquido</p><strong>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</strong><span>Vendas após descontos − custo</span></article>
+              <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossBillingCents === null ? '—' : formatBRLExact(grossBillingCents)}</strong><span>Produtos e taxa de entrega</span></article>
+              <article className="indicator-card"><p>Descontos</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</strong><span>Aplicados aos pedidos</span></article>
+              <article className="indicator-card"><p>Faturamento líquido</p><strong>{netBillingCents === null ? '—' : formatBRLExact(netBillingCents)}</strong><span>Bruto − descontos</span></article>
+              <article className="indicator-card"><p>Custo dos produtos vendidos</p><strong>{productCostCents === null ? 'Indisponível' : formatBRLExact(productCostCents)}</strong><span>Combo usa o custo definido no catálogo</span></article>
             </div>
             <div className="indicator-grid dashboard-financial-indicators dashboard-financial-secondary-indicators">
-              <article className="indicator-card"><p>Descontos</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</strong><span>Aplicados aos pedidos</span></article>
-              <article className="indicator-card"><p>Gastos pagos</p><strong>{paidExpenseCents === null ? '—' : formatBRLExact(paidExpenseCents)}</strong><span>Empresa e entregas</span></article>
-              <article className="indicator-card"><p>Resultado após gastos</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>Antes de impostos</span></article>
+              <article className="indicator-card"><p>Lucro bruto</p><strong>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</strong><span>Faturamento líquido − custo dos produtos</span></article>
+              <article className="indicator-card"><p>Despesas da empresa pagas</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</strong><span>Despesas registradas e pagas</span></article>
+              <article className="indicator-card"><p>Entregas pagas</p><strong>{formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</strong><span>Custo de entrega registrado e pago</span></article>
+              <article className="indicator-card"><p>Lucro após despesas e entregas</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>Estimativa antes de impostos</span></article>
             </div>
             <details className="surface-panel dashboard-result-breakdown">
-              <summary>Ver composição dos valores</summary>
-              <div className="dashboard-result-breakdown-heading"><h3>Conta do período</h3><span>Vendas pela entrega ou retirada</span></div>
+              <summary>Ver como o lucro é calculado</summary>
+              <div className="dashboard-result-breakdown-heading"><h3>Conta do período</h3><span>Pedidos entregues ou retirados</span></div>
               <dl>
-                <div><dt>Faturamento bruto</dt><dd>{grossSalesCents === null ? 'Indisponível' : formatBRLExact(grossSalesCents)}</dd></div>
-                <div><dt>Taxas de entrega</dt><dd>Incluídas no faturamento bruto · {formatBRLExact(currentFinancialSummary.data.managerial_result.customer_delivery_fee_cents)}</dd></div>
+                <div><dt>Faturamento bruto</dt><dd>{grossBillingCents === null ? 'Indisponível' : formatBRLExact(grossBillingCents)}</dd></div>
                 <div><dt>Descontos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
-                <div><dt>Vendas após descontos</dt><dd>{formatBRLExact(currentFinancialSummary.data.managerial_result.sales_cents)}</dd></div>
-                <div><dt>Custo dos produtos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
-                <div className="is-total"><dt>Faturamento líquido</dt><dd>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</dd></div>
-                <div><dt>Gastos da empresa</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
+                <div className="is-total"><dt>Faturamento líquido</dt><dd>{netBillingCents === null ? 'Indisponível' : formatBRLExact(netBillingCents)}</dd></div>
+                <div><dt>Custo dos produtos vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
+                <div className="is-total"><dt>Lucro bruto</dt><dd>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</dd></div>
+                <div><dt>Despesas da empresa pagas</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
                 <div><dt>Entregas pagas</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
-                <div className="is-total"><dt>Resultado após gastos</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
+                <div className="is-total"><dt>Lucro após despesas e entregas</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
               </dl>
+              <p className="dashboard-result-note">Faturamento bruto inclui a taxa cobrada do cliente pela entrega. As vendas entram pela data de entrega ou retirada; despesas e custo de entrega entram pela data do pagamento. É uma estimativa gerencial antes dos impostos.</p>
               {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">{currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `Falta informar o custo de ${currentFinancialSummary.data.managerial_result.missing_cost_line_count} produto(s). ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) têm devolução sem ajuste.` : ''}</p>}
             </details>
           </>}

@@ -129,9 +129,9 @@
 .dashboard-financial-heading .eyebrow { margin-bottom: 4px; }
 .dashboard-financial-period { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .dashboard-financial-indicators { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.dashboard-financial-secondary-indicators { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dashboard-financial-secondary-indicators { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .dashboard-financial-indicators .indicator-card { min-width: 0; min-height: 112px; padding: 13px 14px; }
-.dashboard-financial-indicators .indicator-card p { min-height: 32px; line-height: 1.4; }
+.dashboard-financial-indicators .indicator-card p { min-height: 34px; overflow-wrap: anywhere; line-height: 1.35; }
 .dashboard-financial-indicators .indicator-card strong { margin: 5px 0 3px; color: var(--ink); font-size: clamp(17px, 1.45vw, 23px); overflow-wrap: anywhere; }
 .dashboard-financial-indicators .indicator-card span { font-size: 11px; line-height: 1.4; }
 .dashboard-result-breakdown { padding: 14px 18px; }
@@ -1133,6 +1133,11 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .revenue-trend-totals .dashboard-chart-key.is-cost { height: 0; margin-top: 6px; border-top: 2px dashed var(--muted); border-radius: 0; background: transparent; }
 .dashboard-chart-key.is-outflow, .dashboard-chart-bar.is-outflow,
 .dashboard-chart-bar.is-sales-net { border: 1px solid var(--muted); background: repeating-linear-gradient(135deg, var(--muted) 0 1px, transparent 1px 4px); }
+.dashboard-revenue-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 17px; margin: 15px 0 4px; padding: 0; color: var(--muted); font-size: 11px; list-style: none; }
+.dashboard-revenue-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.dashboard-revenue-legend .dashboard-chart-key { width: 15px; height: 2px; margin-top: 0; border-radius: 0; }
+.dashboard-revenue-legend .dashboard-chart-key.is-sale { height: 3px; }
+.dashboard-revenue-legend .dashboard-chart-key.is-cost { height: 0; border-top: 2px dashed var(--muted); background: transparent; }
 .dashboard-trend-warning { margin: 8px 0 0; padding: 9px 11px; border-radius: 7px; color: var(--muted); background: var(--accent-wash); font-size: 11px; line-height: 1.5; }
 .dashboard-revenue-chart { min-width: 0; margin: 4px 0 0; }
 .dashboard-revenue-chart-svg { display: block; width: 100%; height: clamp(130px, 17vw, 190px); overflow: visible; }
@@ -1308,6 +1313,8 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .whatsapp-search .text-button { min-height: 40px; padding: 0 6px; font-size: 11px; }
 .whatsapp-status-tabs { display: flex; gap: 4px; padding: 0 13px 9px; border-bottom: 1px solid var(--line); }
 .whatsapp-status-tabs button { flex: 1; min-height: 39px; padding: 0 7px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 11px; font-weight: 600; cursor: pointer; }
+.whatsapp-contact-segment-tabs button { min-height: 44px; }
+.whatsapp-contact-feedback { margin: 0; padding: 8px 13px; border-bottom: 1px solid var(--line); color: var(--ink); background: var(--accent-wash); font-size: 11px; line-height: 1.45; }
 .whatsapp-status-tabs button:hover { color: var(--ink); background: var(--accent-wash); }
 .whatsapp-status-tabs button[aria-pressed='true'] { color: #008f72; background: #e7f5ef; }
 .whatsapp-history-sync-notice { margin: 0; padding: 8px 13px; border-bottom: 1px solid #e8e1d6; color: #6e6254; background: #fbf8f3; font-size: 10px; line-height: 1.45; }
@@ -1422,6 +1429,7 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .whatsapp-context-heading h3 { margin: 3px 0 0; color: var(--ink); font-size: 13px; }
 .whatsapp-context-field { display: grid; gap: 5px; min-width: 0; }
 .whatsapp-context-field > span { color: var(--muted); font-size: 10px; font-weight: 600; }
+.whatsapp-context-field .text-input { min-width: 0; min-height: 42px; margin: 0; padding: 0 9px; font-size: 11px; }
 .whatsapp-context-field select { width: 100%; min-width: 0; min-height: 42px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink); background: var(--paper); font-size: 11px; }
 .whatsapp-context-field select:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .whatsapp-context-panel > .button { min-height: 42px; padding: 0 12px; font-size: 11px; }
@@ -1449,7 +1457,7 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
   .whatsapp-compose { padding: 10px 11px; }
   .whatsapp-compose-tools { flex-wrap: wrap; }
   .whatsapp-compose-tools > span { flex: 1 0 100%; }
-  .whatsapp-search input, .whatsapp-search .text-button, .whatsapp-context-field select, .whatsapp-compose textarea { font-size: 16px; }
+  .whatsapp-search input, .whatsapp-search .text-button, .whatsapp-context-field select, .whatsapp-context-field .text-input, .whatsapp-compose textarea { font-size: 16px; }
   .whatsapp-context-panel { padding: 11px; }
   .whatsapp-connection-state { padding: 20px 17px; }
   .whatsapp-setup-steps li { grid-template-columns: 27px minmax(0, 1fr); gap: 9px; }

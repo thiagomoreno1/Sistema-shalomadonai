@@ -742,6 +742,17 @@ function conversationResponse(
   const groupMetadata = remoteJid ? groupDirectory?.get(remoteJid.toLowerCase()) : null
   const canReply = Boolean(remoteJid && !remoteJid.startsWith('unknown-call:')
     && (!remoteJid.includes('@lid') || (remoteJidAlt && phoneFromWhatsAppJid(remoteJidAlt))))
+  const phone = isGroup ? null : displayPhone(row.contact_phone)
+    ?? phoneFromWhatsAppJid(remoteJidAlt ?? '')
+    ?? phoneFromWhatsAppJid(remoteJid ?? '')
+  const savedName = isGroup ? null : savedNameForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt)
+  const name = isGroup
+    ? text(row.display_name_override, 160)
+      ?? displayableContactName(groupMetadata?.subject, null)
+      ?? displayableContactName(row.group_subject, null)
+    : text(row.display_name_override, 160)
+      ?? displayableContactName(savedName, phone)
+      ?? displayableContactName(row.contact_name, phone)
   return {
     id: row.id,
     inbox_id: row.instance_name,
@@ -750,12 +761,12 @@ function conversationResponse(
     can_reply: canReply,
     unread_count: Number(row.unread_count) || 0,
     contact: {
-      name: isGroup
-        ? groupMetadata?.subject ?? text(row.group_subject, 160) ?? text(row.contact_name, 160)
-        : savedNameForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt)
-          ?? text(row.contact_name, 160),
-      phone: isGroup ? null : row.contact_phone ?? phoneFromWhatsAppJid(remoteJidAlt ?? '') ?? phoneFromWhatsAppJid(remoteJid ?? ''),
+      name,
+      phone,
     },
+    display_name_override: text(row.display_name_override, 160),
+    contact_classification: contactClassification(row.contact_classification),
+    hidden_from_inbox: row.hidden_from_inbox === true,
     last_activity_at: row.last_activity_at,
     last_message: lastMessage ? normalizedMessage(lastMessage, savedContactNames) : null,
     messages: [],
@@ -772,6 +783,26 @@ function phoneFromWhatsAppJid(value: string): string | null {
   if (digits.length === 10 || digits.length === 11) return `+55${digits}`
   if (digits.length >= 8 && digits.length <= 15) return `+${digits}`
   return null
+}
+
+function displayPhone(value: unknown): string | null {
+  const candidate = text(value, 64)
+  if (!candidate || !/^[+\d\s().-]+$/.test(candidate)) return null
+  return phoneFromWhatsAppJid(candidate)
+}
+
+function displayableContactName(value: unknown, phone: string | null): string | null {
+  const name = text(value, 160)
+  if (!name || /@(lid|g\.us|s\.whatsapp\.net|c\.us|broadcast|newsletter)\b/i.test(name)) return null
+  const phoneDigits = phone?.replace(/\D/g, '') ?? ''
+  const nameDigits = name.replace(/\D/g, '')
+  const phoneLike = /^[+\d\s().-]+$/.test(name) && nameDigits.length >= 8 && nameDigits.length <= 15
+  if (phoneLike || (phoneDigits.length >= 8 && nameDigits === phoneDigits)) return null
+  return name
+}
+
+function contactClassification(value: unknown): 'unclassified' | 'customer' | 'personal' {
+  return value === 'customer' || value === 'personal' ? value : 'unclassified'
 }
 
 function normalizedMessage(row: JsonRecord, savedContactNames?: ContactDirectory) {
@@ -1630,7 +1661,7 @@ export default {
     const businessId = body.business_id
     const userId = text(context.userClaims?.id, 64)
     if (!userId || !isUuid(businessId)) return json({ error: 'invalid_request' }, 400)
-    if (!['status', 'list', 'calls', 'conversation', 'older_messages', 'react', 'mark_read', 'send', 'send_media', 'set_status', 'attachment', 'avatar', 'configure_webhook', 'connect', 'disconnect'].includes(action ?? '')) {
+    if (!['status', 'list', 'calls', 'conversation', 'older_messages', 'react', 'mark_read', 'send', 'send_media', 'set_status', 'update_contact_preferences', 'attachment', 'avatar', 'configure_webhook', 'connect', 'disconnect'].includes(action ?? '')) {
       return json({ error: 'invalid_action' }, 400)
     }
 
@@ -1714,6 +1745,8 @@ export default {
       if (action === 'list') {
         const status = body.status
         if (status !== 'open' && status !== 'resolved' && status !== 'all') return json({ error: 'invalid_status' }, 400)
+        const segment = body.segment === undefined ? 'conversations' : body.segment
+        if (segment !== 'customers' && segment !== 'conversations' && segment !== 'hidden') return json({ error: 'invalid_segment' }, 400)
         const page = typeof body.page === 'number' && Number.isInteger(body.page) ? body.page : 1
         if (page < 1 || page > 1000) return json({ error: 'invalid_page' }, 400)
         const query = body.query === undefined ? '' : (text(body.query, 120) ?? '')
@@ -1721,12 +1754,15 @@ export default {
         const providerChatPage = Math.ceil((page * PAGE_SIZE) / LEGACY_CHAT_PAGE_SIZE)
         const historySync = await syncLegacyChats(admin, config, businessId, providerChatPage)
         let selection = admin.from('whatsapp_conversations')
-          .select('id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, status, unread_count, last_activity_at', { count: 'exact' })
+          .select('id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, display_name_override, contact_classification, hidden_from_inbox, status, unread_count, last_activity_at', { count: 'exact' })
           .eq('business_id', businessId).eq('instance_name', config.instanceName)
+        if (segment === 'customers') selection = selection.eq('hidden_from_inbox', false).eq('contact_classification', 'customer')
+        else if (segment === 'conversations') selection = selection.eq('hidden_from_inbox', false).neq('contact_classification', 'customer')
+        else selection = selection.eq('hidden_from_inbox', true)
         if (status !== 'all') selection = selection.eq('status', status)
         if (query) {
           const safeQuery = query.replace(/[(),%_*\\]/g, ' ').trim()
-          if (safeQuery) selection = selection.or(`contact_name.ilike.%${safeQuery}%,group_subject.ilike.%${safeQuery}%,contact_phone.ilike.%${safeQuery}%,remote_jid.ilike.%${safeQuery}%`)
+          if (safeQuery) selection = selection.or(`display_name_override.ilike.%${safeQuery}%,contact_name.ilike.%${safeQuery}%,group_subject.ilike.%${safeQuery}%,contact_phone.ilike.%${safeQuery}%,remote_jid.ilike.%${safeQuery}%`)
         }
         const offset = (page - 1) * PAGE_SIZE
         const { data: rows, count, error } = await selection
@@ -1778,8 +1814,8 @@ export default {
         const conversationIds = [...new Set((callRows ?? []).map((row: JsonRecord) => String(row.conversation_id)))]
         let conversationMap = new Map<string, JsonRecord>()
         if (conversationIds.length) {
-          const { data: rows, error: conversationError } = await admin.from('whatsapp_conversations')
-            .select('id, remote_jid, remote_jid_alt, contact_name, contact_phone, status')
+        const { data: rows, error: conversationError } = await admin.from('whatsapp_conversations')
+            .select('id, remote_jid, remote_jid_alt, contact_name, contact_phone, display_name_override, contact_classification, hidden_from_inbox, status')
             .eq('business_id', businessId).eq('instance_name', config.instanceName)
             .in('id', conversationIds)
           if (conversationError) throw new RequestError(500, 'call_conversation_lookup_failed')
@@ -1825,10 +1861,16 @@ export default {
           return {
             id: typeof row.provider_call_id === 'string' && row.provider_call_id ? row.provider_call_id : row.id,
             conversation_id: row.conversation_id,
+            contact_classification: contactClassification(conversation?.contact_classification),
+            hidden_from_inbox: conversation?.hidden_from_inbox === true,
+            display_name_override: text(conversation?.display_name_override, 160),
             contact: {
-              name: savedNameForJids(savedNames, conversation?.remote_jid, conversation?.remote_jid_alt, row.caller_jid)
-                ?? text(conversation?.contact_name, 160),
-              phone: row.caller_phone ?? conversation?.contact_phone
+              name: text(conversation?.display_name_override, 160)
+                ?? displayableContactName(savedNameForJids(savedNames, conversation?.remote_jid, conversation?.remote_jid_alt, row.caller_jid),
+                  displayPhone(row.caller_phone) ?? displayPhone(conversation?.contact_phone))
+                ?? displayableContactName(conversation?.contact_name,
+                  displayPhone(row.caller_phone) ?? displayPhone(conversation?.contact_phone)),
+              phone: displayPhone(row.caller_phone) ?? displayPhone(conversation?.contact_phone)
                 ?? phoneFromWhatsAppJid(String(conversation?.remote_jid_alt ?? conversation?.remote_jid ?? ''))
                 ?? phoneFromWhatsAppJid(String(row.caller_jid ?? '')),
             },
@@ -1847,13 +1889,46 @@ export default {
       const conversationId = body.conversationId
       if (!isUuid(conversationId)) return json({ error: 'invalid_conversation_id' }, 400)
       const { data: conversation, error: conversationError } = await admin.from('whatsapp_conversations')
-        .select('id, business_id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, status, unread_count, last_activity_at')
+        .select('id, business_id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, display_name_override, contact_classification, hidden_from_inbox, contact_preferences_updated_at, status, unread_count, last_activity_at')
         .eq('business_id', businessId)
         .eq('instance_name', config.instanceName)
         .eq('id', conversationId)
         .maybeSingle()
       if (conversationError) throw new RequestError(500, 'conversation_lookup_failed')
       if (!conversation) return json({ error: 'conversation_not_found' }, 404)
+
+      if (action === 'update_contact_preferences') {
+        if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        const hasDisplayName = Object.prototype.hasOwnProperty.call(body, 'display_name_override')
+        const hasClassification = Object.prototype.hasOwnProperty.call(body, 'contact_classification')
+        const hasHidden = Object.prototype.hasOwnProperty.call(body, 'hidden_from_inbox')
+        if (!hasDisplayName && !hasClassification && !hasHidden) return json({ error: 'no_preferences_to_update' }, 400)
+        const update: JsonRecord = { contact_preferences_updated_at: new Date().toISOString() }
+        if (hasDisplayName) {
+          if (typeof body.display_name_override !== 'string') return json({ error: 'invalid_display_name' }, 400)
+          const displayName = body.display_name_override.trim()
+          if (displayName.length > 160) return json({ error: 'invalid_display_name' }, 400)
+          update.display_name_override = displayName || null
+        }
+        if (hasClassification) {
+          if (body.contact_classification !== 'unclassified' && body.contact_classification !== 'customer' && body.contact_classification !== 'personal') {
+            return json({ error: 'invalid_contact_classification' }, 400)
+          }
+          update.contact_classification = body.contact_classification
+        }
+        if (hasHidden) {
+          if (typeof body.hidden_from_inbox !== 'boolean') return json({ error: 'invalid_hidden_state' }, 400)
+          update.hidden_from_inbox = body.hidden_from_inbox
+        }
+        const { error: updateError } = await admin.from('whatsapp_conversations').update(update)
+          .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId)
+        if (updateError) throw new RequestError(500, 'contact_preferences_update_failed')
+        return json({ saved: true, preferences: {
+          display_name_override: hasDisplayName ? update.display_name_override : conversation.display_name_override,
+          contact_classification: hasClassification ? update.contact_classification : conversation.contact_classification,
+          hidden_from_inbox: hasHidden ? update.hidden_from_inbox : conversation.hidden_from_inbox,
+        } })
+      }
 
       if (action === 'avatar') {
         return await profilePictureResponse(config, conversation as JsonRecord)
@@ -1994,7 +2069,7 @@ export default {
       }
 
       const { data: freshConversation, error: freshError } = await admin.from('whatsapp_conversations')
-        .select('id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, status, unread_count, last_activity_at')
+        .select('id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, display_name_override, contact_classification, hidden_from_inbox, status, unread_count, last_activity_at')
         .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId).single()
       if (freshError) throw new RequestError(500, 'conversation_refresh_failed')
       const { data: messageRows, error: messageError } = await admin.from('whatsapp_messages')
