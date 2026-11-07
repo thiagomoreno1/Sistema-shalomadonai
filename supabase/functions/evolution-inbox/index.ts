@@ -8,6 +8,7 @@ const CONTACT_DIRECTORY_PAGE_SIZE = 50
 const CONTACT_NAME_MAX_PAGES = 20
 const LEGACY_SYNC_COOLDOWN_MS = 60_000
 const CONTACT_NAMES_COOLDOWN_MS = 60_000
+const CONTACT_IDENTITY_RECONCILE_COOLDOWN_MS = 30_000
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 const MAX_PROFILE_PICTURE_BYTES = 2 * 1024 * 1024
 const MAX_OUTBOUND_MEDIA_BYTES = 2 * 1024 * 1024
@@ -26,9 +27,15 @@ const CORS_HEADERS = {
   'Cache-Control': 'no-store',
 }
 const recentLegacySync = new Map<string, { at: number; result: JsonRecord }>()
+const recentIdentityReconcile = new Map<string, { at: number; merged: number }>()
 type ContactProfile = { name: string | null; pictureUrl: string | null }
 type ContactDirectory = Map<string, ContactProfile>
-const recentContactNames = new Map<string, { at: number; directory: ContactDirectory }>()
+const recentContactNames = new Map<string, {
+  at: number
+  directory: ContactDirectory
+  contacts: JsonRecord[]
+  identitiesPersisted: boolean
+}>()
 const recentGroupMetadata = new Map<string, { at: number; subject: string | null; pictureUrl: string | null }>()
 const recentGroupDirectory = new Map<string, { at: number; directory: Map<string, GroupMetadata> }>()
 
@@ -122,6 +129,14 @@ function phoneJidFromContactValue(value: unknown): string | null {
   return digits.length >= 12 && digits.length <= 15 ? `${digits}@s.whatsapp.net` : null
 }
 
+function sameDirectWhatsAppJid(left: unknown, right: unknown): boolean {
+  if (typeof left !== 'string' || typeof right !== 'string') return false
+  if (left.trim().toLowerCase() === right.trim().toLowerCase()) return true
+  const leftPhone = phoneJidFromContactValue(left)
+  const rightPhone = phoneJidFromContactValue(right)
+  return Boolean(leftPhone && rightPhone && leftPhone === rightPhone)
+}
+
 function contactIdentityAnalysis(contacts: JsonRecord[]): { pairs: JsonRecord[]; ambiguousLids: string[] } {
   const candidates = new Map<string, Map<string, string | null>>()
   const ambiguousLids = new Set<string>()
@@ -168,6 +183,7 @@ async function persistContactIdentityPairs(
   contacts: JsonRecord[],
 ) {
   const { pairs, ambiguousLids } = contactIdentityAnalysis(contacts)
+  if (pairs.length) recentIdentityReconcile.delete(`${businessId}:${instanceName}`)
   const conflictedLids = new Set(ambiguousLids)
   if (pairs.length) {
     const rows = pairs.map((pair) => ({
@@ -304,7 +320,23 @@ async function loadSavedContactDirectory(
 ): Promise<ContactDirectory> {
   const cacheKey = `${config.businessId}:${config.instanceName}`
   const cached = recentContactNames.get(cacheKey)
-  if (cached && Date.now() - cached.at < CONTACT_NAMES_COOLDOWN_MS) return cached.directory
+  if (cached && Date.now() - cached.at < CONTACT_NAMES_COOLDOWN_MS) {
+    // A prior profile-photo lookup may have cached names without an admin client.
+    // Persist any identity pairs before reusing that cache for inbox sync.
+    const freshContacts = firstPageRecords?.length ? firstPageRecords : []
+    const contacts = freshContacts.length ? [...cached.contacts, ...freshContacts] : cached.contacts
+    if (admin && businessId && (!cached.identitiesPersisted || freshContacts.length)) {
+      await persistContactIdentityPairs(admin, businessId, config.instanceName, contacts)
+    }
+    const directory = freshContacts.length ? contactDirectoryIndex(contacts) : cached.directory
+    recentContactNames.set(cacheKey, {
+      at: cached.at,
+      directory,
+      contacts,
+      identitiesPersisted: cached.identitiesPersisted || Boolean(admin && businessId),
+    })
+    return directory
+  }
   try {
     let result: unknown = firstPageResponse ?? null
     let firstPage = firstPageRecords?.slice(0, CONTACT_DIRECTORY_PAGE_SIZE) ?? []
@@ -349,7 +381,9 @@ async function loadSavedContactDirectory(
     const allContacts = contactPages.flat()
     if (admin && businessId) await persistContactIdentityPairs(admin, businessId, config.instanceName, allContacts)
     const directory = contactDirectoryIndex(allContacts)
-    recentContactNames.set(cacheKey, { at: Date.now(), directory })
+    recentContactNames.set(cacheKey, {
+      at: Date.now(), directory, contacts: allContacts, identitiesPersisted: Boolean(admin && businessId),
+    })
     return directory
   } catch (error) {
     if (error instanceof RequestError && error.code === 'contact_identity_sync_failed') throw error
@@ -496,6 +530,7 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
   const cacheKey = `${businessId}:${config.instanceName}:${providerPage}`
   const cached = recentLegacySync.get(cacheKey)
   if (cached && Date.now() - cached.at < LEGACY_SYNC_COOLDOWN_MS) {
+    await reconcileKnownContactIdentities(admin, businessId, config.instanceName)
     return { ...cached.result, status: 'recently_synced' }
   }
 
@@ -562,7 +597,16 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
     const jid = text(chat.remoteJid ?? chat.jid ?? chat.id, 256)
     if (!jid) continue
     const group = isGroupJid(jid)
+    const lastMessage = providerMessagePayload(chat.lastMessage ?? chat.last_message)
     let rawJidAlt = text(chat.remoteJidAlt ?? chat.remoteJidLid ?? chat.phoneNumberJid, 256)
+    // Evolution v2.3.7 stores the LID ↔ phone pair on the last message key,
+    // even when /findChats omits it from the chat record itself.
+    if (!group && !rawJidAlt && lastMessage) {
+      const messageJid = text(lastMessage.remote_jid, 256)
+      const messageJidAlt = text(lastMessage.remote_jid_alt, 256)
+      if (sameDirectWhatsAppJid(messageJid, jid)) rawJidAlt = messageJidAlt
+      else if (sameDirectWhatsAppJid(messageJidAlt, jid)) rawJidAlt = messageJid
+    }
     if (!rawJidAlt && jid.toLowerCase().endsWith('@lid')) {
       rawJidAlt = await mappedContactPhoneJid(admin, businessId, config.instanceName, jid)
     }
@@ -573,7 +617,6 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       if (await isConflictedContactLid(admin, businessId, config.instanceName, lidJid)) identityLinked = false
     }
     if (!identityLinked) jidAlt = null
-    const lastMessage = providerMessagePayload(chat.lastMessage ?? chat.last_message)
     const directoryName = group ? null : savedNameForJids(namesByJid, jid, jidAlt)
     const savedName = group
       ? evolutionName(chat, true) ?? groupMetadataByJid.get(jid)?.subject ?? null
@@ -908,20 +951,34 @@ async function loadGroupMetadata(config: EvolutionConfig, remoteJid: string): Pr
 }
 
 async function reconcileKnownContactIdentities(admin: any, businessId: string, instanceName: string): Promise<number> {
-  const { data: mappings, error: mappingError } = await admin.from('whatsapp_contact_jid_mappings')
-    .select('lid_jid, phone_jid')
-    .eq('business_id', businessId).eq('instance_name', instanceName)
-    .eq('identity_conflict', false)
-    .limit(3000)
-  if (mappingError) throw new RequestError(500, 'contact_identity_lookup_failed')
-  if (!mappings?.length) return 0
+  const cacheKey = `${businessId}:${instanceName}`
+  const cached = recentIdentityReconcile.get(cacheKey)
+  if (cached && Date.now() - cached.at < CONTACT_IDENTITY_RECONCILE_COOLDOWN_MS) return cached.merged
+
+  const mappings: JsonRecord[] = []
+  const mappingPageSize = 500
+  for (let offset = 0; ; offset += mappingPageSize) {
+    const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
+      .select('lid_jid, phone_jid')
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .eq('identity_conflict', false)
+      .order('lid_jid', { ascending: true })
+      .range(offset, offset + mappingPageSize - 1)
+    if (error) throw new RequestError(500, 'contact_identity_lookup_failed')
+    mappings.push(...(data ?? []))
+    if (!data || data.length < mappingPageSize) break
+  }
+  if (!mappings?.length) {
+    recentIdentityReconcile.set(cacheKey, { at: Date.now(), merged: 0 })
+    return 0
+  }
 
   const identityJids = [...new Set(mappings.flatMap((row: JsonRecord) => [
     String(row.lid_jid).toLowerCase(), String(row.phone_jid).toLowerCase(),
   ]))]
   const conversationByJid = new Map<string, string>()
-  for (let start = 0; start < identityJids.length; start += 100) {
-    const batch = identityJids.slice(start, start + 100)
+  for (let start = 0; start < identityJids.length; start += 50) {
+    const batch = identityJids.slice(start, start + 50)
     const { data: aliases, error } = await admin.from('whatsapp_conversation_jid_aliases')
       .select('remote_jid, conversation_id')
       .eq('business_id', businessId).eq('instance_name', instanceName)
@@ -936,24 +993,39 @@ async function reconcileKnownContactIdentities(admin: any, businessId: string, i
     const phoneJid = String(mapping.phone_jid).toLowerCase()
     const sourceId = conversationByJid.get(lidJid)
     const targetId = conversationByJid.get(phoneJid)
-    if (!sourceId || !targetId || sourceId === targetId) continue
-    const { data, error } = await admin.rpc('merge_whatsapp_conversations_by_identity', {
-      p_business_id: businessId,
-      p_instance_name: instanceName,
-      p_lid_jid: lidJid,
-      p_phone_jid: phoneJid,
-    })
-    if (error) {
-      // Conflicting manual links or duplicated provider history need review;
-      // keep both rows intact instead of hiding or discarding customer data.
-      continue
-    }
-    if (data) {
-      conversationByJid.set(lidJid, String(data))
-      conversationByJid.set(phoneJid, String(data))
-      merged += 1
+    if (sourceId && targetId && sourceId !== targetId) {
+      const { data, error } = await admin.rpc('merge_whatsapp_conversations_by_identity', {
+        p_business_id: businessId,
+        p_instance_name: instanceName,
+        p_lid_jid: lidJid,
+        p_phone_jid: phoneJid,
+      })
+      if (error) {
+        const code = typeof error.code === 'string' ? error.code : ''
+        if (code !== '22023' && code !== '23505') {
+          console.error(`WhatsApp identity merge failed. code=${/^[0-9A-Z]{5}$/.test(code) ? code : 'unknown'}`)
+          throw new RequestError(500, 'contact_identity_merge_failed')
+        }
+        // These SQLSTATEs mean the two histories have an explicit integrity
+        // conflict (for example, duplicate provider IDs or manual links). Keep
+        // both conversations intact, but surface unexpected failures for retry.
+        console.warn(`WhatsApp identity merge skipped due to integrity conflict. code=${code}`)
+      } else if (data) {
+        conversationByJid.set(lidJid, String(data))
+        conversationByJid.set(phoneJid, String(data))
+        merged += 1
+      }
     }
   }
+  for (let start = 0; start < mappings.length; start += mappingPageSize) {
+    const { error: callPhoneError } = await admin.rpc('backfill_whatsapp_call_identity_phones', {
+      p_business_id: businessId,
+      p_instance_name: instanceName,
+      p_identities: mappings.slice(start, start + mappingPageSize),
+    })
+    if (callPhoneError) throw new RequestError(500, 'contact_identity_call_update_failed')
+  }
+  recentIdentityReconcile.set(cacheKey, { at: Date.now(), merged })
   return merged
 }
 
@@ -1657,7 +1729,10 @@ export default {
           if (safeQuery) selection = selection.or(`contact_name.ilike.%${safeQuery}%,group_subject.ilike.%${safeQuery}%,contact_phone.ilike.%${safeQuery}%,remote_jid.ilike.%${safeQuery}%`)
         }
         const offset = (page - 1) * PAGE_SIZE
-        const { data: rows, count, error } = await selection.order('last_activity_at', { ascending: false }).range(offset, offset + PAGE_SIZE - 1)
+        const { data: rows, count, error } = await selection
+          .order('last_activity_at', { ascending: false })
+          .order('id', { ascending: true })
+          .range(offset, offset + PAGE_SIZE - 1)
         if (error) throw new RequestError(500, 'conversation_list_failed')
         const ids = (rows ?? []).map((row: JsonRecord) => row.id)
     let lastMessages: JsonRecord[] = []

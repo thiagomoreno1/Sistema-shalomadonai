@@ -925,9 +925,12 @@ export default {
       await processChatOrContactEvent(admin, businessId, configuration.instanceName, event, payload)
     }
     return json({ received: true })
-  } catch {
+  } catch (error) {
     // Never log the raw webhook body; it contains customer conversations and phone numbers.
-    console.error('Evolution webhook event could not be persisted.')
+    const errorRecord = isRecord(error) ? error : {}
+    const safeCode = stringValue(errorRecord.code, 32)
+      ?? (error instanceof Error && /^[a-z0-9_:-]{1,80}$/i.test(error.message) ? error.message : 'unclassified_error')
+    console.error(`Evolution webhook event could not be persisted. event=${event} code=${safeCode}`)
     return json({ error: 'event_persistence_failed' }, 500)
   }
   }),

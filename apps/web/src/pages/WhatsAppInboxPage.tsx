@@ -54,6 +54,20 @@ type CallListResponse = { calls?: CallEvent[] }
 const EMPTY_CONVERSATIONS: Conversation[] = []
 const COMMON_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 
+function uniqueConversations(rows: Conversation[]): Conversation[] {
+  const uniqueById = new Map<string, Conversation>()
+  for (const conversation of rows) {
+    const previous = uniqueById.get(conversation.id)
+    const activity = Date.parse(conversation.last_activity_at ?? '') || 0
+    const previousActivity = Date.parse(previous?.last_activity_at ?? '') || 0
+    if (!previous || activity >= previousActivity) uniqueById.set(conversation.id, conversation)
+  }
+  return [...uniqueById.values()].sort((left, right) => {
+    const activityDifference = (Date.parse(right.last_activity_at ?? '') || 0) - (Date.parse(left.last_activity_at ?? '') || 0)
+    return activityDifference || left.id.localeCompare(right.id)
+  })
+}
+
 function digitsOnly(value: string | null | undefined) {
   return (value ?? '').replace(/\D/g, '')
 }
@@ -577,7 +591,7 @@ export function WhatsAppInboxPage() {
       })
       if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
       const next = result.conversations ?? []
-      setConversations((current) => append ? [...current, ...next] : next)
+      setConversations((current) => uniqueConversations(append ? [...current, ...next] : next))
       setLoadedListScope(requestScope)
       setListPage(page)
       setHasMore(result.meta?.has_more ?? next.length >= 25)
@@ -619,11 +633,12 @@ export function WhatsAppInboxPage() {
         currentPage += 1
       }
       if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
-      setConversations(combined)
+      const refreshedConversations = uniqueConversations(combined)
+      setConversations(refreshedConversations)
       setLoadedListScope(requestScope)
       setListPage(currentPage)
       setHasMore(morePages)
-      if (selectedId && combined.some((conversation) => conversation.id === selectedId)) {
+      if (selectedId && refreshedConversations.some((conversation) => conversation.id === selectedId)) {
         const result = await invokeInbox<{ conversation?: Conversation }>({
           action: 'conversation', business_id: businessId, conversationId: selectedId,
         })
