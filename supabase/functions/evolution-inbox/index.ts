@@ -285,7 +285,7 @@ async function setEvolutionWebhook(config: EvolutionConfig): Promise<void> {
       enabled: true,
       url: config.webhookUrl,
       headers: { Authorization: `Bearer ${config.webhookSecret}` },
-      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUPS_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
+      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
       byEvents: false,
       base64: false,
     } }),
