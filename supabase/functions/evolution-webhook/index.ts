@@ -342,7 +342,7 @@ async function findConversationByJidOrAlias(
 
 function evolutionContactName(row: JsonRecord, isGroup: boolean): string | null {
   const candidates = isGroup
-    ? [row.subject, row.groupSubject, row.group_subject]
+    ? [row.subject, row.groupSubject, row.group_subject, row.groupName, row.group_name]
     : [row.name, row.contactName, row.shortName, row.short_name, row.displayName, row.display_name,
       row.notify, row.notifyName, row.pushName, row.pushname, row.verifiedName]
   for (const candidate of candidates) {
@@ -689,6 +689,9 @@ async function processMessageEvent(
 }
 
 function statusValue(value: unknown): string | null {
+  if (isRecord(value)) {
+    return statusValue(value.status ?? value.messageStatus ?? value.message_status ?? value.ack ?? value.state ?? value.value)
+  }
   const text = typeof value === 'number' ? null : stringValue(value, 24)?.toUpperCase()
   const numeric = typeof value === 'number' ? value : text && /^\d+$/.test(text) ? Number(text) : null
   if (numeric === 0 || text === 'ERROR' || text === 'FAILED') return 'failed'
@@ -702,14 +705,25 @@ function statusValue(value: unknown): string | null {
 }
 
 async function processMessageStatus(admin: AdminClient, businessId: string, instanceName: string, value: unknown) {
-  const rows = eventRows(value, 'messages')
+  const rows = Array.isArray(value) ? value
+    : isRecord(value) && Array.isArray(value.messages) ? value.messages
+      : isRecord(value) && Array.isArray(value.keys) ? value.keys
+        : isRecord(value) && Array.isArray(value.updates) ? value.updates
+          : [value]
   for (const row of rows) {
     if (!isRecord(row)) continue
-    const key = isRecord(row.key) ? row.key : row
-    const messageId = stringValue(key.id, 256)
+    const key = isRecord(row.key) ? row.key
+      : isRecord(row.messageKey) ? row.messageKey
+        : isRecord(row.message_key) ? row.message_key
+          : isRecord(row.message) && isRecord(row.message.key) ? row.message.key : row
+    const messageId = stringValue(key.id ?? key.messageId ?? key.message_id
+      ?? row.keyId ?? row.key_id ?? row.messageId ?? row.message_id ?? row.id, 256)
     if (!messageId) continue
-    const update = isRecord(row.update) ? row.update : row
-    const deliveryStatus = statusValue(update.status ?? update.messageStatus ?? update.ack ?? row.status ?? row.ack)
+    const update = isRecord(row.update) ? row.update
+      : isRecord(row.messageUpdate) ? row.messageUpdate
+        : isRecord(row.message_update) ? row.message_update : row
+    const deliveryStatus = statusValue(update.status ?? update.messageStatus ?? update.message_status
+      ?? update.ack ?? update.receipt ?? row.status ?? row.messageStatus ?? row.message_status ?? row.ack ?? row.receipt)
     if (!deliveryStatus) continue
     const { error } = await admin.rpc('apply_whatsapp_delivery_status_event', {
       p_business_id: businessId,

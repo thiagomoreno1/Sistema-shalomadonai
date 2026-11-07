@@ -53,6 +53,7 @@ type ConversationLink = { conversation_id: string; customer_id: string | null; o
 type CallEvent = { id: string; conversation_id: string; contact: { name: string | null; phone: string | null }; display_name_override?: string | null; contact_classification?: ContactClassification; hidden_from_inbox?: boolean; customer_name?: string | null; status: string | null; status_label: string; is_video: boolean | null; occurred_at: string; event_count?: number; states?: string[] }
 type ConversationListResponse = { conversations?: Conversation[]; meta?: { page?: number; has_more?: boolean; history_sync?: { status?: string; notice?: string } } }
 type ConversationDetailResponse = { conversation?: Conversation; meta?: { has_more?: boolean } }
+type MessageStatusesResponse = { statuses?: { id: string; status: Message['status'] }[] }
 type OlderMessagesResponse = { messages?: Message[]; meta?: { has_more?: boolean; notice?: string } }
 type CallListResponse = { calls?: CallEvent[] }
 
@@ -167,9 +168,11 @@ function MessageDeliveryIndicator({ status }: { status: Message['status'] }) {
 
 function conversationDisplayName(conversation: Conversation | null | undefined, loading = false) {
   if (!conversation) return loading ? 'Carregando contato…' : 'Conversa'
-  if (conversation.contact.name?.trim()) return conversation.contact.name.trim()
+  const savedLabel = conversation.contact.name?.trim()
+  if (savedLabel && !/^contato sem (?:nome|identificação|identificacao)|grupo sem (?:nome|identificação|identificacao)$/i.test(savedLabel)) return savedLabel
   if (!conversation.is_group && conversation.contact.phone) return conversation.contact.phone
-  return conversation.is_group ? 'Grupo sem identificação' : 'Contato sem identificação'
+  const stableId = conversation.id.replace(/[^a-z0-9]/gi, '').slice(-6).toUpperCase() || 'ID'
+  return `${conversation.is_group ? 'Grupo' : 'Contato'} #${stableId}`
 }
 
 function conversationContactSubtitle(conversation: Conversation) {
@@ -528,6 +531,8 @@ export function WhatsAppInboxPage() {
   const [connectionState, setConnectionState] = useState('')
   const [instanceExists, setInstanceExists] = useState(false)
   const [pairingLoading, setPairingLoading] = useState(false)
+  const [pairingPhone, setPairingPhone] = useState('')
+  const [pairingCode, setPairingCode] = useState<string | null>(null)
   const [disconnecting, setDisconnecting] = useState(false)
   const [pairingError, setPairingError] = useState<string | null>(null)
   const [qrImage, setQrImage] = useState<string | null>(null)
@@ -726,7 +731,7 @@ export function WhatsAppInboxPage() {
   }, [businessId])
 
   useEffect(() => {
-    if (!configured || !qrImage) return
+    if (!configured || (!qrImage && !pairingCode)) return
     const interval = window.setInterval(() => {
       void invokeInbox<{ configured?: boolean; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
         .then((result) => {
@@ -734,6 +739,7 @@ export function WhatsAppInboxPage() {
           setInstanceExists(result.instance_exists === true)
           if (result.connection_state?.toLowerCase() === 'open') {
             setQrImage(null)
+            setPairingCode(null)
             setPairingError(null)
             void refreshLoadedConversations()
           }
@@ -741,7 +747,7 @@ export function WhatsAppInboxPage() {
         .catch(() => undefined)
     }, 4000)
     return () => window.clearInterval(interval)
-  }, [businessId, configured, qrImage, refreshLoadedConversations])
+  }, [businessId, configured, pairingCode, qrImage, refreshLoadedConversations])
 
   useEffect(() => { if (configured) void loadConversations() }, [configured, loadConversations])
   useEffect(() => { setView(searchParams.get('view') === 'calls' ? 'calls' : 'conversations') }, [searchParams])
@@ -825,6 +831,42 @@ export function WhatsAppInboxPage() {
     setLinkError(null)
     setLinkMessage(null)
     return () => { active = false }
+  }, [businessId, configured, selectedId])
+
+  useEffect(() => {
+    if (!selectedId || !configured) return
+    let active = true
+    const refreshMessageStatuses = async () => {
+      try {
+        const result = await invokeInbox<MessageStatusesResponse>({
+          action: 'message_statuses', business_id: businessId, conversationId: selectedId,
+        })
+        if (!active || !result.statuses?.length) return
+        const statuses = new Map(result.statuses.map((item) => [item.id, item.status]))
+        setSelectedConversation((current) => {
+          if (!current || current.id !== selectedId) return current
+          let changed = false
+          const messages = current.messages.map((message) => {
+            const status = statuses.get(message.id)
+            if (status === undefined || status === message.status) return message
+            changed = true
+            return { ...message, status }
+          })
+          const lastMessage = current.last_message ? (() => {
+            const status = statuses.get(current.last_message.id)
+            if (status === undefined || status === current.last_message.status) return current.last_message
+            changed = true
+            return { ...current.last_message, status }
+          })() : current.last_message
+          return changed ? { ...current, messages, last_message: lastMessage } : current
+        })
+      } catch {
+        // Keep the conversation usable if the small status refresh is temporarily unavailable.
+      }
+    }
+    void refreshMessageStatuses()
+    const interval = window.setInterval(() => { void refreshMessageStatuses() }, 5000)
+    return () => { active = false; window.clearInterval(interval) }
   }, [businessId, configured, selectedId])
 
   const selectedLink = selectedId ? links[selectedId] : undefined
@@ -1150,13 +1192,18 @@ export function WhatsAppInboxPage() {
     }
   }
 
-  async function handleConnectWhatsApp() {
+  async function handleConnectWhatsApp(method: 'qr' | 'phone' = 'qr') {
     if (role !== 'owner' || pairingLoading) return
     setPairingLoading(true)
     setPairingError(null)
     setQrImage(null)
+    setPairingCode(null)
     try {
-      const result = await invokeInbox<{ qr_image?: string; connection_state?: string; instance_exists?: boolean; connected?: boolean; error?: string }>({ action: 'connect', business_id: businessId })
+      const result = await invokeInbox<{ qr_image?: string; pairing_code?: string; connection_state?: string; instance_exists?: boolean; connected?: boolean; error?: string }>({
+        action: 'connect', business_id: businessId,
+        pairing_method: method,
+        ...(method === 'phone' ? { phone_number: pairingPhone } : {}),
+      })
       if (result.instance_exists) setInstanceExists(true)
       if (result.connected) {
         setQrImage(null)
@@ -1170,6 +1217,21 @@ export function WhatsAppInboxPage() {
         setPairingError('A instância foi criada, mas o webhook não ficou pronto. Tente novamente; o telefone ainda não foi pareado.')
         return
       }
+      if (result.error === 'invalid_pairing_phone') {
+        setPairingError('Informe o número completo com DDI, por exemplo +55 21 99999-9999.')
+        return
+      }
+      if (method === 'phone' && result.pairing_code) {
+        setPairingCode(result.pairing_code)
+        setConnectionState(result.connection_state ?? 'connecting')
+        setInstanceExists(true)
+        setWebhookFeedback('Código de pareamento pronto. Digite-o no WhatsApp do número informado.')
+        return
+      }
+      if (method === 'phone') {
+        setPairingError('A Evolution não forneceu o código de pareamento. Confira o número e tente novamente; o QR continua disponível como alternativa.')
+        return
+      }
       if (result.error === 'qrcode_unavailable' || !result.qr_image) {
         setPairingError('A instância e o webhook estão prontos, mas a Evolution ainda não forneceu o QR. Tente novamente em alguns segundos; nada será pareado sem escanear o código.')
         return
@@ -1179,7 +1241,9 @@ export function WhatsAppInboxPage() {
       setInstanceExists(true)
       setWebhookFeedback('Evolution pronta. Escaneie o QR Code com o WhatsApp para concluir a conexão.')
     } catch {
-      setPairingError('Não foi possível falar com a Evolution. A instância pode ter sido criada; tente novamente. Nenhum número é pareado sem escanear o QR.')
+      setPairingError(method === 'phone'
+        ? 'Não foi possível falar com a Evolution. Confira o número e tente novamente; você também pode conectar pelo QR Code.'
+        : 'Não foi possível falar com a Evolution. A instância pode ter sido criada; tente novamente.')
     } finally {
       setPairingLoading(false)
     }
@@ -1193,8 +1257,9 @@ export function WhatsAppInboxPage() {
     try {
       const result = await invokeInbox<{ connection_state?: string }>({ action: 'disconnect', business_id: businessId })
       setQrImage(null)
+      setPairingCode(null)
       setConnectionState(result.connection_state ?? 'close')
-      setWebhookFeedback('Número desconectado. Clique em conectar para parear qualquer outro número pelo QR Code.')
+      setWebhookFeedback('Número desconectado. Conecte outro número pelo QR Code ou por código de pareamento.')
     } catch {
       setPairingError('Não foi possível desconectar o número. Confira se a Evolution está acessível e tente novamente.')
     } finally {
@@ -1274,6 +1339,16 @@ export function WhatsAppInboxPage() {
         {role === 'owner' && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
       </div>
       {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
+      {role === 'owner' && connectionState.toLowerCase() !== 'open' && connectionState.toLowerCase() !== 'unavailable' && <details className="surface-panel whatsapp-phone-pairing">
+        <summary>Conectar usando número e código</summary>
+        <p>Informe o número com DDI. Depois, no WhatsApp desse celular, abra <strong>Aparelhos conectados</strong> e escolha <strong>Conectar com número de telefone</strong>.</p>
+        <form onSubmit={(event) => { event.preventDefault(); void handleConnectWhatsApp('phone') }}>
+          <label htmlFor="whatsapp-pairing-phone">Número do WhatsApp com DDI</label>
+          <input autoComplete="tel" id="whatsapp-pairing-phone" inputMode="tel" onChange={(event) => setPairingPhone(event.target.value)} placeholder="+55 21 99999-9999" required type="tel" value={pairingPhone} />
+          <button className="button button-secondary" disabled={pairingLoading || !pairingPhone.trim()} type="submit">{pairingLoading ? 'Gerando código…' : 'Gerar código de pareamento'}</button>
+        </form>
+        {pairingCode && <div className="whatsapp-pairing-code" role="status"><span>Código de pareamento</span><strong>{pairingCode}</strong><small>Digite este código no WhatsApp do número informado. A conexão será confirmada automaticamente.</small></div>}
+      </details>}
       {qrImage && <section className="surface-panel whatsapp-qr-panel" aria-labelledby="whatsapp-qr-title" aria-live="polite">
         <div><p className="eyebrow">PAREAMENTO EXPLÍCITO</p><h2 id="whatsapp-qr-title">Escaneie com o WhatsApp</h2><p>Abra esta página em outro dispositivo. No telefone com o número que deseja usar, abra <strong>Aparelhos conectados</strong> e escaneie o código. Para trocar de número depois, desconecte o atual nesta tela e repita o pareamento.</p></div>
         <img alt="QR Code temporário para conectar o WhatsApp" src={qrImage} />

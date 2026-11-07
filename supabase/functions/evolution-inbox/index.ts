@@ -37,6 +37,7 @@ const recentContactNames = new Map<string, {
   identitiesPersisted: boolean
 }>()
 const recentGroupMetadata = new Map<string, { at: number; subject: string | null; pictureUrl: string | null }>()
+const recentGroupMetadataLookups = new Map<string, number>()
 const recentGroupDirectory = new Map<string, { at: number; directory: Map<string, GroupMetadata> }>()
 
 type JsonRecord = Record<string, unknown>
@@ -333,8 +334,11 @@ function contactDirectoryIndex(contacts: JsonRecord[]): ContactDirectory {
       }
     }
     for (const phone of [contact.phoneNumber, contact.phone_number, contact.phone, contact.number, contact.pn]) {
-      if (typeof phone !== 'string') continue
-      for (const key of phoneDirectoryKeys(phone)) {
+      const normalizedPhone = typeof phone === 'number' && Number.isSafeInteger(phone) && phone > 0
+        ? String(phone)
+        : typeof phone === 'string' ? phone : null
+      if (!normalizedPhone) continue
+      for (const key of phoneDirectoryKeys(normalizedPhone)) {
         const current = names.get(key)
         names.set(key, {
           name: current?.name ?? name,
@@ -574,7 +578,7 @@ async function setEvolutionWebhook(config: EvolutionConfig): Promise<void> {
       enabled: true,
       url: config.webhookUrl,
       headers: { Authorization: `Bearer ${config.webhookSecret}` },
-      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
+      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE', 'GROUPS_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
       byEvents: false,
       base64: false,
     } }),
@@ -641,7 +645,7 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
     const batch = unresolvedGroups.slice(index, index + 8)
     const metadata = await Promise.all(batch.map(async (chat) => {
       const jid = text(chat.remoteJid ?? chat.jid ?? chat.id, 256)!
-      return [jid, await loadGroupMetadata(config, jid)] as const
+      return [jid, await loadGroupMetadata(config, jid, 'subject')] as const
     }))
     for (const [jid, value] of metadata) groupMetadataByJid.set(jid, value)
   }
@@ -803,14 +807,17 @@ function conversationResponse(
   const phone = isGroup ? null : displayPhone(row.contact_phone)
     ?? phoneFromWhatsAppJid(remoteJidAlt ?? '')
     ?? phoneFromWhatsAppJid(remoteJid ?? '')
+  const fallbackName = stableConversationLabel(row, isGroup)
   const savedName = isGroup ? null : savedNameForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt)
   const name = isGroup
     ? displayableContactName(row.display_name_override, null)
       ?? displayableContactName(groupMetadata?.subject, null)
       ?? displayableContactName(row.group_subject, null)
+      ?? fallbackName
     : displayableContactName(row.display_name_override, phone)
       ?? displayableContactName(savedName, phone)
       ?? displayableContactName(row.contact_name, phone)
+      ?? (phone ? null : fallbackName)
   return {
     id: row.id,
     inbox_id: row.instance_name,
@@ -831,6 +838,11 @@ function conversationResponse(
   }
 }
 
+function stableConversationLabel(row: JsonRecord, isGroup: boolean): string {
+  const stableId = text(row.id, 64)?.replace(/[^a-z0-9]/gi, '').slice(-6).toUpperCase()
+  return `${isGroup ? 'Grupo' : 'Contato'} #${stableId || 'ID'}`
+}
+
 function digitsOnly(value: string | null | undefined): string {
   return (value ?? '').replace(/\D/g, '')
 }
@@ -841,6 +853,13 @@ function phoneFromWhatsAppJid(value: string): string | null {
   if (digits.length === 10 || digits.length === 11) return `+55${digits}`
   if (digits.length >= 8 && digits.length <= 15) return `+${digits}`
   return null
+}
+
+function normalizePairingPhone(value: unknown): string | null {
+  const candidate = text(value, 40)
+  if (!candidate || !/^\+?[\d\s().-]+$/.test(candidate)) return null
+  const digits = candidate.replace(/\D/g, '')
+  return digits.length >= 8 && digits.length <= 15 ? digits : null
 }
 
 function displayPhone(value: unknown): string | null {
@@ -987,7 +1006,8 @@ function groupMetadataFromEvolution(value: unknown): GroupMetadata {
     const row = queue.shift()!
     if (visited.has(row)) continue
     visited.add(row)
-    subject ??= text(row.subject ?? row.groupSubject ?? row.group_subject, 160)
+    subject ??= displayableContactName(row.subject ?? row.groupSubject ?? row.group_subject
+      ?? row.groupName ?? row.group_name, null)
     const pictureValue = row.pictureUrl ?? row.profilePictureUrl ?? row.profilePicUrl
       ?? row.profile_picture_url ?? row.picture_url ?? row.picture
     pictureUrl ??= typeof pictureValue === 'string' ? text(pictureValue, 4096)
@@ -1010,7 +1030,8 @@ async function loadGroupDirectory(config: EvolutionConfig): Promise<Map<string, 
     const groups = recordsFromEvolution(response, ['groups', 'records', 'data'])
     const directory = new Map<string, GroupMetadata>()
     for (const group of groups) {
-      const jid = text(group.id ?? group.groupJid ?? group.remoteJid ?? group.jid, 256)
+      const jid = text(group.id ?? group.groupJid ?? group.group_jid ?? group.remoteJid
+        ?? group.remote_jid ?? group.jid, 256)
       if (!jid || !isGroupJid(jid)) continue
       directory.set(jid.toLowerCase(), groupMetadataFromEvolution(group))
     }
@@ -1021,30 +1042,49 @@ async function loadGroupDirectory(config: EvolutionConfig): Promise<Map<string, 
   }
 }
 
-async function loadGroupMetadata(config: EvolutionConfig, remoteJid: string): Promise<GroupMetadata> {
+async function loadGroupMetadata(
+  config: EvolutionConfig,
+  remoteJid: string,
+  required: 'subject' | 'picture' = 'subject',
+): Promise<GroupMetadata> {
   const cacheKey = `${config.businessId}:${config.instanceName}:${remoteJid.toLowerCase()}`
   const cached = recentGroupMetadata.get(cacheKey)
-  if (cached && Date.now() - cached.at < 5 * 60_000) {
-    return { subject: cached.subject, pictureUrl: cached.pictureUrl }
-  }
+  const cacheIsFresh = Boolean(cached && Date.now() - cached.at < 5 * 60_000)
   const fromDirectory = (await loadGroupDirectory(config)).get(remoteJid.toLowerCase())
-  if (fromDirectory && (fromDirectory.subject || fromDirectory.pictureUrl)) {
-    recentGroupMetadata.set(cacheKey, { at: Date.now(), ...fromDirectory })
-    return fromDirectory
+  const current: GroupMetadata = {
+    subject: (cacheIsFresh ? cached?.subject : null) ?? fromDirectory?.subject ?? null,
+    pictureUrl: (cacheIsFresh ? cached?.pictureUrl : null) ?? fromDirectory?.pictureUrl ?? null,
   }
+  const hasRequiredMetadata = required === 'subject' ? current.subject : current.pictureUrl
+  if (hasRequiredMetadata) return current
+
+  const lookupKey = `${cacheKey}:${required}`
+  const lastAttempt = recentGroupMetadataLookups.get(lookupKey) ?? 0
+  if (Date.now() - lastAttempt < 5 * 60_000) return current
+  recentGroupMetadataLookups.set(lookupKey, Date.now())
+
   try {
     const response = await evolutionRequest(config,
       `/group/findGroupInfoByJid/${encodeURIComponent(config.instanceName)}?groupJid=${encodeURIComponent(remoteJid)}`,
       { method: 'GET', signal: AbortSignal.timeout(4_000) })
-    const metadata = groupMetadataFromEvolution(response)
+    const fetched = groupMetadataFromEvolution(response)
+    const metadata = {
+      subject: fetched.subject ?? current.subject,
+      pictureUrl: fetched.pictureUrl ?? current.pictureUrl,
+    }
     recentGroupMetadata.set(cacheKey, { at: Date.now(), ...metadata })
     return metadata
   } catch {
     // A missing group subject/photo must not prevent the inbox from loading.
-    const metadata = { subject: null, pictureUrl: null }
-    recentGroupMetadata.set(cacheKey, { at: Date.now(), ...metadata })
-    return metadata
+    recentGroupMetadata.set(cacheKey, { at: Date.now(), ...current })
+    return current
   }
+}
+
+function groupMetadataWasRecentlyChecked(config: EvolutionConfig, remoteJid: string, required: 'subject' | 'picture' = 'subject'): boolean {
+  const lookupKey = `${config.businessId}:${config.instanceName}:${remoteJid.toLowerCase()}:${required}`
+  const lastAttempt = recentGroupMetadataLookups.get(lookupKey) ?? 0
+  return Date.now() - lastAttempt < 5 * 60_000
 }
 
 async function reconcileKnownContactIdentities(admin: any, businessId: string, instanceName: string): Promise<number> {
@@ -1455,7 +1495,7 @@ async function profilePictureResponse(config: EvolutionConfig, conversation: Jso
   const isGroup = isGroupJid(remoteJid)
   let pictureUrl: string | null = null
   if (isGroup) {
-    const metadata = await loadGroupMetadata(config, remoteJid)
+    const metadata = await loadGroupMetadata(config, remoteJid, 'picture')
     pictureUrl = metadata.pictureUrl
   } else {
     const contactDirectory = await loadSavedContactNames(config)
@@ -1728,7 +1768,7 @@ export default {
     const businessId = body.business_id
     const userId = text(context.userClaims?.id, 64)
     if (!userId || !isUuid(businessId)) return json({ error: 'invalid_request' }, 400)
-    if (!['status', 'list', 'calls', 'conversation', 'older_messages', 'react', 'mark_read', 'send', 'send_media', 'set_status', 'update_contact_preferences', 'attachment', 'avatar', 'configure_webhook', 'connect', 'disconnect'].includes(action ?? '')) {
+    if (!['status', 'list', 'calls', 'conversation', 'message_statuses', 'older_messages', 'react', 'mark_read', 'send', 'send_media', 'set_status', 'update_contact_preferences', 'attachment', 'avatar', 'configure_webhook', 'connect', 'disconnect'].includes(action ?? '')) {
       return json({ error: 'invalid_action' }, 400)
     }
 
@@ -1769,6 +1809,9 @@ export default {
 
       if (action === 'connect') {
         if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        const pairingMethod = body.pairing_method === 'phone' ? 'phone' : 'qr'
+        const pairingPhone = pairingMethod === 'phone' ? normalizePairingPhone(body.phone_number) : null
+        if (pairingMethod === 'phone' && !pairingPhone) return json({ error: 'invalid_pairing_phone' }, 400)
         const instanceList = await evolutionRequest(config, '/instance/fetchInstances')
         const instanceExists = Array.isArray(instanceList) && instanceList.some((entry) => evolutionInstanceName(entry) === config.instanceName)
         if (!instanceExists) {
@@ -1786,14 +1829,22 @@ export default {
           return json({ error: 'webhook_setup_failed', instance_exists: true, connection_state: 'close' })
         }
         let result: unknown
-        try { result = await evolutionRequest(config, `/instance/connect/${encodeURIComponent(config.instanceName)}`, undefined, 1_600_000) } catch {
-          return json({ error: 'qrcode_unavailable', instance_exists: true, connection_state: 'close' })
+        const connectPath = `/instance/connect/${encodeURIComponent(config.instanceName)}${pairingPhone ? `?number=${encodeURIComponent(pairingPhone)}` : ''}`
+        try { result = await evolutionRequest(config, connectPath, undefined, 1_600_000) } catch {
+          return json({ error: pairingMethod === 'phone' ? 'pairing_code_unavailable' : 'qrcode_unavailable', instance_exists: true, connection_state: 'close' })
         }
         const outer = isRecord(result) ? result : {}
         const instance = isRecord(outer.instance) ? outer.instance : {}
         const state = text(instance.state ?? outer.state ?? instance.connectionStatus, 64)?.toLowerCase()
         if (state === 'open') return json({ connected: true, instance_exists: true, connection_state: 'open' })
         const qr = isRecord(outer.qrcode) ? outer.qrcode : outer
+        if (pairingMethod === 'phone') {
+          const pairingCode = text(qr.pairingCode ?? qr.pairing_code ?? outer.pairingCode ?? outer.pairing_code, 64)
+          if (!pairingCode || !/^[A-Z0-9-]{6,24}$/i.test(pairingCode)) {
+            return json({ error: 'pairing_code_unavailable', instance_exists: true, connection_state: 'connecting' })
+          }
+          return json({ connected: false, instance_exists: true, connection_state: 'connecting', pairing_code: pairingCode })
+        }
         const imageValue = text(qr.base64 ?? qr.qrcode, 1_500_000)
         if (!imageValue) return json({ error: 'qrcode_unavailable', instance_exists: true, connection_state: 'connecting' })
         if (!imageValue.startsWith('data:image/') && !/^[A-Za-z0-9+/]+={0,2}$/.test(imageValue)) {
@@ -1858,6 +1909,29 @@ export default {
         }
         const savedNames = await loadSavedContactNames(config)
         const groupDirectory = await loadGroupDirectory(config)
+        const groupsNeedingLookup = (rows ?? []).filter((row: JsonRecord) => {
+          const jid = text(row.remote_jid, 256)
+          const existingMetadata = jid ? groupDirectory.get(jid.toLowerCase()) : null
+          return Boolean(jid && isGroupJid(jid)
+            && !displayableContactName(row.display_name_override, null)
+            && !displayableContactName(existingMetadata?.subject, null)
+            && !displayableContactName(row.group_subject, null)
+            && !groupMetadataWasRecentlyChecked(config, jid, 'subject'))
+        }).slice(0, 8)
+        const groupLookups = await Promise.all(groupsNeedingLookup.map(async (row: JsonRecord) => {
+          const jid = text(row.remote_jid, 256)!
+          return { row, jid, metadata: await loadGroupMetadata(config, jid, 'subject') }
+        }))
+        for (const { row, jid, metadata } of groupLookups) {
+          groupDirectory.set(jid.toLowerCase(), metadata)
+          const groupSubject = displayableContactName(metadata.subject, null)
+          if (!groupSubject || displayableContactName(row.group_subject, null)) continue
+          const { error: groupNameError } = await admin.from('whatsapp_conversations')
+            .update({ group_subject: groupSubject, contact_name: null })
+            .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', row.id)
+            .is('group_subject', null)
+          if (groupNameError) throw new RequestError(500, 'group_label_save_failed')
+        }
         const savedNameUpdates = (rows ?? []).flatMap((row: JsonRecord) => {
           if (isGroupJid(String(row.remote_jid ?? ''))) return []
           const savedName = displayableContactName(
@@ -1983,6 +2057,19 @@ export default {
         .maybeSingle()
       if (conversationError) throw new RequestError(500, 'conversation_lookup_failed')
       if (!conversation) return json({ error: 'conversation_not_found' }, 404)
+
+      if (action === 'message_statuses') {
+        const { data: statusRows, error: statusError } = await admin.from('whatsapp_messages')
+          .select('id, delivery_status')
+          .eq('business_id', businessId).eq('instance_name', config.instanceName)
+          .eq('conversation_id', conversationId).eq('direction', 'outgoing')
+          .order('provider_timestamp', { ascending: false }).limit(MESSAGE_HISTORY_LIMIT)
+        if (statusError) throw new RequestError(500, 'message_status_list_failed')
+        return json({ statuses: (statusRows ?? []).map((row: JsonRecord) => ({
+          id: row.id,
+          status: messageDeliveryStatus(row.delivery_status),
+        })) })
+      }
 
       if (action === 'update_contact_preferences') {
         if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
