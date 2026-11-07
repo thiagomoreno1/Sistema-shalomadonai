@@ -1,0 +1,13 @@
+[Unit]
+Description=Check Shalom Adonai main branch for validated web deployments
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+RandomizedDelaySec=20s
+Persistent=true
+Unit=shalom-deploy.service
+
+[Install]
+WantedBy=timers.target
