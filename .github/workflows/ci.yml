@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
@@ -64,3 +64,82 @@ jobs:
 
       - name: Run local pgTAP suites
         run: npx --yes supabase@2.122.0 test db
+
+  deploy-contabo:
+    name: Deploy web app to Contabo
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.CONTABO_DEPLOY_ENABLED == 'true'
+    needs: [validate, database]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    permissions:
+      contents: read
+    concurrency:
+      group: shalom-adonai-contabo-production
+      cancel-in-progress: false
+    steps:
+      - name: Check out validated commit
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build production app
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+
+      - name: Validate deployment settings
+        env:
+          CONTABO_HOST: ${{ vars.CONTABO_HOST }}
+          CONTABO_USER: ${{ vars.CONTABO_USER }}
+          CONTABO_PATH: ${{ vars.CONTABO_PATH }}
+          CONTABO_KNOWN_HOSTS: ${{ vars.CONTABO_KNOWN_HOSTS }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          CONTABO_SSH_PRIVATE_KEY: ${{ secrets.CONTABO_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          for name in CONTABO_HOST CONTABO_USER CONTABO_PATH CONTABO_KNOWN_HOSTS VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY CONTABO_SSH_PRIVATE_KEY; do
+            if [ -z "$(printenv "$name")" ]; then
+              echo "::error title=Missing deployment setting::Set $name in the production GitHub environment."
+              exit 1
+            fi
+          done
+          [[ "$CONTABO_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || { echo "::error::CONTABO_HOST has unsupported characters."; exit 1; }
+          [[ "$CONTABO_USER" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ && "$CONTABO_USER" != "root" ]] || { echo "::error::CONTABO_USER must be a non-root deploy account."; exit 1; }
+          [[ "$CONTABO_PATH" == "/var/www/shalom-adonai" ]] || { echo "::error::CONTABO_PATH must be /var/www/shalom-adonai."; exit 1; }
+
+      - name: Configure pinned SSH access
+        env:
+          CONTABO_HOST: ${{ vars.CONTABO_HOST }}
+          CONTABO_KNOWN_HOSTS: ${{ vars.CONTABO_KNOWN_HOSTS }}
+          CONTABO_SSH_PRIVATE_KEY: ${{ secrets.CONTABO_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$CONTABO_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$CONTABO_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
+          ssh-keygen -F "$CONTABO_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
+
+      - name: Copy static site to Contabo
+        env:
+          CONTABO_HOST: ${{ vars.CONTABO_HOST }}
+          CONTABO_USER: ${{ vars.CONTABO_USER }}
+          CONTABO_PATH: ${{ vars.CONTABO_PATH }}
+        run: |
+          set -euo pipefail
+          rsync --archive --compress --delay-updates \
+            -e "ssh -i $HOME/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+            apps/web/dist/ "${CONTABO_USER}@${CONTABO_HOST}:${CONTABO_PATH}/"
