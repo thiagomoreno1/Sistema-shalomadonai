@@ -16,6 +16,25 @@ function stringValue(value: unknown, maximumLength = 256): string | null {
   return valueTrimmed.length > 0 && valueTrimmed.length <= maximumLength ? valueTrimmed : null
 }
 
+function displayableContactName(value: unknown): string | null {
+  const name = stringValue(value, 160)
+  if (!name || /^(?:contato|grupo) (?:sem nome|sem identificação|sem identificacao)$/i.test(name)
+    || /@(lid|g[.]us|s[.]whatsapp[.]net|c[.]us|broadcast|newsletter)\b/i.test(name)) return null
+  const digits = name.replace(/\D/g, '')
+  if (/^[+\d\s().-]+$/.test(name) && digits.length >= 8 && digits.length <= 15) return null
+  return name
+}
+
+async function withWebhookStage<T>(event: string, stage: string, operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    const errorType = error instanceof Error ? error.name.toLowerCase().replace(/[^a-z0-9_-]/g, '') : 'unknown'
+    console.error(`Evolution webhook stage failed safely. event=${event} stage=${stage} error_type=${errorType || 'unknown'}`)
+    throw error
+  }
+}
+
 function eventRows(value: unknown, collectionKey: string): unknown[] {
   if (Array.isArray(value)) return value
   if (isRecord(value) && Array.isArray(value[collectionKey])) return value[collectionKey] as unknown[]
@@ -99,7 +118,13 @@ function phoneJidFromProviderValue(value: unknown): string | null {
   const raw = typeof value === 'number' && Number.isSafeInteger(value) && value > 0
     ? String(value)
     : typeof value === 'string' ? value.trim() : ''
-  if (!raw || !/^\+?[0-9\s().-]+$/.test(raw)) return null
+  if (!raw) return null
+  const legacyJid = raw.toLowerCase().match(/^([0-9]{8,15})(?::[0-9]{1,5})?@(?:c\.us|whatsapp\.net)$/)
+  if (legacyJid) {
+    const digits = legacyJid[1].length === 10 || legacyJid[1].length === 11 ? `55${legacyJid[1]}` : legacyJid[1]
+    return `${digits}@s.whatsapp.net`
+  }
+  if (!/^\+?[0-9\s().-]+$/.test(raw)) return null
   let digits = digitsOnly(raw)
   if (raw.startsWith('+')) {
     return digits.length >= 8 && digits.length <= 15 ? `${digits}@s.whatsapp.net` : null
@@ -145,6 +170,7 @@ async function saveContactIdentityMapping(
   instanceName: string,
   values: unknown[],
   contactName: string | null = null,
+  authoritativeName = false,
 ) {
   const pair = contactIdentityPair(values)
   if (!pair) return null
@@ -168,7 +194,15 @@ async function saveContactIdentityMapping(
     if (conflictError) throw new Error('contact_identity_conflict_save_failed')
     return null
   }
-  return { ...pair, contactName: stringValue(data.contact_name, 160) }
+  const savedName = displayableContactName(data.contact_name)
+  if (contactName && (!savedName || authoritativeName)) {
+    const { error: nameError } = await admin.from('whatsapp_contact_jid_mappings')
+      .update({ contact_name: contactName, updated_at: new Date().toISOString() })
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .eq('lid_jid', pair.lidJid).eq('phone_jid', pair.phoneJid)
+    if (nameError) throw new Error('contact_identity_name_save_failed')
+  }
+  return { ...pair, contactName: authoritativeName ? contactName : savedName ?? contactName }
 }
 
 async function mappedPhoneIdentity(admin: AdminClient, businessId: string, instanceName: string, lidJid: string) {
@@ -179,7 +213,7 @@ async function mappedPhoneIdentity(admin: AdminClient, businessId: string, insta
   if (error) throw new Error('contact_identity_lookup_failed')
   const phoneJid = stringValue(data?.phone_jid, 256)
   if (data?.identity_conflict === true || !phoneJid || !phoneJid.endsWith('@s.whatsapp.net') || !phoneFromJid(phoneJid)) return null
-  return { phoneJid, contactName: stringValue(data?.contact_name, 160) }
+  return { lidJid: lidJid.toLowerCase(), phoneJid, contactName: stringValue(data?.contact_name, 160) }
 }
 
 async function isConflictedContactLid(admin: AdminClient, businessId: string, instanceName: string, jid: string): Promise<boolean> {
@@ -309,9 +343,10 @@ async function findConversationByJidOrAlias(
 function evolutionContactName(row: JsonRecord, isGroup: boolean): string | null {
   const candidates = isGroup
     ? [row.subject, row.groupSubject, row.group_subject]
-    : [row.name, row.pushName, row.verifiedName]
+    : [row.name, row.contactName, row.shortName, row.short_name, row.displayName, row.display_name,
+      row.notify, row.notifyName, row.pushName, row.pushname, row.verifiedName]
   for (const candidate of candidates) {
-    const name = stringValue(candidate, 160)
+    const name = displayableContactName(candidate)
     if (name) return name
   }
   return null
@@ -401,7 +436,7 @@ function messagePayload(value: unknown): JsonRecord | null {
 
   const fromMe = key?.fromMe === true
   const isGroup = isGroupJid(remoteJid)
-  const senderName = stringValue(value.pushName, 160)
+  const senderName = displayableContactName(value.pushName)
   const participantJid = stringValue(key?.participant ?? key?.participantLid ?? key?.participantAlt, 256)
   const participantAltJid = stringValue(key?.participantAlt ?? key?.participantPn ?? key?.senderPn, 256)
   if (isGroup && senderName) mediaMetadata.sender_name = senderName
@@ -412,10 +447,7 @@ function messagePayload(value: unknown): JsonRecord | null {
     const targetMessageId = stringValue(targetKey?.id, 256)
     if (targetMessageId) mediaMetadata.reaction_to_message_id = targetMessageId
   }
-  const deliveryStatus = stringValue(value.status, 24)?.toLowerCase()
-  const validStatus = ['pending', 'sent', 'delivered', 'read', 'played', 'failed', 'deleted'].includes(deliveryStatus ?? '')
-    ? deliveryStatus
-    : fromMe ? 'pending' : null
+  const validStatus = statusValue(value.status ?? key?.status)
 
   return {
     id: messageId,
@@ -428,7 +460,7 @@ function messagePayload(value: unknown): JsonRecord | null {
     direction: fromMe ? 'outgoing' : 'incoming',
     message_kind: kind,
     content,
-    delivery_status: validStatus,
+    delivery_status: validStatus ?? (fromMe ? 'sent' : null),
     media_metadata: mediaMetadata,
     provider_timestamp: isoTimestamp(value.messageTimestamp ?? value.messageTimestampMs),
   }
@@ -499,7 +531,7 @@ async function upsertConversation(
     if (isGroup) {
       update.contact_name = null
       if (authoritativeName && name) update.group_subject = name
-    } else if (name && (authoritativeName || !stringValue(existing.contact_name, 160))) {
+    } else if (name && (authoritativeName || !displayableContactName(existing.contact_name))) {
       update.contact_name = name
     }
     if (isGroup) update.contact_phone = null
@@ -614,7 +646,7 @@ async function processMessageEvent(
   const remoteJidAlt = identityLinked && mappedIdentity ? mappedIdentity.lidJid
     : identityLinked ? payload.remote_jid_alt as string | null : null
   const payloadContactName = payload.contact_name as string | null
-  const contactName = identityLinked ? mappedIdentity?.contactName ?? payloadContactName : payloadContactName
+  const contactName = identityLinked ? payloadContactName ?? mappedIdentity?.contactName ?? null : payloadContactName
   const contactPhone = identityLinked
     ? phoneFromJid(mappedIdentity?.phoneJid ?? '') ?? (payload.contact_phone as string | null)
     : phoneFromJid(remoteJid)
@@ -645,17 +677,27 @@ async function processMessageEvent(
     provider_timestamp: payload.provider_timestamp,
   }, { onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true })
   if (error) throw new Error('message_save_failed')
+  if (typeof payload.delivery_status === 'string') {
+    const { error: deliveryError } = await admin.rpc('apply_whatsapp_delivery_status_event', {
+      p_business_id: businessId,
+      p_instance_name: instanceName,
+      p_provider_message_id: String(payload.id),
+      p_delivery_status: payload.delivery_status,
+    })
+    if (deliveryError) throw new Error('message_status_save_failed')
+  }
 }
 
 function statusValue(value: unknown): string | null {
-  const raw = typeof value === 'number' ? value : stringValue(value, 24)?.toUpperCase()
-  if (raw === 0 || raw === 'ERROR' || raw === 'FAILED') return 'failed'
-  if (raw === 1 || raw === 'PENDING') return 'pending'
-  if (raw === 2 || raw === 'SERVER_ACK' || raw === 'SENT') return 'sent'
-  if (raw === 3 || raw === 'DELIVERY_ACK' || raw === 'DELIVERED') return 'delivered'
-  if (raw === 4 || raw === 'READ') return 'read'
-  if (raw === 5 || raw === 'PLAYED') return 'played'
-  if (raw === 'DELETED') return 'deleted'
+  const text = typeof value === 'number' ? null : stringValue(value, 24)?.toUpperCase()
+  const numeric = typeof value === 'number' ? value : text && /^\d+$/.test(text) ? Number(text) : null
+  if (numeric === 0 || text === 'ERROR' || text === 'FAILED') return 'failed'
+  if (numeric === 1 || text === 'PENDING') return 'pending'
+  if (numeric === 2 || text === 'SERVER_ACK' || text === 'SENT') return 'sent'
+  if (numeric === 3 || text === 'DELIVERY_ACK' || text === 'DELIVERED') return 'delivered'
+  if (numeric === 4 || text === 'READ') return 'read'
+  if (numeric === 5 || text === 'PLAYED') return 'played'
+  if (text === 'DELETED') return 'deleted'
   return null
 }
 
@@ -667,13 +709,14 @@ async function processMessageStatus(admin: AdminClient, businessId: string, inst
     const messageId = stringValue(key.id, 256)
     if (!messageId) continue
     const update = isRecord(row.update) ? row.update : row
-    const deliveryStatus = statusValue(update.status)
+    const deliveryStatus = statusValue(update.status ?? update.messageStatus ?? update.ack ?? row.status ?? row.ack)
     if (!deliveryStatus) continue
-    const { error } = await admin.from('whatsapp_messages')
-      .update({ delivery_status: deliveryStatus, ...(deliveryStatus === 'deleted' ? { deleted_at: new Date().toISOString() } : {}) })
-      .eq('business_id', businessId)
-      .eq('instance_name', instanceName)
-      .eq('provider_message_id', messageId)
+    const { error } = await admin.rpc('apply_whatsapp_delivery_status_event', {
+      p_business_id: businessId,
+      p_instance_name: instanceName,
+      p_provider_message_id: messageId,
+      p_delivery_status: deliveryStatus,
+    })
     if (error) throw new Error('message_status_save_failed')
   }
 }
@@ -794,25 +837,28 @@ async function processChatOrContactEvent(
   for (const row of rows) {
     if (!isRecord(row)) continue
     const isGroupEvent = event === 'GROUPS_UPSERT' || event === 'GROUP_UPDATE' || event === 'GROUPS_UPDATE'
-    const jid = stringValue(row.remoteJid ?? row.groupJid ?? row.jid ?? row.id ?? row.wuid, 256)
-    const jidAlt = stringValue(row.remoteJidAlt ?? row.phoneNumberJid, 256)
+    const jid = stringValue(row.remoteJid ?? row.remote_jid ?? row.groupJid ?? row.group_jid
+      ?? row.jid ?? row.id ?? row.contactId ?? row.contact_id ?? row.wuid ?? row.phoneNumberJid ?? row.phone_jid, 256)
+    const jidAlt = stringValue(row.remoteJidAlt ?? row.remote_jid_alt ?? row.remoteJidLid
+      ?? row.remote_jid_lid ?? row.phoneNumberJid ?? row.phone_number_jid ?? row.phoneJid ?? row.phone_jid, 256)
     if (!jid) continue
     const isContactEvent = event.startsWith('CONTACTS_')
     const isChatEvent = event.startsWith('CHATS_') || isGroupEvent
     const isGroup = isGroupEvent || isGroupJid(jid)
-    const hasProviderSavedName = isGroup
-      ? Boolean(stringValue(row.subject ?? row.groupSubject ?? row.group_subject, 160))
-      : isContactEvent && Boolean(stringValue(row.name ?? row.pushName ?? row.verifiedName, 160))
-    const name = isGroup
-      ? evolutionContactName(row, true)
-      : isContactEvent && hasProviderSavedName ? evolutionContactName(row, false) : null
+    const name = isGroup ? evolutionContactName(row, true)
+      : isContactEvent ? evolutionContactName(row, false) : null
+    const hasProviderSavedName = Boolean(name)
     const identity = isGroup ? null : await saveContactIdentityMapping(admin, businessId, instanceName, [
-      jid, jidAlt, row.remoteJidLid, row.phoneNumberJid, row.pnJid, row.lid, row.lidJid, row.wuid, row.id,
-      row.phoneNumber, row.phone, row.number, row.pn,
-    ], name)
+      jid, jidAlt, row.remoteJidLid, row.remote_jid_lid, row.phoneNumberJid, row.phone_number_jid,
+      row.phoneJid, row.phone_jid, row.pnJid, row.pn_jid, row.lid, row.lidJid, row.lid_jid,
+      row.wuid, row.id, row.contactId, row.contact_id, row.phoneNumber, row.phone_number,
+      row.phone, row.number, row.pn,
+    ], name, true)
     const identityValues = [
-      jid, jidAlt, row.remoteJidLid, row.phoneNumberJid, row.pnJid, row.lid, row.lidJid, row.wuid, row.id,
-      row.phoneNumber, row.phone, row.number, row.pn,
+      jid, jidAlt, row.remoteJidLid, row.remote_jid_lid, row.phoneNumberJid, row.phone_number_jid,
+      row.phoneJid, row.phone_jid, row.pnJid, row.pn_jid, row.lid, row.lidJid, row.lid_jid,
+      row.wuid, row.id, row.contactId, row.contact_id, row.phoneNumber, row.phone_number,
+      row.phone, row.number, row.pn,
     ]
     const hasIdentityPair = !isGroup && hasContactIdentityCandidates(identityValues)
     const contactLid = identityValues.find((value) => isDirectWhatsAppJid(value) && value.toLowerCase().endsWith('@lid'))
@@ -831,10 +877,12 @@ async function processChatOrContactEvent(
     const conversationJid = identityLinked && mappedIdentity ? mappedIdentity.phoneJid : jid
     const conversationJidAlt = identityLinked && mappedIdentity ? mappedIdentity.lidJid
       : identityLinked ? jidAlt : null
-    const conversationName = identityLinked ? mappedIdentity?.contactName ?? name : name
+    const conversationName = identityLinked ? name ?? mappedIdentity?.contactName ?? null : name
     const phone = isGroup ? null : identityLinked
-      ? phoneFromJid(mappedIdentity?.phoneJid ?? '') ?? phoneFromJid(jidAlt) ?? phoneFromJid(jid)
-      : phoneFromJid(jid)
+      ? phoneFromJid(mappedIdentity?.phoneJid ?? '')
+        ?? phoneFromJid(phoneJidFromProviderValue(jidAlt) ?? '')
+        ?? phoneFromJid(phoneJidFromProviderValue(jid) ?? '')
+      : phoneFromJid(phoneJidFromProviderValue(jid) ?? '')
     if (isChatEvent) {
       const unread = typeof row.unreadCount === 'number' ? row.unreadCount
         : typeof row.unreadMessages === 'number' ? row.unreadMessages : undefined
@@ -845,9 +893,9 @@ async function processChatOrContactEvent(
     if (!isContactEvent) continue
     if (isGroup) continue
     const update: JsonRecord = {}
-    if (Object.prototype.hasOwnProperty.call(row, 'name')
-      || Object.prototype.hasOwnProperty.call(row, 'pushName')
-      || Object.prototype.hasOwnProperty.call(row, 'verifiedName')) update.contact_name = name
+    // CONTACTS_UPDATE can be partial and send an empty name. Keep the last
+    // known label until the provider supplies a non-empty replacement.
+    if (name) update.contact_name = name
     if (phone) update.contact_phone = phone
     const matchedConversation = await findConversationByJidOrAlias(admin, businessId, instanceName, conversationJid, conversationJidAlt)
     if (!matchedConversation) continue
@@ -912,7 +960,8 @@ export default {
         await processMessageEvent(admin, businessId, configuration.instanceName, message, event !== 'MESSAGES_SET')
       }
     } else if (event === 'MESSAGES_UPDATE') {
-      await processMessageStatus(admin, businessId, configuration.instanceName, payload)
+      await withWebhookStage(event, 'message_status', () =>
+        processMessageStatus(admin, businessId, configuration.instanceName, payload))
     } else if (event === 'MESSAGES_DELETE') {
       await processMessageDelete(admin, businessId, configuration.instanceName, payload)
     } else if (event === 'CALL') {
@@ -922,7 +971,8 @@ export default {
     } else if (event === 'CHATS_SET' || event === 'CHATS_UPSERT' || event === 'CHATS_UPDATE'
       || event === 'GROUPS_UPSERT' || event === 'GROUP_UPDATE' || event === 'GROUPS_UPDATE'
       || event === 'CONTACTS_SET' || event === 'CONTACTS_UPSERT' || event === 'CONTACTS_UPDATE') {
-      await processChatOrContactEvent(admin, businessId, configuration.instanceName, event, payload)
+      await withWebhookStage(event, 'chat_or_contact', () =>
+        processChatOrContactEvent(admin, businessId, configuration.instanceName, event, payload))
     }
     return json({ received: true })
   } catch (error) {

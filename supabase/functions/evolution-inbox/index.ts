@@ -79,12 +79,43 @@ function isDirectWhatsAppJid(value: unknown): value is string {
 function jidNameKeys(value: unknown): string[] {
   if (typeof value !== 'string' || !value.trim()) return []
   const normalized = value.trim().toLowerCase()
-  if (isDirectWhatsAppJid(normalized)) {
+  const legacyPhoneJid = normalized.match(/^([0-9]{8,15})(?::[0-9]{1,5})?@(c[.]us|whatsapp[.]net)$/)
+  if (legacyPhoneJid) return [...new Set([normalized, ...phoneDirectoryKeys(legacyPhoneJid[1])])]
+  if (/^[a-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid)$/i.test(normalized)) {
     const phone = phoneFromWhatsAppJid(normalized)
     return phone ? [...new Set([normalized, ...phoneDirectoryKeys(phone)])] : [normalized]
   }
   if (normalized.includes('@')) return []
   return phoneDirectoryKeys(normalized)
+}
+
+function messageDeliveryStatus(value: unknown): string | null {
+  const label = typeof value === 'string' ? text(value, 24)?.toUpperCase() : null
+  const numeric = typeof value === 'number' ? value : label && /^\d+$/.test(label) ? Number(label) : null
+  if (numeric === 0 || label === 'ERROR' || label === 'FAILED') return 'failed'
+  if (numeric === 1 || label === 'PENDING') return 'pending'
+  if (numeric === 2 || label === 'SERVER_ACK' || label === 'SENT') return 'sent'
+  if (numeric === 3 || label === 'DELIVERY_ACK' || label === 'DELIVERED') return 'delivered'
+  if (numeric === 4 || label === 'READ') return 'read'
+  if (numeric === 5 || label === 'PLAYED') return 'played'
+  if (label === 'DELETED') return 'deleted'
+  return null
+}
+
+async function applyMessageDeliveryStatus(
+  admin: any,
+  businessId: string,
+  instanceName: string,
+  providerMessageId: string,
+  deliveryStatus: string,
+) {
+  const { error } = await admin.rpc('apply_whatsapp_delivery_status_event', {
+    p_business_id: businessId,
+    p_instance_name: instanceName,
+    p_provider_message_id: providerMessageId,
+    p_delivery_status: deliveryStatus,
+  })
+  if (error) throw new RequestError(500, 'message_status_update_failed')
 }
 
 function phoneDirectoryKeys(value: string): string[] {
@@ -105,7 +136,7 @@ function savedContactPicture(row: JsonRecord): string | null {
 
 function phoneJidsFromContact(values: unknown[]): string[] {
   return [...new Set(values.flatMap((value) => typeof value === 'string'
-    && /@s\.whatsapp\.net$/i.test(value.trim())
+    && /@(?:s\.whatsapp\.net|c\.us|whatsapp\.net)$/i.test(value.trim())
     ? [phoneJidFromContactValue(value)].filter((jid): jid is string => Boolean(jid))
     : []))]
 }
@@ -115,7 +146,7 @@ function phoneJidFromContactValue(value: unknown): string | null {
     ? String(value)
     : typeof value === 'string' ? value.trim() : ''
   if (!raw) return null
-  const jid = raw.toLowerCase().match(/^([0-9]{8,15})(?::[0-9]{1,5})?@s\.whatsapp\.net$/)
+  const jid = raw.toLowerCase().match(/^([0-9]{8,15})(?::[0-9]{1,5})?@(?:s\.whatsapp\.net|c\.us|whatsapp\.net)$/)
   if (jid) {
     const digits = jid[1].length === 10 || jid[1].length === 11 ? `55${jid[1]}` : jid[1]
     return `${digits}@s.whatsapp.net`
@@ -143,13 +174,16 @@ function contactIdentityAnalysis(contacts: JsonRecord[]): { pairs: JsonRecord[];
   for (const contact of contacts) {
     if (contact.isGroup === true || contact.is_group === true) continue
     const identifiers = [
-      contact.remoteJid, contact.id, contact.wuid, contact.remoteJidAlt,
-      contact.remoteJidLid, contact.phoneNumberJid, contact.pnJid, contact.lid, contact.lidJid,
+      contact.remoteJid, contact.remote_jid, contact.id, contact.wuid, contact.jid,
+      contact.contactId, contact.contact_id, contact.remoteJidAlt, contact.remote_jid_alt,
+      contact.remoteJidLid, contact.remote_jid_lid, contact.phoneNumberJid, contact.phone_number_jid,
+      contact.phoneJid, contact.phone_jid, contact.pnJid, contact.pn_jid, contact.lid,
+      contact.lidJid, contact.lid_jid,
     ].filter((value): value is string => typeof value === 'string')
     if (identifiers.some((value) => value.trim().toLowerCase().endsWith('@g.us'))) continue
     const lidJids = [...new Set(identifiers.map((value) => value.trim().toLowerCase())
       .filter((value) => /^[a-z0-9._:-]{1,128}@lid$/i.test(value)))]
-    const phoneValues = [contact.phoneNumber, contact.phone, contact.number, contact.pn]
+    const phoneValues = [contact.phoneNumber, contact.phone_number, contact.phone, contact.number, contact.pn]
     const phoneJids = [...new Set([
       ...phoneJidsFromContact(identifiers),
       ...phoneValues.map(phoneJidFromContactValue).filter((value): value is string => Boolean(value)),
@@ -197,13 +231,31 @@ async function persistContactIdentityPairs(
       .upsert(rows, { onConflict: 'business_id,instance_name,lid_jid', ignoreDuplicates: true })
     if (error) throw new RequestError(500, 'contact_identity_sync_failed')
     const { data: stored, error: lookupError } = await admin.from('whatsapp_contact_jid_mappings')
-      .select('lid_jid, phone_jid')
+      .select('lid_jid, phone_jid, contact_name')
       .eq('business_id', businessId).eq('instance_name', instanceName)
       .in('lid_jid', pairs.map((pair) => String(pair.lid_jid)))
     if (lookupError) throw new RequestError(500, 'contact_identity_sync_failed')
-    const storedByLid = new Map((stored ?? []).map((row: JsonRecord) => [String(row.lid_jid), String(row.phone_jid)]))
+    const storedByLid = new Map<string, JsonRecord>((stored ?? []).map((row: JsonRecord) => [String(row.lid_jid), row]))
     for (const pair of pairs) {
-      if (storedByLid.get(String(pair.lid_jid)) !== String(pair.phone_jid)) conflictedLids.add(String(pair.lid_jid))
+      if (String(storedByLid.get(String(pair.lid_jid))?.phone_jid ?? '') !== String(pair.phone_jid)) {
+        conflictedLids.add(String(pair.lid_jid))
+      }
+    }
+    const namesToWrite = pairs.filter((pair) => {
+      const storedRow = storedByLid.get(String(pair.lid_jid))
+      const name = displayableContactName(pair.contact_name, null)
+      return name && String(storedRow?.phone_jid ?? '') === String(pair.phone_jid)
+        && name !== displayableContactName(storedRow?.contact_name, null)
+    })
+    for (let start = 0; start < namesToWrite.length; start += 25) {
+      const nameWrites = await Promise.all(namesToWrite.slice(start, start + 25).map(async (pair) => {
+        const { error: nameError } = await admin.from('whatsapp_contact_jid_mappings')
+          .update({ contact_name: pair.contact_name, updated_at: new Date().toISOString() })
+          .eq('business_id', businessId).eq('instance_name', instanceName)
+          .eq('lid_jid', pair.lid_jid).eq('phone_jid', pair.phone_jid)
+        return !nameError
+      }))
+      if (nameWrites.some((saved) => !saved)) throw new RequestError(500, 'contact_identity_name_sync_failed')
     }
   }
   const conflicted = [...conflictedLids]
@@ -265,8 +317,11 @@ function contactDirectoryIndex(contacts: JsonRecord[]): ContactDirectory {
     const pictureUrl = savedContactPicture(contact)
     if (!name && !pictureUrl) continue
     const identifiers = [
-      contact.remoteJid, contact.id, contact.wuid, contact.remoteJidAlt,
-      contact.remoteJidLid, contact.phoneNumberJid, contact.pnJid, contact.lid, contact.lidJid,
+      contact.remoteJid, contact.remote_jid, contact.id, contact.wuid, contact.jid,
+      contact.contactId, contact.contact_id, contact.remoteJidAlt, contact.remote_jid_alt,
+      contact.remoteJidLid, contact.remote_jid_lid, contact.phoneNumberJid, contact.phone_number_jid,
+      contact.phoneJid, contact.phone_jid, contact.pnJid, contact.pn_jid, contact.lid,
+      contact.lidJid, contact.lid_jid,
     ]
     for (const identifier of identifiers) {
       for (const key of jidNameKeys(identifier)) {
@@ -277,7 +332,7 @@ function contactDirectoryIndex(contacts: JsonRecord[]): ContactDirectory {
         })
       }
     }
-    for (const phone of [contact.phoneNumber, contact.phone, contact.number, contact.pn]) {
+    for (const phone of [contact.phoneNumber, contact.phone_number, contact.phone, contact.number, contact.pn]) {
       if (typeof phone !== 'string') continue
       for (const key of phoneDirectoryKeys(phone)) {
         const current = names.get(key)
@@ -328,7 +383,7 @@ async function loadSavedContactDirectory(
     if (admin && businessId && (!cached.identitiesPersisted || freshContacts.length)) {
       await persistContactIdentityPairs(admin, businessId, config.instanceName, contacts)
     }
-    const directory = freshContacts.length ? contactDirectoryIndex(contacts) : cached.directory
+    const directory = freshContacts.length ? contactDirectoryIndex([...freshContacts, ...cached.contacts]) : cached.directory
     recentContactNames.set(cacheKey, {
       at: cached.at,
       directory,
@@ -637,7 +692,7 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       if (group) {
         update.contact_name = null
         if (savedName) update.group_subject = savedName
-      } else if (directoryName || (savedName && !text(existing.contact_name, 160))) {
+      } else if (directoryName || (savedName && !displayableContactName(existing.contact_name, phone))) {
         update.contact_name = directoryName ?? savedName
       }
       if (group) update.contact_phone = null
@@ -704,6 +759,9 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
         provider_timestamp: lastMessage.provider_timestamp,
       }, { onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true })
       if (error) throw new RequestError(500, 'history_sync_failed')
+      if (typeof lastMessage.delivery_status === 'string') {
+        await applyMessageDeliveryStatus(admin, businessId, config.instanceName, String(lastMessage.id), lastMessage.delivery_status)
+      }
       importedMessages += 1
     }
   }
@@ -747,10 +805,10 @@ function conversationResponse(
     ?? phoneFromWhatsAppJid(remoteJid ?? '')
   const savedName = isGroup ? null : savedNameForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt)
   const name = isGroup
-    ? text(row.display_name_override, 160)
+    ? displayableContactName(row.display_name_override, null)
       ?? displayableContactName(groupMetadata?.subject, null)
       ?? displayableContactName(row.group_subject, null)
-    : text(row.display_name_override, 160)
+    : displayableContactName(row.display_name_override, phone)
       ?? displayableContactName(savedName, phone)
       ?? displayableContactName(row.contact_name, phone)
   return {
@@ -794,6 +852,7 @@ function displayPhone(value: unknown): string | null {
 function displayableContactName(value: unknown, phone: string | null): string | null {
   const name = text(value, 160)
   if (!name || /@(lid|g\.us|s\.whatsapp\.net|c\.us|broadcast|newsletter)\b/i.test(name)) return null
+  if (/^(?:contato|grupo) (?:sem nome|sem identificação|sem identificacao)$/i.test(name)) return null
   const phoneDigits = phone?.replace(/\D/g, '') ?? ''
   const nameDigits = name.replace(/\D/g, '')
   const phoneLike = /^[+\d\s().-]+$/.test(name) && nameDigits.length >= 8 && nameDigits.length <= 15
@@ -895,18 +954,25 @@ function recordsFromEvolution(value: unknown, keys: string[]): JsonRecord[] {
 function evolutionName(row: JsonRecord, group: boolean): string | null {
   const candidates = group
     ? [row.subject, row.groupSubject, row.group_subject]
-    : [row.name, row.pushName]
+    : [row.name, row.contactName, row.shortName, row.short_name, row.displayName, row.display_name,
+      row.notify, row.notifyName, row.pushName, row.pushname, row.verifiedName]
   for (const candidate of candidates) {
-    const value = text(candidate, 160)
+    const value = displayableContactName(candidate, null)
     if (value) return value
   }
   return null
 }
 
 function savedContactName(row: JsonRecord): string | null {
-  // Evolution serializes Baileys contact.name as `pushName` in its contact API.
-  // This only receives contact-directory records, never message-level pushName.
-  return text(row.name, 160) ?? text(row.pushName, 160) ?? text(row.verifiedName, 160)
+  // Prefer the local address-book label, then provider aliases and profile name.
+  // Evolution/Baileys versions expose these fields with different names.
+  const candidates = [row.name, row.contactName, row.shortName, row.short_name, row.displayName,
+    row.display_name, row.notify, row.notifyName, row.pushName, row.pushname, row.verifiedName]
+  for (const candidate of candidates) {
+    const value = displayableContactName(candidate, null)
+    if (value) return value
+  }
+  return null
 }
 
 type GroupMetadata = { subject: string | null; pictureUrl: string | null }
@@ -1253,7 +1319,7 @@ function providerMessagePayload(value: unknown): JsonRecord | null {
   if (mimeType) metadata.mime_type = mimeType
   if (fileName) metadata.file_name = fileName
   if (Number.isSafeInteger(fileLength) && fileLength >= 0) metadata.file_size = fileLength
-  const senderName = text(record.pushName, 160)
+  const senderName = displayableContactName(record.pushName, null)
   const fromMe = key.fromMe === true
   const participant = text(key.participant ?? key.participantAlt, 256)
   const participantAlt = text(key.participantAlt, 256)
@@ -1274,7 +1340,8 @@ function providerMessagePayload(value: unknown): JsonRecord | null {
     direction: fromMe ? 'outgoing' : 'incoming',
     message_kind: kind,
     content,
-    delivery_status: fromMe ? 'sent' : null,
+    delivery_status: messageDeliveryStatus(record.status ?? key.status)
+      ?? (fromMe ? 'sent' : null),
     media_metadata: metadata,
     provider_timestamp: providerTimestamp(record.messageTimestamp ?? record.messageTimestampMs),
   }
@@ -1791,6 +1858,24 @@ export default {
         }
         const savedNames = await loadSavedContactNames(config)
         const groupDirectory = await loadGroupDirectory(config)
+        const savedNameUpdates = (rows ?? []).flatMap((row: JsonRecord) => {
+          if (isGroupJid(String(row.remote_jid ?? ''))) return []
+          const savedName = displayableContactName(
+            savedNameForJids(savedNames, row.remote_jid, row.remote_jid_alt),
+            displayPhone(row.contact_phone) ?? phoneFromWhatsAppJid(String(row.remote_jid_alt ?? row.remote_jid ?? '')),
+          )
+          return savedName && savedName !== row.contact_name
+            ? [{ id: String(row.id), name: savedName }]
+            : []
+        })
+        if (savedNameUpdates.length) {
+          const persisted = await Promise.all(savedNameUpdates.map(async ({ id, name }) => {
+            const { error: nameError } = await admin.from('whatsapp_conversations').update({ contact_name: name })
+              .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', id)
+            return !nameError
+          }))
+          if (persisted.some((saved) => !saved)) console.warn('Some WhatsApp contact labels could not be persisted.')
+        }
         const conversations = (rows ?? []).map((row: JsonRecord) => conversationResponse(
           row,
           latestByConversation.get(String(row.id)) ?? null,
@@ -1863,9 +1948,11 @@ export default {
             conversation_id: row.conversation_id,
             contact_classification: contactClassification(conversation?.contact_classification),
             hidden_from_inbox: conversation?.hidden_from_inbox === true,
-            display_name_override: text(conversation?.display_name_override, 160),
+            display_name_override: displayableContactName(conversation?.display_name_override,
+              displayPhone(conversation?.contact_phone)),
             contact: {
-              name: text(conversation?.display_name_override, 160)
+              name: displayableContactName(conversation?.display_name_override,
+                displayPhone(row.caller_phone) ?? displayPhone(conversation?.contact_phone))
                 ?? displayableContactName(savedNameForJids(savedNames, conversation?.remote_jid, conversation?.remote_jid_alt, row.caller_jid),
                   displayPhone(row.caller_phone) ?? displayPhone(conversation?.contact_phone))
                 ?? displayableContactName(conversation?.contact_name,
@@ -2010,11 +2097,12 @@ export default {
           direction: 'outgoing',
           message_kind: 'text',
           content,
-          delivery_status: 'pending',
+          delivery_status: 'sent',
           media_metadata: {},
           provider_timestamp: providerTimestamp,
         }, { onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true })
         if (insertError) throw new RequestError(500, 'message_persist_failed')
+        await applyMessageDeliveryStatus(admin, businessId, config.instanceName, providerMessageId, 'sent')
         return json({ sent: true })
       } else if (action === 'send_media') {
         const mediaBase64 = text(body.mediaBase64, MAX_REQUEST_BYTES)
@@ -2060,11 +2148,12 @@ export default {
           direction: 'outgoing',
           message_kind: mediaKind,
           content: caption || null,
-          delivery_status: 'pending',
+          delivery_status: 'sent',
           media_metadata: { mime_type: mimeType, file_name: fileName, file_size: bytes.length },
           provider_timestamp: new Date().toISOString(),
         }, { onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true })
         if (insertError) throw new RequestError(500, 'message_persist_failed')
+        await applyMessageDeliveryStatus(admin, businessId, config.instanceName, providerMessageId, 'sent')
         return json({ sent: true })
       }
 

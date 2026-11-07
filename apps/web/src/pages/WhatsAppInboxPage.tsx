@@ -168,6 +168,7 @@ function MessageDeliveryIndicator({ status }: { status: Message['status'] }) {
 function conversationDisplayName(conversation: Conversation | null | undefined, loading = false) {
   if (!conversation) return loading ? 'Carregando contato…' : 'Conversa'
   if (conversation.contact.name?.trim()) return conversation.contact.name.trim()
+  if (!conversation.is_group && conversation.contact.phone) return conversation.contact.phone
   return conversation.is_group ? 'Grupo sem identificação' : 'Contato sem identificação'
 }
 
