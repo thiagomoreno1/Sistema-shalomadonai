@@ -301,9 +301,9 @@ function messagePayload(value: unknown): JsonRecord | null {
     id: messageId,
     remote_jid: remoteJid,
     remote_jid_alt: remoteJidAlt,
-    // pushName is a profile label, not the name saved in the account's contacts.
-    // CONTACTS_* events provide the authoritative local label.
-    contact_name: null,
+    // CONTACTS_* events and the contact directory provide the saved label first.
+    // Keep pushName only as a fallback when Evolution has no saved-contact match.
+    contact_name: !isGroup && !fromMe ? senderName : null,
     contact_phone: isGroup ? null : phoneFromJid(remoteJidAlt) ?? phoneFromJid(remoteJid),
     direction: fromMe ? 'outgoing' : 'incoming',
     message_kind: kind,

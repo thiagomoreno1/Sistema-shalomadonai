@@ -26,7 +26,8 @@ const CORS_HEADERS = {
   'Cache-Control': 'no-store',
 }
 const recentLegacySync = new Map<string, { at: number; result: JsonRecord }>()
-type ContactDirectory = Map<string, string>
+type ContactProfile = { name: string | null; pictureUrl: string | null }
+type ContactDirectory = Map<string, ContactProfile>
 const recentContactNames = new Map<string, { at: number; directory: ContactDirectory }>()
 const recentGroupMetadata = new Map<string, { at: number; subject: string | null; pictureUrl: string | null }>()
 const recentGroupDirectory = new Map<string, { at: number; directory: Map<string, GroupMetadata> }>()
@@ -69,36 +70,81 @@ function isDirectWhatsAppJid(value: unknown): value is string {
 }
 
 function jidNameKeys(value: unknown): string[] {
-  if (!isDirectWhatsAppJid(value)) return []
-  const jid = value.toLowerCase()
-  const phone = phoneFromWhatsAppJid(jid)
-  return phone ? [jid, `phone:${phone}`] : [jid]
+  if (typeof value !== 'string' || !value.trim()) return []
+  const normalized = value.trim().toLowerCase()
+  if (isDirectWhatsAppJid(normalized)) {
+    const phone = phoneFromWhatsAppJid(normalized)
+    return phone ? [...new Set([normalized, ...phoneDirectoryKeys(phone)])] : [normalized]
+  }
+  if (normalized.includes('@')) return []
+  return phoneDirectoryKeys(normalized)
+}
+
+function phoneDirectoryKeys(value: string): string[] {
+  const digits = digitsOnly(value)
+  if (digits.length < 8 || digits.length > 15) return []
+  const keys = [`phone:${digits}`]
+  if (digits.length === 10 || digits.length === 11) keys.push(`phone:55${digits}`)
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) keys.push(`phone:${digits.slice(2)}`)
+  return keys
+}
+
+function savedContactPicture(row: JsonRecord): string | null {
+  const value = row.profilePicUrl ?? row.profilePictureUrl ?? row.profile_picture_url
+    ?? row.pictureUrl ?? row.picture_url ?? row.picture
+  return typeof value === 'string' ? text(value, 4096)
+    : isRecord(value) ? text(value.url ?? value.profilePicUrl ?? value.pictureUrl, 4096) : null
 }
 
 function contactDirectoryIndex(contacts: JsonRecord[]): ContactDirectory {
-  const names = new Map<string, string>()
+  const names = new Map<string, ContactProfile>()
   for (const contact of contacts) {
     if (contact.isGroup === true || contact.is_group === true) continue
     const name = savedContactName(contact)
-    if (!name) continue
+    const pictureUrl = savedContactPicture(contact)
+    if (!name && !pictureUrl) continue
     const identifiers = [
       contact.remoteJid, contact.id, contact.wuid, contact.remoteJidAlt,
-      contact.remoteJidLid, contact.phoneNumberJid,
+      contact.remoteJidLid, contact.phoneNumberJid, contact.pnJid, contact.lid, contact.lidJid,
     ]
     for (const identifier of identifiers) {
       for (const key of jidNameKeys(identifier)) {
-        if (!names.has(key)) names.set(key, name)
+        const current = names.get(key)
+        names.set(key, {
+          name: current?.name ?? name,
+          pictureUrl: current?.pictureUrl ?? pictureUrl,
+        })
+      }
+    }
+    for (const phone of [contact.phoneNumber, contact.phone, contact.number, contact.pn]) {
+      if (typeof phone !== 'string') continue
+      for (const key of phoneDirectoryKeys(phone)) {
+        const current = names.get(key)
+        names.set(key, {
+          name: current?.name ?? name,
+          pictureUrl: current?.pictureUrl ?? pictureUrl,
+        })
       }
     }
   }
   return names
 }
 
-function savedNameForJids(names: Map<string, string>, ...values: unknown[]): string | null {
+function savedNameForJids(names: ContactDirectory, ...values: unknown[]): string | null {
   for (const value of values) {
     for (const key of jidNameKeys(value)) {
-      const name = names.get(key)
+      const name = names.get(key)?.name
       if (name) return name
+    }
+  }
+  return null
+}
+
+function savedPictureForJids(names: ContactDirectory, ...values: unknown[]): string | null {
+  for (const value of values) {
+    for (const key of jidNameKeys(value)) {
+      const pictureUrl = names.get(key)?.pictureUrl
+      if (pictureUrl) return pictureUrl
     }
   }
   return null
@@ -157,7 +203,7 @@ async function loadSavedContactDirectory(config: EvolutionConfig, firstPageRecor
   }
 }
 
-async function loadSavedContactNames(config: EvolutionConfig): Promise<Map<string, string>> {
+async function loadSavedContactNames(config: EvolutionConfig): Promise<ContactDirectory> {
   return loadSavedContactDirectory(config)
 }
 
@@ -361,9 +407,12 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
     if (!jid) continue
     const group = isGroupJid(jid)
     const jidAlt = text(chat.remoteJidAlt ?? chat.remoteJidLid ?? chat.phoneNumberJid, 256)
+    const lastMessage = providerMessagePayload(chat.lastMessage ?? chat.last_message)
+    const directoryName = group ? null : savedNameForJids(namesByJid, jid, jidAlt)
     const savedName = group
       ? evolutionName(chat, true) ?? groupMetadataByJid.get(jid)?.subject ?? null
-      : savedNameForJids(namesByJid, jid, jidAlt)
+      : directoryName ?? evolutionName(chat, false)
+        ?? (lastMessage?.direction === 'incoming' ? text(lastMessage.contact_name, 160) : null)
     const name = savedName
     const phone = group ? null : phoneFromWhatsAppJid(jidAlt ?? '') ?? phoneFromWhatsAppJid(jid)
     const activity = providerTimestamp(chat.lastMessageRecvTimestamp ?? chat.conversationTimestamp ?? chat.updatedAt)
@@ -376,7 +425,9 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       if (group) {
         update.contact_name = null
         if (savedName) update.group_subject = savedName
-      } else if (savedName) update.contact_name = savedName
+      } else if (directoryName || (savedName && !text(existing.contact_name, 160))) {
+        update.contact_name = directoryName ?? savedName
+      }
       if (group) update.contact_phone = null
       else if (phone) update.contact_phone = phone
       const resolvedAltJid = group ? null : await safeAlternateJid(
@@ -424,7 +475,6 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       if (error) throw new RequestError(500, 'history_sync_failed')
     }
 
-    const lastMessage = providerMessagePayload(chat.lastMessage ?? chat.last_message)
     if (lastMessage && lastMessage.remote_jid === jid) {
       const { error } = await admin.from('whatsapp_messages').upsert({
         business_id: businessId,
@@ -468,7 +518,7 @@ function evolutionInstanceName(entry: unknown): string | null {
 function conversationResponse(
   row: JsonRecord,
   lastMessage: JsonRecord | null,
-  savedContactNames?: Map<string, string>,
+  savedContactNames?: ContactDirectory,
   groupDirectory?: Map<string, GroupMetadata>,
 ) {
   const remoteJid = text(row.remote_jid, 256)
@@ -485,13 +535,20 @@ function conversationResponse(
     can_reply: canReply,
     unread_count: Number(row.unread_count) || 0,
     contact: {
-      name: isGroup ? groupMetadata?.subject ?? row.group_subject ?? null : savedNameForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt),
+      name: isGroup
+        ? groupMetadata?.subject ?? text(row.group_subject, 160) ?? text(row.contact_name, 160)
+        : savedNameForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt)
+          ?? text(row.contact_name, 160),
       phone: isGroup ? null : row.contact_phone ?? phoneFromWhatsAppJid(remoteJidAlt ?? '') ?? phoneFromWhatsAppJid(remoteJid ?? ''),
     },
     last_activity_at: row.last_activity_at,
     last_message: lastMessage ? normalizedMessage(lastMessage, savedContactNames) : null,
     messages: [],
   }
+}
+
+function digitsOnly(value: string | null | undefined): string {
+  return (value ?? '').replace(/\D/g, '')
 }
 
 function phoneFromWhatsAppJid(value: string): string | null {
@@ -502,7 +559,7 @@ function phoneFromWhatsAppJid(value: string): string | null {
   return null
 }
 
-function normalizedMessage(row: JsonRecord, savedContactNames?: Map<string, string>) {
+function normalizedMessage(row: JsonRecord, savedContactNames?: ContactDirectory) {
   const kind = text(row.message_kind, 32) ?? 'unknown'
   const mediaMetadata = isRecord(row.media_metadata) ? row.media_metadata : {}
   const fileSize = typeof mediaMetadata.file_size === 'number' ? mediaMetadata.file_size : null
@@ -519,7 +576,7 @@ function normalizedMessage(row: JsonRecord, savedContactNames?: Map<string, stri
     status: row.delivery_status ?? null,
     private: false,
     sender: {
-      name: row.direction === 'incoming' ? savedSenderName : null,
+      name: row.direction === 'incoming' ? savedSenderName ?? text(mediaMetadata.sender_name, 160) : null,
       phone: row.direction === 'incoming'
         ? phoneFromWhatsAppJid(text(mediaMetadata.participant_alt_jid, 256) ?? '')
           ?? phoneFromWhatsAppJid(text(mediaMetadata.participant_jid, 256) ?? '')
@@ -540,7 +597,7 @@ function normalizedMessage(row: JsonRecord, savedContactNames?: Map<string, stri
   }
 }
 
-function attachMessageReactions(messages: JsonRecord[], reactionRows: JsonRecord[], savedContactNames?: Map<string, string>): JsonRecord[] {
+function attachMessageReactions(messages: JsonRecord[], reactionRows: JsonRecord[], savedContactNames?: ContactDirectory): JsonRecord[] {
   const reactionsByTarget = new Map<string, Map<string, string>>()
   for (const reaction of reactionRows) {
     const metadata = isRecord(reaction.media_metadata) ? reaction.media_metadata : {}
@@ -619,7 +676,8 @@ function groupMetadataFromEvolution(value: unknown): GroupMetadata {
     if (visited.has(row)) continue
     visited.add(row)
     subject ??= text(row.subject ?? row.groupSubject ?? row.group_subject, 160)
-    const pictureValue = row.pictureUrl ?? row.profilePictureUrl ?? row.picture_url ?? row.picture
+    const pictureValue = row.pictureUrl ?? row.profilePictureUrl ?? row.profilePicUrl
+      ?? row.profile_picture_url ?? row.picture_url ?? row.picture
     pictureUrl ??= typeof pictureValue === 'string' ? text(pictureValue, 4096)
       : isRecord(pictureValue) ? text(pictureValue.url ?? pictureValue.pictureUrl, 4096) : null
     for (const key of nestedKeys) {
@@ -857,6 +915,7 @@ function providerMessagePayload(value: unknown): JsonRecord | null {
   if (fileName) metadata.file_name = fileName
   if (Number.isSafeInteger(fileLength) && fileLength >= 0) metadata.file_size = fileLength
   const senderName = text(record.pushName, 160)
+  const fromMe = key.fromMe === true
   const participant = text(key.participant ?? key.participantAlt, 256)
   const participantAlt = text(key.participantAlt, 256)
   if (group && senderName) metadata.sender_name = senderName
@@ -870,13 +929,13 @@ function providerMessagePayload(value: unknown): JsonRecord | null {
     id: messageId,
     remote_jid: remoteJid,
     remote_jid_alt: text(key.remoteJidAlt, 256),
-    // pushName is a profile label, not the local contact-book name.
-    contact_name: null,
+    // Prefer directory names in the inbox; keep an incoming profile name as fallback.
+    contact_name: !group && !fromMe ? senderName : null,
     contact_phone: group ? null : phoneFromWhatsAppJid(text(key.remoteJidAlt, 256) ?? remoteJid),
-    direction: key.fromMe === true ? 'outgoing' : 'incoming',
+    direction: fromMe ? 'outgoing' : 'incoming',
     message_kind: kind,
     content,
-    delivery_status: key.fromMe === true ? 'sent' : null,
+    delivery_status: fromMe ? 'sent' : null,
     media_metadata: metadata,
     provider_timestamp: providerTimestamp(record.messageTimestamp ?? record.messageTimestampMs),
   }
@@ -988,25 +1047,42 @@ async function profilePictureResponse(config: EvolutionConfig, conversation: Jso
   const remoteJid = text(conversation.remote_jid, 256)
   if (!remoteJid) throw new RequestError(404, 'profile_picture_unavailable')
   const isGroup = isGroupJid(remoteJid)
-  let result: unknown
+  let pictureUrl: string | null = null
   if (isGroup) {
     const metadata = await loadGroupMetadata(config, remoteJid)
-    result = { data: { subject: metadata.subject, pictureUrl: metadata.pictureUrl } }
+    pictureUrl = metadata.pictureUrl
   } else {
+    const contactDirectory = await loadSavedContactNames(config)
+    pictureUrl = savedPictureForJids(
+      contactDirectory,
+      remoteJid,
+      conversation.remote_jid_alt,
+      conversation.contact_phone,
+    )
+    if (pictureUrl) {
+      try { return await profilePictureImageResponse(pictureUrl) } catch {
+        // Directory URLs can expire; use Evolution's live lookup when a phone JID is available.
+      }
+    }
     const jid = text(conversation.remote_jid_alt, 256) && /@s\.whatsapp\.net$/i.test(String(conversation.remote_jid_alt))
       ? String(conversation.remote_jid_alt)
       : remoteJid
-    if (!/@s\.whatsapp\.net$/i.test(jid)) throw new RequestError(404, 'profile_picture_unavailable')
-    const number = jid.split('@', 1)[0].split(':', 1)[0].replace(/\D/g, '')
+    const number = digitsOnly(
+      text(conversation.contact_phone, 64)
+        ?? (/@s\.whatsapp\.net$/i.test(jid) ? jid.split('@', 1)[0].split(':', 1)[0] : ''),
+    )
     if (number.length < 7 || number.length > 20) throw new RequestError(404, 'profile_picture_unavailable')
-    result = await evolutionRequest(config, `/chat/fetchProfilePictureUrl/${encodeURIComponent(config.instanceName)}`, {
+    const result = await evolutionRequest(config, `/chat/fetchProfilePictureUrl/${encodeURIComponent(config.instanceName)}`, {
       method: 'POST',
       body: JSON.stringify({ number }),
     })
+    pictureUrl = groupMetadataFromEvolution(result).pictureUrl
   }
-  const pictureUrl = groupMetadataFromEvolution(result).pictureUrl
   if (!pictureUrl) throw new RequestError(404, 'profile_picture_unavailable')
+  return profilePictureImageResponse(pictureUrl)
+}
 
+async function profilePictureImageResponse(pictureUrl: string): Promise<Response> {
   let imageUrl: URL
   try { imageUrl = new URL(pictureUrl) } catch { throw new RequestError(502, 'profile_picture_unavailable') }
   const allowedHost = imageUrl.hostname.toLowerCase().endsWith('.whatsapp.net')
@@ -1126,7 +1202,7 @@ function isSingleReaction(value: string): boolean {
   }
 }
 
-async function olderMessagesResponse(admin: any, config: EvolutionConfig, businessId: string, conversation: JsonRecord, beforeMessageId: string, savedContactNames?: Map<string, string>) {
+async function olderMessagesResponse(admin: any, config: EvolutionConfig, businessId: string, conversation: JsonRecord, beforeMessageId: string, savedContactNames?: ContactDirectory) {
   const { data: cursor, error: cursorError } = await admin.from('whatsapp_messages')
     .select('provider_message_id, provider_timestamp, instance_name')
     .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('conversation_id', conversation.id).eq('id', beforeMessageId).maybeSingle()
