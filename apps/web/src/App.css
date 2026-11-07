@@ -1318,7 +1318,8 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .whatsapp-conversation-item { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 72px; padding: 10px 12px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .whatsapp-conversation-item:hover { background: #f7f9f8; }
 .whatsapp-conversation-item.is-selected { background: #f0f2f5; }
-.whatsapp-contact-avatar { display: grid; flex: 0 0 auto; width: 36px; height: 36px; place-items: center; border-radius: 50%; color: var(--accent); background: var(--accent-wash); font-size: 13px; font-weight: 700; }
+.whatsapp-contact-avatar { display: grid; flex: 0 0 auto; width: 36px; height: 36px; place-items: center; overflow: hidden; border-radius: 50%; color: var(--accent); background: var(--accent-wash); font-size: 13px; font-weight: 700; }
+.whatsapp-contact-avatar img { display: block; width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
 .whatsapp-contact-avatar.is-group { color: #fff; background: #6b8f84; font-size: 16px; }
 .whatsapp-group-label { color: #008f72; font-weight: 650; }
 .whatsapp-conversation-copy { display: block; min-width: 0; }

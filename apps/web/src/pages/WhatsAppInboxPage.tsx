@@ -128,6 +128,117 @@ async function invokeInbox<T>(body: Record<string, unknown>) {
   return data as T
 }
 
+const contactAvatarCache = new Map<string, { url: string; at: number }>()
+const contactAvatarRequests = new Map<string, Promise<string | null>>()
+const contactAvatarFailures = new Map<string, number>()
+const MAX_CONTACT_AVATARS = 80
+
+function cachedContactAvatar(key: string): string | null {
+  const cached = contactAvatarCache.get(key)
+  if (!cached) return null
+  if (Date.now() - cached.at > 15 * 60_000) {
+    URL.revokeObjectURL(cached.url)
+    contactAvatarCache.delete(key)
+    return null
+  }
+  return cached.url
+}
+
+async function loadContactAvatar(businessId: string, conversationId: string): Promise<string | null> {
+  const cacheKey = `${businessId}:${conversationId}`
+  const cached = cachedContactAvatar(cacheKey)
+  if (cached) return cached
+  if ((contactAvatarFailures.get(cacheKey) ?? 0) > Date.now()) return null
+  const pending = contactAvatarRequests.get(cacheKey)
+  if (pending) return pending
+  const request = (async () => {
+    if (!supabaseClient) return null
+    const { data, error, response } = await supabaseClient.functions.invoke<Blob>('evolution-inbox', {
+      body: { action: 'avatar', business_id: businessId, conversationId },
+    })
+    if (error || !(data instanceof Blob) || data.size < 1 || data.size > 2 * 1024 * 1024) {
+      contactAvatarFailures.set(cacheKey, Date.now() + 5 * 60_000)
+      return null
+    }
+    const mimeType = response?.headers.get('X-Original-Content-Type')?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(mimeType)) {
+      contactAvatarFailures.set(cacheKey, Date.now() + 5 * 60_000)
+      return null
+    }
+    const url = URL.createObjectURL(new Blob([data], { type: mimeType }))
+    contactAvatarCache.set(cacheKey, { url, at: Date.now() })
+    contactAvatarFailures.delete(cacheKey)
+    while (contactAvatarCache.size > MAX_CONTACT_AVATARS) {
+      const oldestKey = contactAvatarCache.keys().next().value
+      if (!oldestKey) break
+      const oldest = contactAvatarCache.get(oldestKey)
+      if (oldest) URL.revokeObjectURL(oldest.url)
+      contactAvatarCache.delete(oldestKey)
+    }
+    return url
+  })().catch(() => {
+    contactAvatarFailures.set(cacheKey, Date.now() + 5 * 60_000)
+    return null
+  }).finally(() => contactAvatarRequests.delete(cacheKey))
+  contactAvatarRequests.set(cacheKey, request)
+  return request
+}
+
+function WhatsAppAvatar({ businessId, conversation }: { businessId: string; conversation: Conversation | null }) {
+  const [photo, setPhoto] = useState(() => ({
+    conversationId: conversation?.id ?? null,
+    url: conversation ? cachedContactAvatar(`${businessId}:${conversation.id}`) : null,
+  }))
+  const [photoUnavailable, setPhotoUnavailable] = useState(false)
+  const avatarRef = useRef<HTMLSpanElement>(null)
+  const isGroup = conversation?.is_group === true
+  const label = conversation?.contact.name || conversation?.contact.phone || ''
+  const photoUrl = photo.conversationId === conversation?.id ? photo.url : null
+
+  useEffect(() => {
+    setPhotoUnavailable(false)
+    if (!conversation) {
+      setPhoto({ conversationId: null, url: null })
+      return
+    }
+    const key = `${businessId}:${conversation.id}`
+    const cached = cachedContactAvatar(key)
+    setPhoto({ conversationId: conversation.id, url: cached })
+    if (!supabaseClient) return
+    if (cached) {
+      return
+    }
+    let active = true
+    let observer: IntersectionObserver | null = null
+    const fetchPhoto = () => {
+      void loadContactAvatar(businessId, conversation.id).then((url) => {
+        if (!active) return
+        if (url) setPhoto({ conversationId: conversation.id, url })
+        else setPhotoUnavailable(true)
+      })
+    }
+    const element = avatarRef.current
+    if (element && typeof IntersectionObserver !== 'undefined') {
+      observer = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          observer?.disconnect()
+          fetchPhoto()
+        }
+      }, { rootMargin: '120px' })
+      observer.observe(element)
+    } else fetchPhoto()
+    return () => {
+      active = false
+      observer?.disconnect()
+    }
+  }, [businessId, conversation?.id, isGroup])
+
+  const initials = label.slice(0, 1).toLocaleUpperCase('pt-BR') || '?'
+  return <span aria-hidden="true" className={`whatsapp-contact-avatar${isGroup ? ' is-group' : ''}`} ref={avatarRef} title={label || (isGroup ? 'Grupo' : 'Contato')}>
+    {photoUrl && !photoUnavailable ? <img alt="" loading="lazy" onError={() => setPhotoUnavailable(true)} src={photoUrl} /> : isGroup ? '👥' : initials}
+  </span>
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -213,7 +324,7 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
   }, [error, file])
 
   useEffect(() => {
-    const isInlineMedia = sticker || ['image', 'sticker'].includes(attachment.file_type ?? '')
+    const isInlineMedia = sticker || ['image', 'sticker', 'audio'].includes(attachment.file_type ?? '')
     const container = attachmentContainer.current
     if (!isInlineMedia || !container || file || error || tooLarge || autoLoadAttempted.current || typeof IntersectionObserver === 'undefined') return
     const observer = new IntersectionObserver((entries) => {
@@ -1032,8 +1143,8 @@ export function WhatsAppInboxPage() {
           <ul className="whatsapp-conversation-list">
             {conversations.map((conversation) => <li key={conversation.id}>
               <button aria-current={selectedId === conversation.id ? 'true' : undefined} className={`whatsapp-conversation-item${selectedId === conversation.id ? ' is-selected' : ''}${conversation.unread_count > 0 ? ' has-unread' : ''}`} onClick={() => { setSelectedConversation(null); setSelectedId(conversation.id) }} type="button">
-                <span className={`whatsapp-contact-avatar${conversation.is_group ? ' is-group' : ''}`} aria-hidden="true">{conversation.is_group ? '👥' : (conversation.contact.name || conversation.contact.phone || '?').slice(0, 1).toLocaleUpperCase('pt-BR')}</span>
-                <span className="whatsapp-conversation-copy"><strong>{conversation.contact.name || (conversation.is_group ? 'Grupo sem nome' : conversation.contact.phone || 'Contato sem nome')}</strong><small>{conversation.is_group && <span className="whatsapp-group-label">Grupo · </span>}{conversation.last_message?.content || (conversation.last_message?.attachments.length ? `${conversation.last_message.attachments.length} anexo(s)` : 'Sem mensagem de texto')}</small></span>
+                <WhatsAppAvatar businessId={businessId} conversation={conversation} />
+                <span className="whatsapp-conversation-copy"><strong>{conversation.contact.name || (conversation.is_group ? 'Grupo sem nome' : conversation.contact.phone || 'Contato sem nome')}</strong><small>{conversation.is_group && <span className="whatsapp-group-label">Grupo · </span>}{conversation.is_group && conversation.last_message?.message_type === 'incoming' && conversation.last_message.sender.name && <>{conversation.last_message.sender.name}: </>}{conversation.last_message?.content || (conversation.last_message?.attachments.length ? `${conversation.last_message.attachments.length} anexo(s)` : 'Sem mensagem de texto')}</small></span>
                 <span className="whatsapp-conversation-meta"><span className="whatsapp-conversation-meta-top"><time>{timestampLabel(conversation.last_activity_at)}</time>{conversation.unread_count > 0 && <span aria-label={`${conversation.unread_count} mensagens não lidas`} className="whatsapp-unread-count">{conversation.unread_count > 99 ? '99+' : conversation.unread_count}</span>}</span>{links[conversation.id]?.customer_id && <span className="whatsapp-linked-mark">Cliente vinculado</span>}</span>
               </button>
             </li>)}
@@ -1047,7 +1158,7 @@ export function WhatsAppInboxPage() {
         {!selectedId ? <div className="whatsapp-chat-empty"><Icon name="message" /><h2>Selecione uma conversa</h2><p>O histórico e as ações aparecem aqui.</p></div> : <>
           <header className="whatsapp-chat-heading">
             <button className="text-button whatsapp-back-button" onClick={() => setSelectedId(null)} type="button">← Conversas</button>
-            <div className="whatsapp-chat-contact"><span className={`whatsapp-contact-avatar${currentConversation?.is_group ? ' is-group' : ''}`} aria-hidden="true">{currentConversation?.is_group ? '👥' : (currentConversation?.contact.name || '?').slice(0, 1).toLocaleUpperCase('pt-BR')}</span><div><h2>{currentConversation?.contact.name || (detailLoading ? 'Carregando contato…' : currentConversation?.is_group ? 'Grupo sem nome' : 'Contato')}</h2><span>{currentConversation?.is_group ? 'Grupo do WhatsApp' : currentConversation?.contact.phone || 'Telefone indisponível'}</span></div></div>
+            <div className="whatsapp-chat-contact"><WhatsAppAvatar businessId={businessId} conversation={currentConversation} /><div><h2>{currentConversation?.contact.name || (detailLoading ? 'Carregando contato…' : currentConversation?.is_group ? 'Grupo sem nome' : 'Contato')}</h2><span>{currentConversation?.is_group ? 'Grupo do WhatsApp' : currentConversation?.contact.phone || 'Telefone indisponível'}</span></div></div>
             <div className="whatsapp-chat-actions">
               <span className={`whatsapp-status-pill${currentConversation?.status === 'open' ? '' : ' is-resolved'}`}>{statusLabel(currentConversation?.status)}</span>
               <button className="button button-secondary" disabled={statusSaving || !currentConversation || !['open', 'resolved'].includes(currentConversation.status)} onClick={() => void handleStatusChange(currentConversation?.status === 'resolved' ? 'open' : 'resolved')} type="button">{statusSaving ? 'Salvando…' : currentConversation?.status === 'resolved' ? 'Reabrir' : 'Resolver'}</button>
