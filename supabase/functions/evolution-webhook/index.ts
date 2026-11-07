@@ -85,6 +85,29 @@ function isDirectWhatsAppJid(value: unknown): value is string {
     && /^[a-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid)$/i.test(value)
 }
 
+function canonicalPhoneJid(value: unknown): string | null {
+  if (!isDirectWhatsAppJid(value) || !value.toLowerCase().endsWith('@s.whatsapp.net')) return null
+  const localPart = value.split('@', 1)[0].split(':', 1)[0]
+  let digits = digitsOnly(localPart)
+  if (digits.length === 10 || digits.length === 11) digits = `55${digits}`
+  return digits.length >= 8 && digits.length <= 15 ? `${digits}@s.whatsapp.net` : null
+}
+
+function phoneJidFromProviderValue(value: unknown): string | null {
+  const jid = canonicalPhoneJid(value)
+  if (jid) return jid
+  const raw = typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? String(value)
+    : typeof value === 'string' ? value.trim() : ''
+  if (!raw || !/^\+?[0-9\s().-]+$/.test(raw)) return null
+  let digits = digitsOnly(raw)
+  if (raw.startsWith('+')) {
+    return digits.length >= 8 && digits.length <= 15 ? `${digits}@s.whatsapp.net` : null
+  }
+  if (digits.length === 10 || digits.length === 11) digits = `55${digits}`
+  return digits.length >= 12 && digits.length <= 15 ? `${digits}@s.whatsapp.net` : null
+}
+
 async function registerConversationJidAliases(
   admin: AdminClient,
   businessId: string,
@@ -104,6 +127,89 @@ async function registerConversationJidAliases(
   if (error) throw new Error('conversation_alias_save_failed')
 }
 
+function contactIdentityPair(values: unknown[]): { lidJid: string; phoneJid: string } | null {
+  const jids = [...new Set(values.filter(isDirectWhatsAppJid).map((value) => value.toLowerCase()))]
+  const lids = [...new Set(jids.filter((value) => value.endsWith('@lid')))]
+  const phones = [...new Set(values.map(phoneJidFromProviderValue).filter((value): value is string => Boolean(value)))]
+  return lids.length === 1 && phones.length === 1 ? { lidJid: lids[0], phoneJid: phones[0] } : null
+}
+
+function hasContactIdentityCandidates(values: unknown[]): boolean {
+  return values.some((value) => isDirectWhatsAppJid(value) && value.toLowerCase().endsWith('@lid'))
+    && values.some((value) => Boolean(phoneJidFromProviderValue(value)))
+}
+
+async function saveContactIdentityMapping(
+  admin: AdminClient,
+  businessId: string,
+  instanceName: string,
+  values: unknown[],
+  contactName: string | null = null,
+) {
+  const pair = contactIdentityPair(values)
+  if (!pair) return null
+  const { error } = await admin.from('whatsapp_contact_jid_mappings').upsert({
+    business_id: businessId,
+    instance_name: instanceName,
+    lid_jid: pair.lidJid,
+    phone_jid: pair.phoneJid,
+    contact_name: contactName,
+  }, { onConflict: 'business_id,instance_name,lid_jid', ignoreDuplicates: true })
+  if (error) throw new Error('contact_identity_save_failed')
+  const { data, error: lookupError } = await admin.from('whatsapp_contact_jid_mappings')
+    .select('lid_jid, phone_jid, contact_name, identity_conflict')
+    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', pair.lidJid)
+    .maybeSingle()
+  if (lookupError) throw new Error('contact_identity_lookup_failed')
+  if (data?.phone_jid !== pair.phoneJid || data.identity_conflict === true) {
+    const { error: conflictError } = await admin.from('whatsapp_contact_jid_mappings')
+      .update({ identity_conflict: true, updated_at: new Date().toISOString() })
+      .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', pair.lidJid)
+    if (conflictError) throw new Error('contact_identity_conflict_save_failed')
+    return null
+  }
+  return { ...pair, contactName: stringValue(data.contact_name, 160) }
+}
+
+async function mappedPhoneIdentity(admin: AdminClient, businessId: string, instanceName: string, lidJid: string) {
+  const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
+    .select('phone_jid, contact_name, identity_conflict')
+    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', lidJid.toLowerCase())
+    .maybeSingle()
+  if (error) throw new Error('contact_identity_lookup_failed')
+  const phoneJid = stringValue(data?.phone_jid, 256)
+  if (data?.identity_conflict === true || !phoneJid || !phoneJid.endsWith('@s.whatsapp.net') || !phoneFromJid(phoneJid)) return null
+  return { phoneJid, contactName: stringValue(data?.contact_name, 160) }
+}
+
+async function isConflictedContactLid(admin: AdminClient, businessId: string, instanceName: string, jid: string): Promise<boolean> {
+  if (!jid.toLowerCase().endsWith('@lid')) return false
+  const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
+    .select('identity_conflict')
+    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', jid.toLowerCase())
+    .maybeSingle()
+  if (error) throw new Error('contact_identity_lookup_failed')
+  return data?.identity_conflict === true
+}
+
+async function mergeKnownContactIdentity(
+  admin: AdminClient,
+  businessId: string,
+  instanceName: string,
+  lidJid: string,
+  phoneJid: string,
+) {
+  const { error } = await admin.rpc('merge_whatsapp_conversations_by_identity', {
+    p_business_id: businessId,
+    p_instance_name: instanceName,
+    p_lid_jid: lidJid.toLowerCase(),
+    p_phone_jid: phoneJid.toLowerCase(),
+  })
+  if (!error) return true
+  if (['22023', '23505', '42501', 'P0001', 'P0002'].includes(String(error.code))) return false
+  throw new Error('contact_identity_merge_failed')
+}
+
 async function safeAlternateJid(
   admin: AdminClient,
   businessId: string,
@@ -115,6 +221,7 @@ async function safeAlternateJid(
   for (const candidate of candidates) {
     if (!isDirectWhatsAppJid(candidate) || candidate.toLowerCase() === canonicalJid.toLowerCase()) continue
     const normalized = candidate.toLowerCase()
+    if (await isConflictedContactLid(admin, businessId, instanceName, normalized)) continue
     const { data: alias, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
       .select('conversation_id')
       .eq('business_id', businessId).eq('instance_name', instanceName).eq('remote_jid', normalized).maybeSingle()
@@ -146,9 +253,22 @@ async function findConversationByJidOrAlias(
   if (exactError) throw new Error('conversation_lookup_failed')
   if (exact?.id || isGroupJid(remoteJid)) return exact
 
-  const aliases = [...new Set([remoteJid, remoteJidAlt].filter(isDirectWhatsAppJid).map((value) => value.toLowerCase()))]
+  const candidateAliases = [...new Set([remoteJid, remoteJidAlt].filter(isDirectWhatsAppJid).map((value) => value.toLowerCase()))]
+  const lidAliases = candidateAliases.filter((value) => value.endsWith('@lid'))
+  const conflictedAliases = new Set<string>()
+  if (lidAliases.length) {
+    const { data: mappings, error } = await admin.from('whatsapp_contact_jid_mappings')
+      .select('lid_jid')
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .eq('identity_conflict', true).in('lid_jid', lidAliases)
+    if (error) throw new Error('contact_identity_lookup_failed')
+    for (const row of mappings ?? []) conflictedAliases.add(String(row.lid_jid).toLowerCase())
+  }
+  const aliases = candidateAliases.filter((value) => !conflictedAliases.has(value))
   if (!aliases.length) return null
-  const primaryJid = isDirectWhatsAppJid(remoteJid) ? remoteJid.toLowerCase() : null
+  const primaryJid = isDirectWhatsAppJid(remoteJid) && !conflictedAliases.has(remoteJid.toLowerCase())
+    ? remoteJid.toLowerCase()
+    : null
   const { data: aliasRows, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
     .select('remote_jid, conversation_id')
     .eq('business_id', businessId).eq('instance_name', instanceName).in('remote_jid', aliases).limit(3)
@@ -368,9 +488,10 @@ async function upsertConversation(
   activityAt: string,
   unreadCount?: number,
   authoritativeName = false,
+  allowAlternateIdentity = true,
 ) {
   const isGroup = isGroupJid(remoteJid)
-  const safePhone = isGroup ? null : phone
+  const safePhone = isGroup ? null : allowAlternateIdentity ? phone : phoneFromJid(remoteJid)
   const existing = await findConversationByJidOrAlias(admin, businessId, instanceName, remoteJid, remoteJidAlt)
 
   if (existing?.id) {
@@ -382,18 +503,19 @@ async function upsertConversation(
       update.contact_name = name
     }
     if (isGroup) update.contact_phone = null
+    else if (!allowAlternateIdentity) update.contact_phone = safePhone
     else if (safePhone) update.contact_phone = safePhone
-    const resolvedAltJid = await safeAlternateJid(
+    const resolvedAltJid = allowAlternateIdentity ? await safeAlternateJid(
       admin, businessId, instanceName, existing.id as string, existing.remote_jid,
       remoteJidAlt, remoteJid, stringValue(existing.remote_jid_alt, 256),
-    )
+    ) : null
     update.remote_jid_alt = resolvedAltJid
     const existingPhone = stringValue(existing.contact_phone, 64)
     const existingJidAlt = stringValue(existing.remote_jid_alt, 256)
-    const matchingPhone = isGroup ? null : safePhone
-      ?? phoneFromJid(remoteJidAlt ?? existingJidAlt)
-      ?? existingPhone
-    if (matchingPhone && !safePhone) update.contact_phone = matchingPhone
+    const matchingPhone = isGroup ? null : allowAlternateIdentity
+      ? safePhone ?? phoneFromJid(remoteJidAlt ?? existingJidAlt) ?? existingPhone
+      : safePhone
+    if (allowAlternateIdentity && matchingPhone && !safePhone) update.contact_phone = matchingPhone
     if (Object.keys(update).length) {
       const { error } = await admin.from('whatsapp_conversations').update(update)
         .eq('business_id', businessId).eq('id', existing.id)
@@ -403,14 +525,24 @@ async function upsertConversation(
       const { error: staleMatchError } = await admin.from('whatsapp_conversation_contexts')
         .delete().eq('business_id', businessId).eq('conversation_id', existing.id).eq('match_method', 'phone')
       if (staleMatchError) throw new Error('group_phone_match_clear_failed')
-    } else {
+    } else if (allowAlternateIdentity) {
       await resolvePhoneMatch(admin, businessId, matchingPhone, existing.id)
       await registerConversationJidAliases(admin, businessId, instanceName, existing.id as string, remoteJid, remoteJidAlt)
+    } else {
+      if (safePhone) await resolvePhoneMatch(admin, businessId, safePhone, existing.id as string)
+      else {
+        const { error: staleMatchError } = await admin.from('whatsapp_conversation_contexts')
+          .delete().eq('business_id', businessId).eq('conversation_id', existing.id).eq('match_method', 'phone')
+        if (staleMatchError) throw new Error('stale_phone_match_clear_failed')
+      }
+      await registerConversationJidAliases(admin, businessId, instanceName, existing.id as string, remoteJid)
     }
     return existing.id as string
   }
 
-  const safeAltJid = isGroup ? null : await safeAlternateJid(admin, businessId, instanceName, null, remoteJid, remoteJidAlt)
+  const safeAltJid = isGroup || !allowAlternateIdentity
+    ? null
+    : await safeAlternateJid(admin, businessId, instanceName, null, remoteJid, remoteJidAlt)
   const row: JsonRecord = {
     business_id: businessId,
     instance_name: instanceName,
@@ -439,9 +571,12 @@ async function upsertConversation(
     const { error: staleMatchError } = await admin.from('whatsapp_conversation_contexts')
       .delete().eq('business_id', businessId).eq('conversation_id', conversationId).eq('match_method', 'phone')
     if (staleMatchError) throw new Error('group_phone_match_clear_failed')
-  } else {
+  } else if (allowAlternateIdentity) {
     await resolvePhoneMatch(admin, businessId, safePhone, conversationId)
     await registerConversationJidAliases(admin, businessId, instanceName, conversationId, remoteJid, remoteJidAlt)
+  } else {
+    if (safePhone) await resolvePhoneMatch(admin, businessId, safePhone, conversationId)
+    await registerConversationJidAliases(admin, businessId, instanceName, conversationId, remoteJid)
   }
   return conversationId
 }
@@ -455,15 +590,46 @@ async function processMessageEvent(
 ) {
   const payload = messagePayload(value)
   if (!payload) return
+  const identityValues = [payload.remote_jid, payload.remote_jid_alt]
+  const hasIdentityPair = hasContactIdentityCandidates(identityValues)
+  const messageLid = identityValues.find((value) => isDirectWhatsAppJid(value) && value.toLowerCase().endsWith('@lid'))
+  const identityConflict = typeof messageLid === 'string'
+    ? await isConflictedContactLid(admin, businessId, instanceName, messageLid)
+    : false
+  const explicitIdentity = await saveContactIdentityMapping(
+    admin, businessId, instanceName,
+    identityValues,
+    payload.contact_name as string | null,
+  )
+  const mappedIdentity = explicitIdentity ?? (!identityConflict && typeof messageLid === 'string'
+    ? await mappedPhoneIdentity(admin, businessId, instanceName, messageLid)
+    : null)
+  let identityLinked = hasIdentityPair || typeof messageLid === 'string'
+    ? Boolean(mappedIdentity)
+    : !identityConflict
+  if (mappedIdentity) identityLinked = await mergeKnownContactIdentity(
+    admin, businessId, instanceName, mappedIdentity.lidJid, mappedIdentity.phoneJid,
+  )
+  const remoteJid = identityLinked && mappedIdentity ? mappedIdentity.phoneJid : payload.remote_jid as string
+  const remoteJidAlt = identityLinked && mappedIdentity ? mappedIdentity.lidJid
+    : identityLinked ? payload.remote_jid_alt as string | null : null
+  const payloadContactName = payload.contact_name as string | null
+  const contactName = identityLinked ? mappedIdentity?.contactName ?? payloadContactName : payloadContactName
+  const contactPhone = identityLinked
+    ? phoneFromJid(mappedIdentity?.phoneJid ?? '') ?? (payload.contact_phone as string | null)
+    : phoneFromJid(remoteJid)
   const conversationId = await upsertConversation(
     admin,
     businessId,
     instanceName,
-    payload.remote_jid as string,
-    payload.remote_jid_alt as string | null,
-    payload.contact_name as string | null,
-    payload.contact_phone as string | null,
+    remoteJid,
+    remoteJidAlt,
+    contactName,
+    contactPhone,
     payload.provider_timestamp as string,
+    undefined,
+    false,
+    identityLinked,
   )
   const { error } = await admin.from('whatsapp_messages').upsert({
     business_id: businessId,
@@ -540,6 +706,30 @@ async function processCallEvent(admin: AdminClient, businessId: string, instance
   const callerJid = stringValue(packetAttrs.from ?? callData.from ?? callData.remoteJid, 256)
   const callerJidAlt = stringValue(childAttrs.caller_pn ?? childAttrs.callerPn
     ?? packetAttrs.caller_pn ?? callData.remoteJidAlt ?? callData.fromAlt, 256)
+  const callIdentityValues = [
+    callerJid, callerJidAlt,
+    childAttrs.caller_pn, childAttrs.callerPn, childAttrs.phoneNumberJid, childAttrs.phone_number_jid,
+    childAttrs.remoteJid, childAttrs.remoteJidAlt, childAttrs.remoteJidLid,
+    packetAttrs.caller_pn, packetAttrs.callerPn, packetAttrs.phoneNumberJid, packetAttrs.phone_number_jid,
+    packetAttrs.remoteJid, packetAttrs.remoteJidAlt, packetAttrs.remoteJidLid,
+    callData.callerPn, callData.phoneNumberJid, callData.phone_number_jid,
+    callData.remoteJidLid, callData.lidJid, callData.wuid,
+  ]
+  const explicitIdentity = await saveContactIdentityMapping(admin, businessId, instanceName, callIdentityValues)
+  const callerLid = callIdentityValues.find((value) => isDirectWhatsAppJid(value) && value.toLowerCase().endsWith('@lid'))
+  const directPhoneJid = callIdentityValues.map(phoneJidFromProviderValue).find((value): value is string => Boolean(value))
+  const callerLidString = typeof callerLid === 'string' ? callerLid : null
+  const rejectedIdentity = Boolean(callerLid && directPhoneJid && !explicitIdentity)
+    || (callerLidString ? await isConflictedContactLid(admin, businessId, instanceName, callerLidString) : false)
+  const mappedIdentity = explicitIdentity ?? (!rejectedIdentity && typeof callerLid === 'string'
+    ? await mappedPhoneIdentity(admin, businessId, instanceName, callerLid)
+    : null)
+  const identityLid = explicitIdentity?.lidJid ?? (mappedIdentity && typeof callerLid === 'string' ? callerLid.toLowerCase() : null)
+  const identityPhoneJid = explicitIdentity?.phoneJid ?? mappedIdentity?.phoneJid
+    ?? (typeof callerLid === 'string' && typeof directPhoneJid === 'string' ? directPhoneJid.toLowerCase() : null)
+  const identityLinked = identityLid && identityPhoneJid
+    ? await mergeKnownContactIdentity(admin, businessId, instanceName, identityLid, identityPhoneJid)
+    : !rejectedIdentity && typeof callerLid !== 'string'
   const providerCallId = stringValue(childAttrs['call-id'] ?? packetAttrs['call-id']
     ?? callData.id ?? callData.callId, 256)
   const callState = stringValue(callChild?.tag ?? packetAttrs.state ?? callData.status ?? callData.state ?? callData.event, 64)
@@ -555,17 +745,25 @@ async function processCallEvent(admin: AdminClient, businessId: string, instance
     ? `${providerCallId}|${callState ?? ''}`
     : [callerJid ?? '', callState ?? '', stringValue(timestampValue, 128) ?? JSON.stringify(callData)].join('|')
   const eventKey = await hashKey(stableIdentity)
-  const remoteJid = callerJid ?? callerJidAlt ?? `unknown-call:${eventKey}`
-  const callerPhone = phoneFromJid(callerJidAlt) ?? phoneFromJid(callerJid)
+  const remoteJid = identityLinked ? identityPhoneJid ?? callerJid ?? callerJidAlt ?? `unknown-call:${eventKey}`
+    : callerJid ?? callerJidAlt ?? `unknown-call:${eventKey}`
+  const remoteJidAlt = identityLinked ? identityLid ?? callerJidAlt : null
+  const callerPhone = identityLinked
+    ? phoneFromJid(identityPhoneJid) ?? phoneFromJid(callerJidAlt) ?? phoneFromJid(callerJid)
+    : phoneFromJid(remoteJid)
+  const callerName = mappedIdentity?.contactName ?? null
   const conversationId = await upsertConversation(
     admin,
     businessId,
     instanceName,
     remoteJid,
-    callerJidAlt,
-    null,
+    remoteJidAlt,
+    callerName,
     callerPhone,
     occurredAt,
+    undefined,
+    false,
+    identityLinked,
   )
   const { error } = await admin.from('whatsapp_call_events').upsert({
     business_id: businessId,
@@ -608,12 +806,40 @@ async function processChatOrContactEvent(
     const name = isGroup
       ? evolutionContactName(row, true)
       : isContactEvent && hasProviderSavedName ? evolutionContactName(row, false) : null
-    const phone = isGroup ? null : phoneFromJid(jidAlt) ?? phoneFromJid(jid)
+    const identity = isGroup ? null : await saveContactIdentityMapping(admin, businessId, instanceName, [
+      jid, jidAlt, row.remoteJidLid, row.phoneNumberJid, row.pnJid, row.lid, row.lidJid, row.wuid, row.id,
+      row.phoneNumber, row.phone, row.number, row.pn,
+    ], name)
+    const identityValues = [
+      jid, jidAlt, row.remoteJidLid, row.phoneNumberJid, row.pnJid, row.lid, row.lidJid, row.wuid, row.id,
+      row.phoneNumber, row.phone, row.number, row.pn,
+    ]
+    const hasIdentityPair = !isGroup && hasContactIdentityCandidates(identityValues)
+    const contactLid = identityValues.find((value) => isDirectWhatsAppJid(value) && value.toLowerCase().endsWith('@lid'))
+    const identityConflict = !isGroup && typeof contactLid === 'string'
+      ? await isConflictedContactLid(admin, businessId, instanceName, contactLid)
+      : false
+    const mappedIdentity = identity ?? (!identityConflict && typeof contactLid === 'string'
+      ? await mappedPhoneIdentity(admin, businessId, instanceName, contactLid)
+      : null)
+    let identityLinked = hasIdentityPair || typeof contactLid === 'string'
+      ? Boolean(mappedIdentity)
+      : !identityConflict
+    if (mappedIdentity) identityLinked = await mergeKnownContactIdentity(
+      admin, businessId, instanceName, mappedIdentity.lidJid, mappedIdentity.phoneJid,
+    )
+    const conversationJid = identityLinked && mappedIdentity ? mappedIdentity.phoneJid : jid
+    const conversationJidAlt = identityLinked && mappedIdentity ? mappedIdentity.lidJid
+      : identityLinked ? jidAlt : null
+    const conversationName = identityLinked ? mappedIdentity?.contactName ?? name : name
+    const phone = isGroup ? null : identityLinked
+      ? phoneFromJid(mappedIdentity?.phoneJid ?? '') ?? phoneFromJid(jidAlt) ?? phoneFromJid(jid)
+      : phoneFromJid(jid)
     if (isChatEvent) {
       const unread = typeof row.unreadCount === 'number' ? row.unreadCount
         : typeof row.unreadMessages === 'number' ? row.unreadMessages : undefined
       const timestamp = row.lastMessageRecvTimestamp ?? row.conversationTimestamp
-      await upsertConversation(admin, businessId, instanceName, jid, jidAlt, name, phone, isoTimestamp(timestamp), unread, hasProviderSavedName)
+      await upsertConversation(admin, businessId, instanceName, conversationJid, conversationJidAlt, conversationName, phone, isoTimestamp(timestamp), unread, hasProviderSavedName, identityLinked)
       continue
     }
     if (!isContactEvent) continue
@@ -623,11 +849,11 @@ async function processChatOrContactEvent(
       || Object.prototype.hasOwnProperty.call(row, 'pushName')
       || Object.prototype.hasOwnProperty.call(row, 'verifiedName')) update.contact_name = name
     if (phone) update.contact_phone = phone
-    const matchedConversation = await findConversationByJidOrAlias(admin, businessId, instanceName, jid, jidAlt)
+    const matchedConversation = await findConversationByJidOrAlias(admin, businessId, instanceName, conversationJid, conversationJidAlt)
     if (!matchedConversation) continue
     const resolvedAltJid = await safeAlternateJid(
       admin, businessId, instanceName, matchedConversation.id, matchedConversation.remote_jid,
-      jidAlt, jid, stringValue(matchedConversation.remote_jid_alt, 256),
+      identityLinked ? conversationJidAlt : null, conversationJid, stringValue(matchedConversation.remote_jid_alt, 256),
     )
     update.remote_jid_alt = resolvedAltJid
     if (Object.keys(update).length) {
@@ -635,7 +861,7 @@ async function processChatOrContactEvent(
         .eq('business_id', businessId).eq('id', matchedConversation.id)
       if (error) throw new Error('contact_update_save_failed')
     }
-    await registerConversationJidAliases(admin, businessId, instanceName, matchedConversation.id, jid, jidAlt)
+    await registerConversationJidAliases(admin, businessId, instanceName, matchedConversation.id, conversationJid, identityLinked ? conversationJidAlt : null)
     if (phone) {
       await resolvePhoneMatch(admin, businessId, phone, matchedConversation.id)
     }

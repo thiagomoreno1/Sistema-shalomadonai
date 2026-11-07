@@ -96,6 +96,151 @@ function savedContactPicture(row: JsonRecord): string | null {
     : isRecord(value) ? text(value.url ?? value.profilePicUrl ?? value.pictureUrl, 4096) : null
 }
 
+function phoneJidsFromContact(values: unknown[]): string[] {
+  return [...new Set(values.flatMap((value) => typeof value === 'string'
+    && /@s\.whatsapp\.net$/i.test(value.trim())
+    ? [phoneJidFromContactValue(value)].filter((jid): jid is string => Boolean(jid))
+    : []))]
+}
+
+function phoneJidFromContactValue(value: unknown): string | null {
+  const raw = typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? String(value)
+    : typeof value === 'string' ? value.trim() : ''
+  if (!raw) return null
+  const jid = raw.toLowerCase().match(/^([0-9]{8,15})(?::[0-9]{1,5})?@s\.whatsapp\.net$/)
+  if (jid) {
+    const digits = jid[1].length === 10 || jid[1].length === 11 ? `55${jid[1]}` : jid[1]
+    return `${digits}@s.whatsapp.net`
+  }
+  if (!/^\+?[0-9\s().-]+$/.test(raw)) return null
+  let digits = raw.replace(/\D/g, '')
+  if (raw.trim().startsWith('+')) {
+    return digits.length >= 8 && digits.length <= 15 ? `${digits}@s.whatsapp.net` : null
+  }
+  if (digits.length === 10 || digits.length === 11) digits = `55${digits}`
+  return digits.length >= 12 && digits.length <= 15 ? `${digits}@s.whatsapp.net` : null
+}
+
+function contactIdentityAnalysis(contacts: JsonRecord[]): { pairs: JsonRecord[]; ambiguousLids: string[] } {
+  const candidates = new Map<string, Map<string, string | null>>()
+  const ambiguousLids = new Set<string>()
+  for (const contact of contacts) {
+    if (contact.isGroup === true || contact.is_group === true) continue
+    const identifiers = [
+      contact.remoteJid, contact.id, contact.wuid, contact.remoteJidAlt,
+      contact.remoteJidLid, contact.phoneNumberJid, contact.pnJid, contact.lid, contact.lidJid,
+    ].filter((value): value is string => typeof value === 'string')
+    if (identifiers.some((value) => value.trim().toLowerCase().endsWith('@g.us'))) continue
+    const lidJids = [...new Set(identifiers.map((value) => value.trim().toLowerCase())
+      .filter((value) => /^[a-z0-9._:-]{1,128}@lid$/i.test(value)))]
+    const phoneValues = [contact.phoneNumber, contact.phone, contact.number, contact.pn]
+    const phoneJids = [...new Set([
+      ...phoneJidsFromContact(identifiers),
+      ...phoneValues.map(phoneJidFromContactValue).filter((value): value is string => Boolean(value)),
+    ])]
+    if (phoneJids.length !== 1) {
+      if (phoneJids.length > 1) for (const lidJid of lidJids) ambiguousLids.add(lidJid)
+      continue
+    }
+    const phoneJid = phoneJids[0]
+    const name = savedContactName(contact)
+    for (const lidJid of lidJids) {
+      const byPhone = candidates.get(lidJid) ?? new Map<string, string | null>()
+      byPhone.set(phoneJid, byPhone.get(phoneJid) ?? name)
+      candidates.set(lidJid, byPhone)
+      if (byPhone.size > 1) ambiguousLids.add(lidJid)
+    }
+  }
+  const pairs = [...candidates.entries()]
+    .filter(([lidJid, phones]) => phones.size === 1 && !ambiguousLids.has(lidJid))
+    .map(([lid_jid, phones]) => {
+      const [phone_jid, contact_name] = [...phones.entries()][0]
+      return { lid_jid, phone_jid, contact_name }
+    })
+  return { pairs, ambiguousLids: [...ambiguousLids] }
+}
+
+async function persistContactIdentityPairs(
+  admin: any,
+  businessId: string,
+  instanceName: string,
+  contacts: JsonRecord[],
+) {
+  const { pairs, ambiguousLids } = contactIdentityAnalysis(contacts)
+  const conflictedLids = new Set(ambiguousLids)
+  if (pairs.length) {
+    const rows = pairs.map((pair) => ({
+      business_id: businessId,
+      instance_name: instanceName,
+      lid_jid: pair.lid_jid,
+      phone_jid: pair.phone_jid,
+      contact_name: pair.contact_name,
+    }))
+    const { error } = await admin.from('whatsapp_contact_jid_mappings')
+      .upsert(rows, { onConflict: 'business_id,instance_name,lid_jid', ignoreDuplicates: true })
+    if (error) throw new RequestError(500, 'contact_identity_sync_failed')
+    const { data: stored, error: lookupError } = await admin.from('whatsapp_contact_jid_mappings')
+      .select('lid_jid, phone_jid')
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .in('lid_jid', pairs.map((pair) => String(pair.lid_jid)))
+    if (lookupError) throw new RequestError(500, 'contact_identity_sync_failed')
+    const storedByLid = new Map((stored ?? []).map((row: JsonRecord) => [String(row.lid_jid), String(row.phone_jid)]))
+    for (const pair of pairs) {
+      if (storedByLid.get(String(pair.lid_jid)) !== String(pair.phone_jid)) conflictedLids.add(String(pair.lid_jid))
+    }
+  }
+  const conflicted = [...conflictedLids]
+  for (let start = 0; start < conflicted.length; start += 100) {
+    const { error: conflictError } = await admin.from('whatsapp_contact_jid_mappings')
+      .update({ identity_conflict: true, updated_at: new Date().toISOString() })
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .in('lid_jid', conflicted.slice(start, start + 100))
+    if (conflictError) throw new RequestError(500, 'contact_identity_sync_failed')
+  }
+}
+
+async function verifiedProviderAlternateJid(
+  admin: any,
+  businessId: string,
+  instanceName: string,
+  primaryJid: string,
+  alternateJid: string | null,
+): Promise<string | null> {
+  if (!alternateJid) return null
+  const { pairs } = contactIdentityAnalysis([{ remoteJid: primaryJid, remoteJidAlt: alternateJid }])
+  const pair = pairs[0]
+  if (!pair) return alternateJid
+  await persistContactIdentityPairs(admin, businessId, instanceName, [{ remoteJid: primaryJid, remoteJidAlt: alternateJid }])
+  const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
+    .select('phone_jid, identity_conflict')
+    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', pair.lid_jid)
+    .maybeSingle()
+  if (error) throw new RequestError(500, 'contact_identity_lookup_failed')
+  return data?.identity_conflict === false && data.phone_jid === pair.phone_jid ? alternateJid : null
+}
+
+async function mappedContactPhoneJid(admin: any, businessId: string, instanceName: string, lidJid: string): Promise<string | null> {
+  const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
+    .select('phone_jid')
+    .eq('business_id', businessId).eq('instance_name', instanceName)
+    .eq('lid_jid', lidJid.toLowerCase()).eq('identity_conflict', false)
+    .maybeSingle()
+  if (error) throw new RequestError(500, 'contact_identity_lookup_failed')
+  const phoneJid = text(data?.phone_jid, 256)
+  return phoneJid && /^[0-9]{8,15}@s\.whatsapp\.net$/i.test(phoneJid) ? phoneJid.toLowerCase() : null
+}
+
+async function isConflictedContactLid(admin: any, businessId: string, instanceName: string, jid: string): Promise<boolean> {
+  if (!jid.toLowerCase().endsWith('@lid')) return false
+  const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
+    .select('identity_conflict')
+    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', jid.toLowerCase())
+    .maybeSingle()
+  if (error) throw new RequestError(500, 'contact_identity_lookup_failed')
+  return data?.identity_conflict === true
+}
+
 function contactDirectoryIndex(contacts: JsonRecord[]): ContactDirectory {
   const names = new Map<string, ContactProfile>()
   for (const contact of contacts) {
@@ -150,7 +295,13 @@ function savedPictureForJids(names: ContactDirectory, ...values: unknown[]): str
   return null
 }
 
-async function loadSavedContactDirectory(config: EvolutionConfig, firstPageRecords?: JsonRecord[], firstPageResponse?: unknown): Promise<ContactDirectory> {
+async function loadSavedContactDirectory(
+  config: EvolutionConfig,
+  firstPageRecords?: JsonRecord[],
+  firstPageResponse?: unknown,
+  admin?: any,
+  businessId?: string,
+): Promise<ContactDirectory> {
   const cacheKey = `${config.businessId}:${config.instanceName}`
   const cached = recentContactNames.get(cacheKey)
   if (cached && Date.now() - cached.at < CONTACT_NAMES_COOLDOWN_MS) return cached.directory
@@ -195,10 +346,13 @@ async function loadSavedContactDirectory(config: EvolutionConfig, firstPageRecor
       contactPages.push(...pages)
       if (pages.every((page) => page.length === 0)) break
     }
-    const directory = contactDirectoryIndex(contactPages.flat())
+    const allContacts = contactPages.flat()
+    if (admin && businessId) await persistContactIdentityPairs(admin, businessId, config.instanceName, allContacts)
+    const directory = contactDirectoryIndex(allContacts)
     recentContactNames.set(cacheKey, { at: Date.now(), directory })
     return directory
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestError && error.code === 'contact_identity_sync_failed') throw error
     return new Map()
   }
 }
@@ -383,6 +537,8 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
     config,
     contactResponse ? contactRecords : undefined,
     contactResponse ?? undefined,
+    admin,
+    businessId,
   )
   const namesByJid = contactDirectory
 
@@ -406,7 +562,17 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
     const jid = text(chat.remoteJid ?? chat.jid ?? chat.id, 256)
     if (!jid) continue
     const group = isGroupJid(jid)
-    const jidAlt = text(chat.remoteJidAlt ?? chat.remoteJidLid ?? chat.phoneNumberJid, 256)
+    let rawJidAlt = text(chat.remoteJidAlt ?? chat.remoteJidLid ?? chat.phoneNumberJid, 256)
+    if (!rawJidAlt && jid.toLowerCase().endsWith('@lid')) {
+      rawJidAlt = await mappedContactPhoneJid(admin, businessId, config.instanceName, jid)
+    }
+    let jidAlt = group ? null : await verifiedProviderAlternateJid(admin, businessId, config.instanceName, jid, rawJidAlt)
+    const identityLids = [jid, rawJidAlt].filter((value): value is string => Boolean(value && value.toLowerCase().endsWith('@lid')))
+    let identityLinked = true
+    for (const lidJid of identityLids) {
+      if (await isConflictedContactLid(admin, businessId, config.instanceName, lidJid)) identityLinked = false
+    }
+    if (!identityLinked) jidAlt = null
     const lastMessage = providerMessagePayload(chat.lastMessage ?? chat.last_message)
     const directoryName = group ? null : savedNameForJids(namesByJid, jid, jidAlt)
     const savedName = group
@@ -414,12 +580,15 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       : directoryName ?? evolutionName(chat, false)
         ?? (lastMessage?.direction === 'incoming' ? text(lastMessage.contact_name, 160) : null)
     const name = savedName
-    const phone = group ? null : phoneFromWhatsAppJid(jidAlt ?? '') ?? phoneFromWhatsAppJid(jid)
+    const phone = group ? null : identityLinked
+      ? phoneFromWhatsAppJid(jidAlt ?? '') ?? phoneFromWhatsAppJid(jid)
+      : phoneFromWhatsAppJid(jid)
     const activity = providerTimestamp(chat.lastMessageRecvTimestamp ?? chat.conversationTimestamp ?? chat.updatedAt)
     const unread = typeof chat.unreadCount === 'number' && Number.isInteger(chat.unreadCount) ? Math.max(0, chat.unreadCount)
       : typeof chat.unreadMessages === 'number' && Number.isInteger(chat.unreadMessages) ? Math.max(0, chat.unreadMessages) : 0
     const existing = await findConversationByJidOrAlias(admin, businessId, config.instanceName, jid, jidAlt)
     let conversationId = typeof existing?.id === 'string' ? existing.id : null
+    let aliasJidAlt: string | null = null
     if (conversationId) {
       const update: JsonRecord = {}
       if (group) {
@@ -430,10 +599,11 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       }
       if (group) update.contact_phone = null
       else if (phone) update.contact_phone = phone
-      const resolvedAltJid = group ? null : await safeAlternateJid(
+      const resolvedAltJid = group || !identityLinked ? null : await safeAlternateJid(
         admin, businessId, config.instanceName, conversationId, existing.remote_jid,
         jidAlt, jid, text(existing.remote_jid_alt, 256),
       )
+      aliasJidAlt = resolvedAltJid
       update.remote_jid_alt = resolvedAltJid
       if (!existing.last_activity_at || activity > String(existing.last_activity_at)) update.last_activity_at = activity
       if (unread > 0) update.unread_count = unread
@@ -443,7 +613,8 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
         if (error) throw new RequestError(500, 'history_sync_failed')
       }
     } else {
-      const safeAltJid = await safeAlternateJid(admin, businessId, config.instanceName, null, jid, jidAlt)
+      const safeAltJid = group || !identityLinked ? null : await safeAlternateJid(admin, businessId, config.instanceName, null, jid, jidAlt)
+      aliasJidAlt = safeAltJid
       const { data, error } = await admin.from('whatsapp_conversations').upsert({
         business_id: businessId,
         instance_name: config.instanceName,
@@ -464,10 +635,10 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       }
     }
     if (!conversationId) continue
-    if (!group) await registerConversationJidAliases(admin, businessId, config.instanceName, conversationId, jid, jidAlt)
+    if (!group) await registerConversationJidAliases(admin, businessId, config.instanceName, conversationId, jid, identityLinked ? aliasJidAlt : null)
     syncedConversations += 1
 
-    if (!group) await resolvePhoneMatchForInbox(admin, businessId, phone, conversationId)
+    if (!group && phone) await resolvePhoneMatchForInbox(admin, businessId, phone, conversationId)
 
     if (group) {
       const { error } = await admin.from('whatsapp_conversation_contexts').delete()
@@ -493,6 +664,7 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       importedMessages += 1
     }
   }
+  await reconcileKnownContactIdentities(admin, businessId, config.instanceName)
 
   const result = {
     status: chatRecords.length === 0 && providerPage === 1 ? 'empty' : 'available',
@@ -735,6 +907,56 @@ async function loadGroupMetadata(config: EvolutionConfig, remoteJid: string): Pr
   }
 }
 
+async function reconcileKnownContactIdentities(admin: any, businessId: string, instanceName: string): Promise<number> {
+  const { data: mappings, error: mappingError } = await admin.from('whatsapp_contact_jid_mappings')
+    .select('lid_jid, phone_jid')
+    .eq('business_id', businessId).eq('instance_name', instanceName)
+    .eq('identity_conflict', false)
+    .limit(3000)
+  if (mappingError) throw new RequestError(500, 'contact_identity_lookup_failed')
+  if (!mappings?.length) return 0
+
+  const identityJids = [...new Set(mappings.flatMap((row: JsonRecord) => [
+    String(row.lid_jid).toLowerCase(), String(row.phone_jid).toLowerCase(),
+  ]))]
+  const conversationByJid = new Map<string, string>()
+  for (let start = 0; start < identityJids.length; start += 100) {
+    const batch = identityJids.slice(start, start + 100)
+    const { data: aliases, error } = await admin.from('whatsapp_conversation_jid_aliases')
+      .select('remote_jid, conversation_id')
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .in('remote_jid', batch)
+    if (error) throw new RequestError(500, 'contact_identity_lookup_failed')
+    for (const alias of aliases ?? []) conversationByJid.set(String(alias.remote_jid), String(alias.conversation_id))
+  }
+
+  let merged = 0
+  for (const mapping of mappings as JsonRecord[]) {
+    const lidJid = String(mapping.lid_jid).toLowerCase()
+    const phoneJid = String(mapping.phone_jid).toLowerCase()
+    const sourceId = conversationByJid.get(lidJid)
+    const targetId = conversationByJid.get(phoneJid)
+    if (!sourceId || !targetId || sourceId === targetId) continue
+    const { data, error } = await admin.rpc('merge_whatsapp_conversations_by_identity', {
+      p_business_id: businessId,
+      p_instance_name: instanceName,
+      p_lid_jid: lidJid,
+      p_phone_jid: phoneJid,
+    })
+    if (error) {
+      // Conflicting manual links or duplicated provider history need review;
+      // keep both rows intact instead of hiding or discarding customer data.
+      continue
+    }
+    if (data) {
+      conversationByJid.set(lidJid, String(data))
+      conversationByJid.set(phoneJid, String(data))
+      merged += 1
+    }
+  }
+  return merged
+}
+
 async function findConversationByJidOrAlias(
   admin: any,
   businessId: string,
@@ -749,9 +971,22 @@ async function findConversationByJidOrAlias(
   if (exactError) throw new RequestError(500, 'history_sync_failed')
   if (exact?.id || isGroupJid(remoteJid)) return exact
 
-  const aliases = [...new Set([remoteJid, remoteJidAlt].filter(isDirectWhatsAppJid).map((value) => value.toLowerCase()))]
+  const candidateAliases = [...new Set([remoteJid, remoteJidAlt].filter(isDirectWhatsAppJid).map((value) => value.toLowerCase()))]
+  const lidAliases = candidateAliases.filter((value) => value.endsWith('@lid'))
+  const conflictedAliases = new Set<string>()
+  if (lidAliases.length) {
+    const { data: mappings, error } = await admin.from('whatsapp_contact_jid_mappings')
+      .select('lid_jid')
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .eq('identity_conflict', true).in('lid_jid', lidAliases)
+    if (error) throw new RequestError(500, 'history_sync_failed')
+    for (const row of mappings ?? []) conflictedAliases.add(String(row.lid_jid).toLowerCase())
+  }
+  const aliases = candidateAliases.filter((value) => !conflictedAliases.has(value))
   if (!aliases.length) return null
-  const primaryJid = isDirectWhatsAppJid(remoteJid) ? remoteJid.toLowerCase() : null
+  const primaryJid = isDirectWhatsAppJid(remoteJid) && !conflictedAliases.has(remoteJid.toLowerCase())
+    ? remoteJid.toLowerCase()
+    : null
   const { data: aliasRows, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
     .select('remote_jid, conversation_id')
     .eq('business_id', businessId).eq('instance_name', instanceName).in('remote_jid', aliases).limit(3)
@@ -801,6 +1036,7 @@ async function safeAlternateJid(
   for (const candidate of candidates) {
     if (!isDirectWhatsAppJid(candidate) || candidate.toLowerCase() === canonicalJid.toLowerCase()) continue
     const normalized = candidate.toLowerCase()
+    if (await isConflictedContactLid(admin, businessId, instanceName, normalized)) continue
     const { data: alias, error: aliasError } = await admin.from('whatsapp_conversation_jid_aliases')
       .select('conversation_id')
       .eq('business_id', businessId).eq('instance_name', instanceName).eq('remote_jid', normalized).maybeSingle()
@@ -1468,7 +1704,7 @@ export default {
         let conversationMap = new Map<string, JsonRecord>()
         if (conversationIds.length) {
           const { data: rows, error: conversationError } = await admin.from('whatsapp_conversations')
-            .select('id, remote_jid, remote_jid_alt, contact_phone, status')
+            .select('id, remote_jid, remote_jid_alt, contact_name, contact_phone, status')
             .eq('business_id', businessId).eq('instance_name', config.instanceName)
             .in('id', conversationIds)
           if (conversationError) throw new RequestError(500, 'call_conversation_lookup_failed')
@@ -1515,7 +1751,8 @@ export default {
             id: typeof row.provider_call_id === 'string' && row.provider_call_id ? row.provider_call_id : row.id,
             conversation_id: row.conversation_id,
             contact: {
-              name: savedNameForJids(savedNames, conversation?.remote_jid, conversation?.remote_jid_alt, row.caller_jid),
+              name: savedNameForJids(savedNames, conversation?.remote_jid, conversation?.remote_jid_alt, row.caller_jid)
+                ?? text(conversation?.contact_name, 160),
               phone: row.caller_phone ?? conversation?.contact_phone
                 ?? phoneFromWhatsAppJid(String(conversation?.remote_jid_alt ?? conversation?.remote_jid ?? ''))
                 ?? phoneFromWhatsAppJid(String(row.caller_jid ?? '')),
