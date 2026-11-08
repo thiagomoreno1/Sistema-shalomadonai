@@ -1,3 +1,26 @@
+45.13.235.147 {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+
+	@evolution path /evolution /evolution/*
+	handle @evolution {
+		uri strip_prefix /evolution
+		reverse_proxy 127.0.0.1:8081 {
+			header_up Origin https://45.13.235.147
+		}
+	}
+
+	handle {
+		root * /var/www/shalom-releases/current
+		encode zstd gzip
+		try_files {path} /index.html
+		file_server
+	}
+}
+
 shalomadonaioperacao.com, www.shalomadonaioperacao.com {
 	@evolution path /evolution /evolution/*
 	handle @evolution {
