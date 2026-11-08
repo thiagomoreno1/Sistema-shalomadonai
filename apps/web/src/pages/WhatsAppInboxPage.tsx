@@ -1401,7 +1401,7 @@ export function WhatsAppInboxPage() {
         return
       }
       if (result.error === 'invalid_pairing_phone') {
-        setPairingError('Informe o número completo com DDI, por exemplo +55 21 99999-9999.')
+        setPairingError('Brasil: informe DDD e telefone, sem +55. Outros países: inclua + e o código do país.')
         return
       }
       if (result.error === 'pairing_restart_failed') {
@@ -1585,10 +1585,10 @@ export function WhatsAppInboxPage() {
 
         {role === 'owner' && phonePairingOpen && <section className="whatsapp-phone-pairing" aria-labelledby="whatsapp-phone-pairing-title">
           <div className="whatsapp-pairing-heading"><h3 id="whatsapp-phone-pairing-title">Parear pelo celular</h3><button className="text-button" onClick={() => { setPhonePairingOpen(false); setPairingMethodsOpen(true); setPairingCode(null) }} type="button">Voltar às opções</button></div>
-          <p>Informe o número com DDI. No celular desse número, abra o WhatsApp (Android: menu ⋮; iPhone: Ajustes) e siga <strong>Aparelhos conectados → Conectar aparelho → Conectar com número de telefone</strong>, em vez de ler um QR Code. Depois digite o código mostrado aqui.</p>
+          <p>Para um número do Brasil, informe DDD e telefone sem +55 (ex.: 21 99999-9999); o sistema acrescenta o DDI. Para outro país, informe + e o código do país. No celular desse número, abra o WhatsApp (Android: menu ⋮; iPhone: Ajustes) e siga <strong>Aparelhos conectados → Conectar aparelho → Conectar com número de telefone</strong>, em vez de ler um QR Code. Depois digite o código mostrado aqui.</p>
           <form onSubmit={(event) => { event.preventDefault(); void handleConnectWhatsApp('phone') }}>
-            <label htmlFor="whatsapp-pairing-phone">Número do WhatsApp com DDI</label>
-            <input autoComplete="tel" id="whatsapp-pairing-phone" inputMode="tel" onChange={(event) => setPairingPhone(event.target.value)} placeholder="+55 21 99999-9999" required type="tel" value={pairingPhone} />
+            <label htmlFor="whatsapp-pairing-phone">DDD e número do WhatsApp</label>
+            <input autoComplete="tel" id="whatsapp-pairing-phone" inputMode="tel" onChange={(event) => setPairingPhone(event.target.value)} placeholder="21 99999-9999" required type="tel" value={pairingPhone} />
             <button className="button button-primary" disabled={pairingLoading || !pairingPhone.trim()} type="submit">{pairingLoading ? 'Gerando código…' : 'Gerar código de pareamento'}</button>
           </form>
           {pairingCode && <div className="whatsapp-pairing-code" role="status" aria-live="polite">
