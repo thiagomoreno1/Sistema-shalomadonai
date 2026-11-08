@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { businessLocalDateTimeToIso, businessToday } from '../lib/formatters'
+import { businessLocalDateTimeToIso, businessToday, formatBRL } from '../lib/formatters'
 import { isDiscreteInventoryUnit } from '../lib/inventoryUnits'
 import { supabaseClient } from '../lib/supabase'
 
@@ -48,6 +48,13 @@ function parseUnitCostCents(value: string) {
   if (!match) return null
   const cents = BigInt(match[1]) * 100n + BigInt((match[2] ?? '').padEnd(2, '0'))
   return cents <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(cents) : null
+}
+
+function receiptLineTotalCents(quantity: number, unitCostCents: number) {
+  const quantityMilli = Math.round(quantity * 1000)
+  if (!Number.isSafeInteger(quantityMilli) || quantityMilli <= 0) return null
+  const total = (BigInt(quantityMilli) * BigInt(unitCostCents) + 500n) / 1000n
+  return total <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(total) : null
 }
 
 function unitCostInput(cents: number | null | undefined) {
@@ -97,6 +104,7 @@ export function InventoryPage() {
   const [receiptSupplier, setReceiptSupplier] = useState('')
   const [receiptReference, setReceiptReference] = useState('')
   const [receiptDate, setReceiptDate] = useState(businessToday())
+  const [receiptRecordAsPaid, setReceiptRecordAsPaid] = useState(true)
   const [receiptNotes, setReceiptNotes] = useState('')
   const [receiptLines, setReceiptLines] = useState<ReceiptLineDraft[]>([newLine()])
   const [movementProductId, setMovementProductId] = useState('')
@@ -222,6 +230,15 @@ export function InventoryPage() {
     ? selectedReturnableItem?.inventory_unit
     : trackedProducts.find((product) => product.id === movementProductId)?.inventory_unit
   const receiptHasProductLines = receiptLines.some((line) => line.productId || line.quantity.trim())
+  const receiptEstimatedTotalCents = receiptLines.reduce((total, line) => {
+    const product = trackedProducts.find((item) => item.id === line.productId)
+    const quantity = parseQuantity(line.quantity, product?.inventory_unit)
+    const unitCost = parseUnitCostCents(line.unitCost)
+    if (quantity === null || unitCost === null) return total
+    const lineTotal = receiptLineTotalCents(quantity, unitCost)
+    if (lineTotal === null || !Number.isSafeInteger(total + lineTotal)) return Number.MAX_SAFE_INTEGER + 1
+    return total + lineTotal
+  }, 0)
   const receiptFormDisabled = saving || uncertain || repeatingReceipt
 
   function startReceipt(productIds?: string[]) {
@@ -237,6 +254,7 @@ export function InventoryPage() {
     setReceiptSupplier('')
     setReceiptReference('')
     setReceiptDate(businessToday())
+    setReceiptRecordAsPaid(true)
     setReceiptNotes('')
     const uniqueProductIds = [...new Set(productIds ?? [])].filter((id) => trackedProducts.some((product) => product.id === id))
     setReceiptLines(uniqueProductIds.length > 0 ? uniqueProductIds.map((id) => newLine(id, unitCostInput(trackedProducts.find((product) => product.id === id)?.cost_cents))) : [newLine()])
@@ -480,6 +498,10 @@ export function InventoryPage() {
       setFormError('Escolha o produto, informe a quantidade recebida e confira o custo por unidade. Produtos por unidade precisam de números inteiros.')
       return
     }
+    if (receiptRecordAsPaid && !Number.isSafeInteger(receiptEstimatedTotalCents)) {
+      setFormError('O total da compra é muito alto para registrar com segurança. Confira as quantidades e os custos por unidade.')
+      return
+    }
     if (new Set(itemPayload.map((item) => item.product_id)).size !== itemPayload.length) {
       setFormError('Cada produto deve aparecer uma única vez. Ajuste a quantidade na linha correspondente.')
       return
@@ -487,13 +509,14 @@ export function InventoryPage() {
     setSaving(true)
     setFormError(null)
     try {
-      const { data, error: rpcError, status } = await supabaseClient.rpc('record_inventory_receipt', {
+      const { data, error: rpcError, status } = await supabaseClient.rpc('record_inventory_receipt_with_payment', {
         p_business_id: businessId,
         p_supplier_name: supplier || null,
         p_purchase_reference: reference || null,
         p_received_on: receiptDate,
         p_notes: notes || null,
         p_items: itemPayload,
+        p_record_as_paid: receiptRecordAsPaid,
         p_request_id: receiptRequestIdRef.current,
       })
       if (rpcError) {
@@ -515,8 +538,13 @@ export function InventoryPage() {
       }
       setShowReceiptForm(false)
       setUncertain(false)
-      setNotice('Entrada de estoque registrada para os itens recebidos fisicamente.')
-      setRegisteredReceiptId(data)
+      const receiptHasPaidOutflow = receiptRecordAsPaid && receiptEstimatedTotalCents > 0
+      setNotice(receiptHasPaidOutflow
+        ? `Estoque atualizado e compra paga de ${formatBRL(receiptEstimatedTotalCents)} lançada automaticamente em Compras de estoque.`
+        : receiptRecordAsPaid
+          ? 'Estoque atualizado. Como o custo informado foi R$ 0,00, não houve saída financeira.'
+          : 'Estoque atualizado; como a compra ainda não foi paga, ela não entrou nas saídas financeiras.')
+      setRegisteredReceiptId(!receiptRecordAsPaid && receiptEstimatedTotalCents > 0 ? data : null)
       receiptRequestIdRef.current = newRequestId()
       await loadData(false)
     } catch {
@@ -688,7 +716,7 @@ export function InventoryPage() {
 
       {!loading && balances.length === 0 && <p className="section-footnote" id="inventory-count-prerequisite">Para fazer uma contagem, configure o estoque e o saldo inicial de um produto no <Link to="/catalogo">Catálogo</Link>.</p>}
 
-      {notice && <div className="form-message form-message-success" role="status"><p>{notice}</p>{registeredReceiptId && <><p className="section-footnote">O estoque já foi atualizado. Para contar também como dinheiro gasto, registre a compra somente se ela já foi paga.</p><Link className="button button-primary" to={`/financeiro/saidas?receiptId=${encodeURIComponent(registeredReceiptId)}`}>Registrar pagamento da compra →</Link></>}</div>}
+      {notice && <div className="form-message form-message-success" role="status"><p>{notice}</p>{registeredReceiptId && <><p className="section-footnote">Quando o pagamento for feito, registre a saída para atualizar o caixa. O custo do produto já ficou salvo para calcular o resultado na venda.</p><Link className="button button-primary" to={`/financeiro/saidas?receiptId=${encodeURIComponent(registeredReceiptId)}`}>Registrar pagamento quando pagar →</Link></>}</div>}
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadData() }} type="button">Tentar novamente</button></div>}
       {!loading && balances.length > 500 && <p className="form-message form-message-warning" role="status">A contagem física está indisponível: há {balances.length} produtos com saldo registrado; o limite é 500.</p>}
 
@@ -732,7 +760,7 @@ export function InventoryPage() {
 
       {showReceiptForm && <form className="surface-panel record-form" onSubmit={(event) => void handleReceiptSubmit(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA FÍSICA</p><h2 ref={receiptHeadingRef} tabIndex={-1}>Registrar compra recebida</h2></div><button className="text-button" disabled={receiptFormDisabled} onClick={() => setShowReceiptForm(false)} type="button">Fechar</button></div>
-        <p className="section-footnote inventory-form-hint">Informe quantidade e custo unitário recebido. O custo médio atualiza os próximos pedidos; compras antigas não alteram vendas já registradas.</p>
+        <p className="section-footnote inventory-form-hint">Informe quantidade e custo por unidade. Se a compra já foi paga, o sistema lança a saída junto com a entrada de estoque.</p>
         {trackedProducts.length === 0 ? <p className="inline-state">Edite um produto no <Link to="/catalogo">Catálogo</Link> e informe sua unidade e quantidade física para registrar compras recebidas.</p> : <>
           {receipts[0] && <button className="text-button" disabled={saving || uncertain || repeatingReceipt || receiptHasProductLines} onClick={() => void repeatLastReceiptProducts()} type="button">{repeatingReceipt ? 'Carregando produtos…' : 'Repetir produtos da última compra'}</button>}
           {receiptSuggestionNotice && <p className="form-message form-message-success" role="status">{receiptSuggestionNotice}</p>}
@@ -754,6 +782,10 @@ export function InventoryPage() {
           <button className="button button-secondary inventory-add-line" disabled={receiptFormDisabled} onClick={() => setReceiptLines((current) => [...current, newLine()])} type="button"><Icon name="plus" /> Adicionar produto</button>
           <div className="record-form-grid inventory-receipt-date-row">
             <label className="record-field"><span className="field-label">Recebido em</span><input className="text-input" disabled={receiptFormDisabled} max={businessToday()} onChange={(event) => setReceiptDate(event.target.value)} required type="date" value={receiptDate} /><small className="field-optional">Padrão: hoje. Mude somente se recebeu em outro dia.</small></label>
+          </div>
+          <div className="record-field-wide inventory-purchase-total">
+            <label className="record-checkbox"><input checked={receiptRecordAsPaid} disabled={receiptFormDisabled} onChange={(event) => setReceiptRecordAsPaid(event.target.checked)} type="checkbox" /><span><strong>A compra já foi paga</strong><small>Marcado: lança {Number.isSafeInteger(receiptEstimatedTotalCents) ? formatBRL(receiptEstimatedTotalCents) : 'o total calculado'} em Compras de estoque, na data de hoje. Desmarque se ainda não pagou.</small></span></label>
+            <p className="section-footnote">A saída financeira é registrada na data de hoje. O custo do produto entra no resultado conforme ele for vendido.</p>
           </div>
           <details className="record-field-wide inventory-receipt-details">
             <summary>Detalhes opcionais da compra</summary>

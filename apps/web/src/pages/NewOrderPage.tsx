@@ -249,6 +249,18 @@ function addDaysToDate(value: string, days: number) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
 }
 
+function addMonthsToDate(value: string, months: number) {
+  if (!isCalendarDate(value) || !Number.isInteger(months) || months < 0 || months > 120) return null
+  const [year, month, day] = value.split('-').map(Number)
+  const monthIndex = year * 12 + month - 1 + months
+  const targetYear = Math.floor(monthIndex / 12)
+  const targetMonth = monthIndex % 12
+  if (targetYear < 1 || targetYear > 9999) return null
+  const finalDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate()
+  const targetDay = Math.min(day, finalDay)
+  return `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`
+}
+
 function scheduleBasisPoints(amounts: number[]) {
   const total = amounts.reduce((sum, amount) => sum + amount, 0)
   if (!Number.isSafeInteger(total) || total <= 0 || amounts.some((amount) => !Number.isSafeInteger(amount) || amount <= 0) || amounts.length > 120) return null
@@ -319,6 +331,8 @@ export function NewOrderPage() {
   const [notes, setNotes] = useState(initialOrderDraft?.notes ?? '')
   const [items, setItems] = useState<ItemDraft[]>(initialOrderDraft?.items ?? [{ key: newKey(), productId: '', quantity: '1' }])
   const [installments, setInstallments] = useState<InstallmentDraft[]>(initialOrderDraft?.installments ?? [{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
+  const [installmentCount, setInstallmentCount] = useState('2')
+  const [installmentPaymentMethod, setInstallmentPaymentMethod] = useState('')
   const [scheduleTemplates, setScheduleTemplates] = useState<ScheduleTemplate[]>([])
   const [scheduleTemplateLoadError, setScheduleTemplateLoadError] = useState<string | null>(null)
   const [selectedScheduleTemplateId, setSelectedScheduleTemplateId] = useState(initialOrderDraft?.selectedScheduleTemplateId ?? '')
@@ -967,6 +981,49 @@ export function NewOrderPage() {
     return parsed === null || Number.isNaN(parsed) ? sum : sum + parsed
   }, 0)
 
+  function generateMonthlyInstallments() {
+    const count = Number(installmentCount)
+    if (!Number.isInteger(count) || count < 2 || count > 120) {
+      setScheduleTemplateError('Escolha de 2 a 120 parcelas.')
+      setScheduleTemplateMessage(null)
+      return
+    }
+    if (!isCalendarDate(scheduleBaseDate)) {
+      setScheduleTemplateError('Informe a data da primeira parcela.')
+      setScheduleTemplateMessage(null)
+      return
+    }
+    if (estimate.invalid || !Number.isSafeInteger(totalCents) || totalCents < count) {
+      setScheduleTemplateError('Confira o total do pedido. Ele precisa cobrir ao menos R$ 0,01 por parcela.')
+      setScheduleTemplateMessage(null)
+      return
+    }
+
+    const total = BigInt(totalCents)
+    const baseAmount = total / BigInt(count)
+    const remainder = total % BigInt(count)
+    const paymentMethod = installmentPaymentMethod.trim().slice(0, 64)
+    const generated = Array.from({ length: count }, (_, index) => {
+      const dueOn = addMonthsToDate(scheduleBaseDate, index)
+      if (!dueOn) return null
+      const amount = baseAmount + (index === count - 1 ? remainder : 0n)
+      return { key: newKey(), amount: centsToInput(amount), dueOn, paymentMethod }
+    })
+    if (generated.some((installment) => installment === null)) {
+      setScheduleTemplateError('Não foi possível calcular os vencimentos mensais. Confira a data inicial.')
+      setScheduleTemplateMessage(null)
+      return
+    }
+
+    autoScheduleRef.current = false
+    customerPrefillManualRef.current.installments = true
+    setCustomerPaymentPattern(null)
+    setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current)
+    setInstallments(generated as InstallmentDraft[])
+    setScheduleTemplateError(null)
+    setScheduleTemplateMessage(`${count} parcelas mensais geradas. Os centavos restantes ficam na última; você pode editar valores e datas.`)
+  }
+
   const applyScheduleTemplate = useCallback((automatic = false) => {
     const template = scheduleTemplates.find((candidate) => candidate.id === selectedScheduleTemplateId)
     if (!template) {
@@ -1606,9 +1663,24 @@ export function NewOrderPage() {
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO DO CLIENTE</p><h2 id="order-installments-heading">{installments.length > 1 ? `Pagamento em ${installments.length} parcelas` : 'Pagamento em uma vez'}</h2></div>
               <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: '' }]) }} type="button"><Icon name="plus" /> Adicionar parcela</button>
             </div>
-            <p className="section-footnote order-payment-hint">Uma parcela registra um pagamento em uma vez. Para parcelar a venda, adicione uma parcela para cada vencimento. O sistema acompanha o que o cliente deve, mas não faz cobranças automaticamente.</p>
+            <p className="section-footnote order-payment-hint">O sistema acompanha os vencimentos, mas não cobra automaticamente. Gere parcelas mensais em conjunto e ajuste qualquer uma depois.</p>
             {installments.length > 1 && <p className="section-footnote">A soma das parcelas deve fechar o total do pedido.</p>}
             {scheduleTemplateLoadError && <p className="form-message form-message-warning" role="status">{scheduleTemplateLoadError}</p>}
+            <div className="record-form-grid order-adjustments" aria-label="Gerar parcelas mensais">
+              <label className="record-field"><span className="field-label">Quantidade de parcelas</span>
+                <input className="text-input" disabled={disabled} inputMode="numeric" max="120" min="2" onChange={(event) => setInstallmentCount(event.target.value)} type="number" value={installmentCount} />
+              </label>
+              <label className="record-field"><span className="field-label">Primeiro vencimento</span>
+                <input className="text-input" disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.baseDate = true; setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
+              </label>
+              <label className="record-field"><span className="field-label">Forma de pagamento <span className="field-optional">igual em todas · opcional</span></span>
+                <input className="text-input" disabled={disabled} maxLength={64} onChange={(event) => setInstallmentPaymentMethod(event.target.value)} placeholder="Ex.: cartão de crédito" value={installmentPaymentMethod} />
+              </label>
+              <div className="record-form-actions record-field-wide">
+                <button className="button button-secondary" disabled={disabled} onClick={generateMonthlyInstallments} type="button">Gerar parcelas mensais</button>
+                <span className="section-footnote">Divide o total igualmente, ajusta os centavos na última e mantém os campos editáveis.</span>
+              </div>
+            </div>
             {scheduleTemplates.length > 0 && <div className="record-form-grid order-adjustments" aria-label="Aplicar modelo de vencimentos">
               <label className="record-field"><span className="field-label">Modelo salvo</span>
                 <select className="text-input" disabled={disabled} onChange={(event) => { const nextId = event.target.value; customerPrefillManualRef.current.installments = true; autoScheduleRef.current = Boolean(nextId); setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); setSelectedScheduleTemplateId(nextId); setScheduleTemplateError(null); setScheduleTemplateMessage(null) }} value={selectedScheduleTemplateId}>
@@ -1616,12 +1688,9 @@ export function NewOrderPage() {
                   {scheduleTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
                 </select>
               </label>
-              <label className="record-field"><span className="field-label">Data-base <span className="field-optional">padrão: hoje</span></span>
-                <input className="text-input" disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.baseDate = true; setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
-              </label>
               <div className="record-form-actions record-field-wide">
                 <button className="button button-secondary" disabled={disabled || !selectedScheduleTemplateId} onClick={() => { customerPrefillManualRef.current.installments = true; setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); applyScheduleTemplate() }} type="button">Reaplicar modelo</button>
-                <span className="section-footnote">Ao trocar o modelo, os vencimentos são recalculados. O ajuste de centavos fica na última parcela; datas e valores continuam editáveis.</span>
+                <span className="section-footnote">O primeiro vencimento acima serve de data-base. Ao trocar o modelo, os vencimentos são recalculados e continuam editáveis.</span>
               </div>
             </div>}
             {scheduleTemplateMessage && <p className="form-message form-message-success" role="status">{scheduleTemplateMessage}</p>}
@@ -1646,10 +1715,6 @@ export function NewOrderPage() {
               Soma dos vencimentos: <strong>{formatBRL(scheduleTotalCents)}</strong> · Total do pedido: <strong>{formatBRL(totalCents)}</strong>
             </p>
             {!scheduleTemplateLoadError && <div className="record-form-grid order-adjustments">
-              {scheduleTemplates.length === 0 && !scheduleTemplateLoadError && <label className="record-field"><span className="field-label">Data-base do modelo</span>
-                <input className="text-input" disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.baseDate = true; setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
-                <span className="section-footnote">Escolha antes de salvar. Ela não cria vencimentos por conta própria.</span>
-              </label>}
               <label className="record-field"><span className="field-label">Nome para salvar este cronograma como modelo</span>
                 <input className="text-input" disabled={disabled || templateSaving} maxLength={80} onChange={(event) => setNewTemplateName(event.target.value)} placeholder="Ex.: entrada e saldo em 30 dias" value={newTemplateName} />
               </label>
