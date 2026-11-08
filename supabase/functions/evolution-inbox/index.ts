@@ -9,7 +9,7 @@ const CONTACT_NAME_MAX_PAGES = 20
 const LEGACY_SYNC_COOLDOWN_MS = 60_000
 const CONTACT_NAMES_COOLDOWN_MS = 60_000
 const CONTACT_IDENTITY_RECONCILE_COOLDOWN_MS = 30_000
-const MAX_MEDIA_BYTES = 10 * 1024 * 1024
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 const MAX_PROFILE_PICTURE_BYTES = 2 * 1024 * 1024
 const MAX_OUTBOUND_MEDIA_BYTES = 2 * 1024 * 1024
 const MAX_REQUEST_BYTES = 3_000_000
@@ -1603,7 +1603,7 @@ async function mediaResponse(admin: any, config: EvolutionConfig, businessId: st
   const result = await evolutionRequest(config, `/chat/getBase64FromMediaMessage/${encodeURIComponent(config.instanceName)}`, {
     method: 'POST',
     body: JSON.stringify({ message: { key }, convertToMp4: false }),
-  }, 15 * 1024 * 1024)
+  }, 36 * 1024 * 1024)
   const resultRecord = isRecord(result) ? result : {}
   const payload = isRecord(resultRecord.data) ? resultRecord.data : resultRecord
   const base64 = text(payload.base64, MAX_MEDIA_BYTES * 2)
@@ -1613,7 +1613,7 @@ async function mediaResponse(admin: any, config: EvolutionConfig, businessId: st
   const sourceMimeType = text(payload.mimetype ?? payload.mimeType ?? metadata.mime_type, 160) ?? 'application/octet-stream'
   const mimeType = sourceMimeType.split(';', 1)[0].trim().toLowerCase()
   const disposition = ['image', 'audio', 'video', 'sticker'].includes(message.message_kind) ? 'inline' : 'attachment'
-  const safeMimeType = /^(?:image\/(?:jpeg|png|webp|gif)|audio\/(?:ogg|mpeg|mp4|wav|webm|aac|3gpp)|video\/mp4|application\/pdf)$/i.test(mimeType)
+  const safeMimeType = /^(?:image\/(?:jpeg|png|webp|gif)|audio\/(?:ogg|mpeg|mp4|wav|webm|aac|3gpp)|video\/(?:mp4|webm|3gpp)|application\/pdf)$/i.test(mimeType)
     ? mimeType
     : 'application/octet-stream'
   const responseBytes = new Uint8Array(bytes.byteLength)

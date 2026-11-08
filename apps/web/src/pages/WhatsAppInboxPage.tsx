@@ -394,7 +394,7 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
   const playbackActive = useRef(false)
   const previewVisible = useRef(false)
   const isSticker = sticker || attachment.file_type === 'sticker'
-  const tooLarge = sizeRejected || (attachment.file_size !== null && attachment.file_size > 10 * 1024 * 1024)
+  const tooLarge = sizeRejected || (attachment.file_size !== null && attachment.file_size > 25 * 1024 * 1024)
   const name = attachmentName(attachment)
 
   useEffect(() => {
@@ -412,7 +412,7 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
   }, [error, file])
 
   useEffect(() => {
-    const isInlineMedia = sticker || ['image', 'sticker', 'audio'].includes(attachment.file_type ?? '')
+    const isInlineMedia = sticker || ['image', 'sticker', 'audio', 'video'].includes(attachment.file_type ?? '')
     const container = attachmentContainer.current
     if (!isInlineMedia || !container || file || error || tooLarge || autoLoadAttempted.current || typeof IntersectionObserver === 'undefined') return
     const observer = new IntersectionObserver((entries) => {
@@ -503,7 +503,7 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
   const label = `${isSticker ? 'Figurinha' : attachmentKindLabel(attachment)}${attachmentSizeLabel(attachment.file_size)}`
   if (!file) return (
     <div aria-busy={loading} className={`whatsapp-attachment${isSticker ? ' is-sticker' : ''}`} ref={attachmentContainer}>
-      {tooLarge && <p className="whatsapp-attachment-error" role="alert">Este anexo excede o limite de 10 MiB.</p>}
+      {tooLarge && <p className="whatsapp-attachment-error" role="alert">Este anexo excede o limite de 25 MiB.</p>}
       {!tooLarge && <button aria-label={loading ? `Carregando ${label.toLocaleLowerCase('pt-BR')}` : error ? `Tentar abrir ${label.toLocaleLowerCase('pt-BR')} novamente` : `Abrir ${label.toLocaleLowerCase('pt-BR')}`} className="whatsapp-attachment-load" disabled={loading} onClick={() => void loadAttachment()} ref={loadButton} type="button">
         <Icon name="file" />
         <span>{error ? 'Não foi possível abrir · tentar novamente' : `Abrir ${label}`}</span>
