@@ -16,6 +16,7 @@ type StockProduct = { id: string; name: string; inventory_unit: string; inventor
 type ComboComponentDraft = { productId: string; quantityPerCombo: string }
 type ItemDraft = { key: string; productId: string; quantity: string; components?: ComboComponentDraft[]; compositionOpen?: boolean; requiresCompositionReview?: boolean }
 type InstallmentDraft = { key: string; amount: string; dueOn: string; paymentMethod: string }
+type PaymentPlanMode = 'once' | 'monthly' | 'custom'
 type OrderCopySummary = { customerName: string; copiedItems: number; customCompositionsCopied: number; legacyCompositionsReviewCount: number; skippedItems: number }
 type ScheduleEntry = { ordinal: number; amount_bps: number; days_after_base: number; payment_method: string | null }
 type ScheduleTemplate = { id: string; name: string; schedule: ScheduleEntry[] }
@@ -37,6 +38,9 @@ type NewOrderDraft = {
   notes: string
   items: ItemDraft[]
   installments: InstallmentDraft[]
+  paymentPlanMode: PaymentPlanMode
+  installmentCount: string
+  installmentPaymentMethod: string
   selectedScheduleTemplateId: string
   scheduleBaseDate: string
   newTemplateName: string
@@ -84,7 +88,10 @@ function readNewOrderDraft(storageKey: string): NewOrderDraft | null {
       || typeof parsed.deliveryAddress !== 'string' || typeof parsed.deliveryFee !== 'string'
       || typeof parsed.discount !== 'string' || typeof parsed.notes !== 'string'
       || typeof parsed.selectedScheduleTemplateId !== 'string' || typeof parsed.scheduleBaseDate !== 'string'
-      || typeof parsed.newTemplateName !== 'string') {
+      || typeof parsed.newTemplateName !== 'string'
+      || (parsed.paymentPlanMode !== undefined && !['once', 'monthly', 'custom'].includes(String(parsed.paymentPlanMode)))
+      || (parsed.installmentCount !== undefined && typeof parsed.installmentCount !== 'string')
+      || (parsed.installmentPaymentMethod !== undefined && typeof parsed.installmentPaymentMethod !== 'string')) {
       window.localStorage.removeItem(storageKey)
       return null
     }
@@ -102,6 +109,11 @@ function readNewOrderDraft(storageKey: string): NewOrderDraft | null {
       notes: parsed.notes,
       items: parsed.items as ItemDraft[],
       installments: parsed.installments as InstallmentDraft[],
+      paymentPlanMode: parsed.paymentPlanMode as PaymentPlanMode | undefined
+        ?? ((parsed.installments as InstallmentDraft[]).length > 1
+          || (parsed.installments as InstallmentDraft[]).some((installment) => installment.amount.trim() || installment.paymentMethod.trim()) ? 'custom' : 'once'),
+      installmentCount: parsed.installmentCount ?? String(Math.max(2, (parsed.installments as InstallmentDraft[]).length)),
+      installmentPaymentMethod: parsed.installmentPaymentMethod ?? (parsed.installments as InstallmentDraft[])[0]?.paymentMethod ?? '',
       selectedScheduleTemplateId: parsed.selectedScheduleTemplateId,
       scheduleBaseDate: parsed.scheduleBaseDate,
       newTemplateName: parsed.newTemplateName,
@@ -154,6 +166,24 @@ function installmentsFromSchedule(schedule: ScheduleEntry[], baseDate: string, t
     return dueOn ? { key: newKey(), amount: centsToInput(amounts[index]), dueOn, paymentMethod: entry.payment_method ?? '' } : null
   })
   return result.some((entry) => entry === null) ? null : result as InstallmentDraft[]
+}
+
+function monthlyInstallmentSchedule(countValue: string, baseDate: string, totalCents: number, paymentMethod: string) {
+  const count = Number(countValue)
+  if (!Number.isInteger(count) || count < 2 || count > 120 || !isCalendarDate(baseDate)
+    || !Number.isSafeInteger(totalCents) || totalCents < count) return null
+
+  const total = BigInt(totalCents)
+  const baseAmount = total / BigInt(count)
+  const remainder = total % BigInt(count)
+  const method = paymentMethod.trim().slice(0, 64)
+  const schedule = Array.from({ length: count }, (_, index) => {
+    const dueOn = addMonthsToDate(baseDate, index)
+    if (!dueOn) return null
+    const amount = baseAmount + (index === count - 1 ? remainder : 0n)
+    return { key: newKey(), amount: centsToInput(amount), dueOn, paymentMethod: method }
+  })
+  return schedule.some((entry) => entry === null) ? null : schedule as InstallmentDraft[]
 }
 
 function quantityInThousandths(value: string) {
@@ -330,13 +360,15 @@ export function NewOrderPage() {
   const [discount, setDiscount] = useState(initialOrderDraft?.discount ?? '')
   const [notes, setNotes] = useState(initialOrderDraft?.notes ?? '')
   const [items, setItems] = useState<ItemDraft[]>(initialOrderDraft?.items ?? [{ key: newKey(), productId: '', quantity: '1' }])
-  const [installments, setInstallments] = useState<InstallmentDraft[]>(initialOrderDraft?.installments ?? [{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
-  const [installmentCount, setInstallmentCount] = useState('2')
-  const [installmentPaymentMethod, setInstallmentPaymentMethod] = useState('')
+  const [scheduleBaseDate, setScheduleBaseDate] = useState(() => initialOrderDraft?.scheduleBaseDate || businessDateForTimestamp(new Date(), timezone))
+  const [installments, setInstallments] = useState<InstallmentDraft[]>(() => initialOrderDraft?.installments ?? [{ key: newKey(), amount: '', dueOn: initialOrderDraft?.scheduleBaseDate || businessDateForTimestamp(new Date(), timezone), paymentMethod: '' }])
+  const [paymentPlanMode, setPaymentPlanMode] = useState<PaymentPlanMode>(() => initialOrderDraft?.paymentPlanMode
+    ?? (initialOrderDraft?.installments.some((installment) => installment.amount.trim() || installment.dueOn || installment.paymentMethod.trim()) ? 'custom' : 'once'))
+  const [installmentCount, setInstallmentCount] = useState(() => initialOrderDraft?.installmentCount ?? String(Math.max(2, initialOrderDraft?.installments.length ?? 2)))
+  const [installmentPaymentMethod, setInstallmentPaymentMethod] = useState(() => initialOrderDraft?.installmentPaymentMethod ?? initialOrderDraft?.installments[0]?.paymentMethod ?? '')
   const [scheduleTemplates, setScheduleTemplates] = useState<ScheduleTemplate[]>([])
   const [scheduleTemplateLoadError, setScheduleTemplateLoadError] = useState<string | null>(null)
   const [selectedScheduleTemplateId, setSelectedScheduleTemplateId] = useState(initialOrderDraft?.selectedScheduleTemplateId ?? '')
-  const [scheduleBaseDate, setScheduleBaseDate] = useState(() => initialOrderDraft?.scheduleBaseDate ?? businessDateForTimestamp(new Date(), timezone))
   const [newTemplateName, setNewTemplateName] = useState(initialOrderDraft?.newTemplateName ?? '')
   const [scheduleTemplateMessage, setScheduleTemplateMessage] = useState<string | null>(null)
   const [scheduleTemplateError, setScheduleTemplateError] = useState<string | null>(null)
@@ -378,11 +410,14 @@ export function NewOrderPage() {
     notes,
     items,
     installments,
+    paymentPlanMode,
+    installmentCount,
+    installmentPaymentMethod,
     selectedScheduleTemplateId,
     scheduleBaseDate,
     newTemplateName,
   }), [customerId, selectedAddressId, requiresDelivery, deliveryWorkerId, deliveryAddress, deliveryFee,
-    discount, notes, items, installments, selectedScheduleTemplateId, scheduleBaseDate, newTemplateName])
+    discount, notes, items, installments, paymentPlanMode, installmentCount, installmentPaymentMethod, selectedScheduleTemplateId, scheduleBaseDate, newTemplateName])
 
   const loadChoices = useCallback(async () => {
     const requestId = ++choicesRequestIdRef.current
@@ -649,8 +684,11 @@ export function NewOrderPage() {
     if (!manual.delivery) setRequiresDelivery(false)
     if (!manual.fee) setDeliveryFee('')
     if (!manual.installments) {
-      setInstallments([{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
-      if (!manual.baseDate) setScheduleBaseDate(businessDateForTimestamp(new Date(), timezone))
+      const nextBaseDate = !manual.baseDate ? businessDateForTimestamp(new Date(), timezone) : scheduleBaseDate
+      setInstallments([{ key: newKey(), amount: '', dueOn: nextBaseDate, paymentMethod: '' }])
+      setPaymentPlanMode('once')
+      setInstallmentPaymentMethod('')
+      if (!manual.baseDate) setScheduleBaseDate(nextBaseDate)
       autoScheduleRef.current = false
     }
 
@@ -904,6 +942,7 @@ export function NewOrderPage() {
   function updateInstallment(key: string, changes: Partial<InstallmentDraft>) {
     autoScheduleRef.current = false
     customerPrefillManualRef.current.installments = true
+    setPaymentPlanMode('custom')
     setCustomerOrderSuggestion((current) => current ? {
       ...current,
       installmentStatus: 'preserved',
@@ -968,6 +1007,7 @@ export function NewOrderPage() {
     setSelectedScheduleTemplateId('')
     setScheduleBaseDate(baseDate)
     setInstallments(nextInstallments)
+    setPaymentPlanMode('custom')
     setScheduleTemplateError(null)
     setCustomerOrderSuggestion((current) => current ? {
       ...current,
@@ -976,53 +1016,21 @@ export function NewOrderPage() {
     } : current)
   }
 
-  const scheduleTotalCents = installments.reduce((sum, installment) => {
+  const automaticMonthlyInstallments = paymentPlanMode === 'monthly'
+    ? monthlyInstallmentSchedule(installmentCount, scheduleBaseDate, totalCents, installmentPaymentMethod)
+    : null
+  const paymentInstallments = paymentPlanMode === 'once'
+    ? [{
+      key: installments[0]?.key ?? 'single-payment',
+      amount: Number.isSafeInteger(totalCents) && totalCents > 0 ? centsToInput(BigInt(totalCents)) : '',
+      dueOn: scheduleBaseDate,
+      paymentMethod: installmentPaymentMethod,
+    }]
+    : paymentPlanMode === 'monthly' ? automaticMonthlyInstallments ?? [] : installments
+  const scheduleTotalCents = paymentInstallments.reduce((sum, installment) => {
     const parsed = parseBrazilianCurrency(installment.amount)
     return parsed === null || Number.isNaN(parsed) ? sum : sum + parsed
   }, 0)
-
-  function generateMonthlyInstallments() {
-    const count = Number(installmentCount)
-    if (!Number.isInteger(count) || count < 2 || count > 120) {
-      setScheduleTemplateError('Escolha de 2 a 120 parcelas.')
-      setScheduleTemplateMessage(null)
-      return
-    }
-    if (!isCalendarDate(scheduleBaseDate)) {
-      setScheduleTemplateError('Informe a data da primeira parcela.')
-      setScheduleTemplateMessage(null)
-      return
-    }
-    if (estimate.invalid || !Number.isSafeInteger(totalCents) || totalCents < count) {
-      setScheduleTemplateError('Confira o total do pedido. Ele precisa cobrir ao menos R$ 0,01 por parcela.')
-      setScheduleTemplateMessage(null)
-      return
-    }
-
-    const total = BigInt(totalCents)
-    const baseAmount = total / BigInt(count)
-    const remainder = total % BigInt(count)
-    const paymentMethod = installmentPaymentMethod.trim().slice(0, 64)
-    const generated = Array.from({ length: count }, (_, index) => {
-      const dueOn = addMonthsToDate(scheduleBaseDate, index)
-      if (!dueOn) return null
-      const amount = baseAmount + (index === count - 1 ? remainder : 0n)
-      return { key: newKey(), amount: centsToInput(amount), dueOn, paymentMethod }
-    })
-    if (generated.some((installment) => installment === null)) {
-      setScheduleTemplateError('Não foi possível calcular os vencimentos mensais. Confira a data inicial.')
-      setScheduleTemplateMessage(null)
-      return
-    }
-
-    autoScheduleRef.current = false
-    customerPrefillManualRef.current.installments = true
-    setCustomerPaymentPattern(null)
-    setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current)
-    setInstallments(generated as InstallmentDraft[])
-    setScheduleTemplateError(null)
-    setScheduleTemplateMessage(`${count} parcelas mensais geradas. Os centavos restantes ficam na última; você pode editar valores e datas.`)
-  }
 
   const applyScheduleTemplate = useCallback((automatic = false) => {
     const template = scheduleTemplates.find((candidate) => candidate.id === selectedScheduleTemplateId)
@@ -1049,6 +1057,7 @@ export function NewOrderPage() {
     }
     autoScheduleRef.current = true
     setInstallments(nextInstallments)
+    setPaymentPlanMode('custom')
     setScheduleTemplateError(null)
     setScheduleTemplateMessage(automatic
       ? `Modelo “${template.name}” preenchido automaticamente para o total atual. Confira os vencimentos; você pode editá-los.`
@@ -1120,11 +1129,11 @@ export function NewOrderPage() {
       setScheduleTemplateError('Informe um nome de até 80 caracteres para o modelo.')
       return
     }
-    if (installments.length > 120) {
+    if (paymentInstallments.length > 120) {
       setScheduleTemplateError('Um modelo pode ter no máximo 120 vencimentos.')
       return
     }
-    const amounts = installments.map((installment) => parseBrazilianCurrency(installment.amount))
+    const amounts = paymentInstallments.map((installment) => parseBrazilianCurrency(installment.amount))
     if (amounts.some((amount) => amount === null || Number.isNaN(amount) || amount <= 0)
       || !Number.isSafeInteger(scheduleTotalCents) || scheduleTotalCents !== totalCents) {
       setScheduleTemplateError('Confira os valores positivos e faça a soma dos vencimentos fechar exatamente o total atual antes de salvar o modelo.')
@@ -1135,13 +1144,13 @@ export function NewOrderPage() {
       setScheduleTemplateError('Os valores não podem ser convertidos em percentuais positivos para um modelo. Ajuste as parcelas e tente novamente.')
       return
     }
-    const schedule = installments.map((installment, index) => {
+    const schedule = paymentInstallments.map((installment, index) => {
       const [year, month, day] = scheduleBaseDate.split('-').map(Number)
       const [dueYear, dueMonth, dueDay] = installment.dueOn.split('-').map(Number)
       const daysAfterBase = Math.round((Date.UTC(dueYear, dueMonth - 1, dueDay) - Date.UTC(year, month - 1, day)) / 86400000)
       return { ordinal: index + 1, amount_bps: basisPoints[index], days_after_base: daysAfterBase, payment_method: installment.paymentMethod.trim() || null }
     })
-    if (!isCalendarDate(scheduleBaseDate) || installments.some((installment) => !isCalendarDate(installment.dueOn))
+    if (!isCalendarDate(scheduleBaseDate) || paymentInstallments.some((installment) => !isCalendarDate(installment.dueOn))
       || schedule.some((entry) => entry.days_after_base < 0 || entry.days_after_base > 36500)) {
       setScheduleTemplateError('Para salvar um modelo, informe a data-base e vencimentos entre 0 e 36.500 dias depois dela.')
       return
@@ -1224,9 +1233,13 @@ export function NewOrderPage() {
     setDiscount('')
     setNotes('')
     setItems([{ key: newKey(), productId: '', quantity: '1' }])
-    setInstallments([{ key: newKey(), amount: '', dueOn: '', paymentMethod: '' }])
+    const nextPaymentDate = businessDateForTimestamp(new Date(), timezone)
+    setInstallments([{ key: newKey(), amount: '', dueOn: nextPaymentDate, paymentMethod: '' }])
+    setPaymentPlanMode('once')
+    setInstallmentCount('2')
+    setInstallmentPaymentMethod('')
     setSelectedScheduleTemplateId('')
-    setScheduleBaseDate(businessDateForTimestamp(new Date(), timezone))
+    setScheduleBaseDate(nextPaymentDate)
     setNewTemplateName('')
     setScheduleTemplateMessage(null)
     setScheduleTemplateError(null)
@@ -1255,7 +1268,7 @@ export function NewOrderPage() {
       setFormError('Selecione um cliente ativo.')
       return
     }
-    if (installments.length < 1 || installments.length > 120) {
+    if (paymentInstallments.length < 1 || paymentInstallments.length > 120) {
       setFormError('O pedido precisa ter entre 1 e 120 vencimentos.')
       return
     }
@@ -1346,7 +1359,7 @@ export function NewOrderPage() {
     }
 
     const installmentPayload = [] as { amount_cents: number; due_on: string; payment_method: string | null }[]
-    for (const installment of installments) {
+    for (const installment of paymentInstallments) {
       const amountCents = parseBrazilianCurrency(installment.amount)
       if (amountCents === null || Number.isNaN(amountCents) || amountCents <= 0 || !isCalendarDate(installment.dueOn)) {
         setFormError('Cada vencimento precisa ter um valor positivo e uma data válida.')
@@ -1477,7 +1490,7 @@ export function NewOrderPage() {
     <div className="page-stack">
       <Link className="quiet-link" to="/pedidos">← Voltar para pedidos</Link>
       <header className="page-heading">
-        <div><p className="eyebrow">VENDAS</p><h1>Novo pedido</h1><p className="page-description">Registre os itens atuais do catálogo e informe cada vencimento combinado.</p></div>
+        <div><p className="eyebrow">VENDAS</p><h1>Novo pedido</h1><p className="page-description">Escolha o cliente e os produtos. O pagamento único já usa o total do pedido.</p></div>
       </header>
       {draftStatus && <div className={`form-message ${draftStatus === 'unavailable' ? 'form-message-warning' : 'form-message-success'}`}>
         <p role="status">{uncertain
@@ -1643,86 +1656,123 @@ export function NewOrderPage() {
             )}
             {legacyCompositionReviewCount > 0 && <label className="record-checkbox record-field-wide"><input checked={legacyCompositionReviewConfirmed} disabled={disabled} onChange={(event) => setLegacyCompositionReviewConfirmed(event.target.checked)} type="checkbox" /><span><strong>Revisei a composição estimada dessas cestas antigas</strong><small>O histórico antigo guardava o total arredondado, não a quantidade original por cesta.</small></span></label>}
             <div className="record-form-grid order-adjustments">
-              <label className="record-field"><span className="field-label">Taxa de entrega <span className="field-optional">opcional</span></span>
+              <label className="record-field"><span className="field-label">Taxa cobrada pela entrega <span className="field-optional">opcional</span></span>
                 <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => { customerPrefillManualRef.current.fee = true; setDeliveryFee(event.target.value) }} placeholder="0,00" value={deliveryFee} />
+                <small className="field-optional">Valor cobrado do cliente pela entrega.</small>
               </label>
-              <label className="record-field"><span className="field-label">Desconto <span className="field-optional">opcional</span></span>
+              <label className="record-field"><span className="field-label">Desconto concedido <span className="field-optional">opcional</span></span>
                 <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => setDiscount(event.target.value)} placeholder="0,00" value={discount} />
+                <small className="field-optional">Reduz o total que o cliente paga. Deixe em branco se não houver desconto.</small>
               </label>
             </div>
             <dl className="order-total-list">
               <div><dt>Subtotal atual do catálogo</dt><dd>{formatBRL(estimate.subtotal)}</dd></div>
-              <div><dt>Taxa de entrega</dt><dd>{Number.isNaN(feeCents ?? 0) ? 'Confira o valor' : formatBRL(safeFeeCents)}</dd></div>
-              <div><dt>Desconto</dt><dd>{Number.isNaN(discountCents ?? 0) ? 'Confira o valor' : `− ${formatBRL(safeDiscountCents)}`}</dd></div>
+              <div><dt>Taxa cobrada do cliente</dt><dd>{Number.isNaN(feeCents ?? 0) ? 'Confira o valor' : formatBRL(safeFeeCents)}</dd></div>
+              <div><dt>Desconto concedido</dt><dd>{Number.isNaN(discountCents ?? 0) ? 'Confira o valor' : `− ${formatBRL(safeDiscountCents)}`}</dd></div>
               <div className="order-total-grand"><dt>Total estimado do pedido</dt><dd>{Number.isSafeInteger(totalCents) ? formatBRL(totalCents) : '—'}</dd></div>
             </dl>
             <p className="section-footnote">O pedido guarda o nome e preço atuais dos produtos como fotografia deste registro. A soma final é calculada novamente ao salvar.</p>
           </section>
 
           <section className="surface-panel record-form" aria-labelledby="order-installments-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO DO CLIENTE</p><h2 id="order-installments-heading">{installments.length > 1 ? `Pagamento em ${installments.length} parcelas` : 'Pagamento em uma vez'}</h2></div>
-              <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: '' }]) }} type="button"><Icon name="plus" /> Adicionar parcela</button>
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO DO CLIENTE</p><h2 id="order-installments-heading">{paymentPlanMode === 'monthly' ? `${installmentCount || '—'} parcelas mensais` : paymentPlanMode === 'custom' ? 'Cronograma personalizado' : 'Pagamento único'}</h2></div></div>
+            <div className="order-payment-mode-selector" role="group" aria-label="Como o cliente vai pagar">
+              <button aria-pressed={paymentPlanMode === 'once'} className="order-payment-mode" disabled={disabled} onClick={() => {
+                if (paymentPlanMode === 'custom') {
+                  const firstDueDate = installments[0]?.dueOn
+                  if (isCalendarDate(firstDueDate)) setScheduleBaseDate(firstDueDate)
+                }
+                setPaymentPlanMode('once')
+                setSelectedScheduleTemplateId('')
+                setFormError(null)
+              }} type="button"><strong>Uma vez</strong><span>1 pagamento pelo total do pedido</span></button>
+              <button aria-pressed={paymentPlanMode === 'monthly'} className="order-payment-mode" disabled={disabled} onClick={() => {
+                customerPrefillManualRef.current.installments = true
+                setPaymentPlanMode('monthly')
+                setCustomerPaymentPattern(null)
+                setSelectedScheduleTemplateId('')
+                setFormError(null)
+              }} type="button"><strong>Parcelado</strong><span>Divisão mensal automática</span></button>
             </div>
-            <p className="section-footnote order-payment-hint">O sistema acompanha os vencimentos, mas não cobra automaticamente. Gere parcelas mensais em conjunto e ajuste qualquer uma depois.</p>
-            {installments.length > 1 && <p className="section-footnote">A soma das parcelas deve fechar o total do pedido.</p>}
-            {scheduleTemplateLoadError && <p className="form-message form-message-warning" role="status">{scheduleTemplateLoadError}</p>}
-            <div className="record-form-grid order-adjustments" aria-label="Gerar parcelas mensais">
-              <label className="record-field"><span className="field-label">Quantidade de parcelas</span>
+            {paymentPlanMode !== 'custom' && <div className="record-form-grid order-adjustments">
+              {paymentPlanMode === 'monthly' && <label className="record-field"><span className="field-label">Quantidade de parcelas</span>
                 <input className="text-input" disabled={disabled} inputMode="numeric" max="120" min="2" onChange={(event) => setInstallmentCount(event.target.value)} type="number" value={installmentCount} />
+              </label>}
+              <label className="record-field"><span className="field-label">{paymentPlanMode === 'monthly' ? 'Vencimento da 1ª parcela' : 'Vencimento'}</span>
+                <input className="text-input" disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.baseDate = true; setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null); setFormError(null) }} type="date" value={scheduleBaseDate} />
               </label>
-              <label className="record-field"><span className="field-label">Primeiro vencimento</span>
-                <input className="text-input" disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.baseDate = true; setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null) }} type="date" value={scheduleBaseDate} />
+              <label className="record-field"><span className="field-label">Forma de pagamento <span className="field-optional">opcional · vale para todas</span></span>
+                <input className="text-input" disabled={disabled} maxLength={64} onChange={(event) => setInstallmentPaymentMethod(event.target.value)} placeholder="Ex.: Pix, dinheiro, cartão" value={installmentPaymentMethod} />
               </label>
-              <label className="record-field"><span className="field-label">Forma de pagamento <span className="field-optional">igual em todas · opcional</span></span>
-                <input className="text-input" disabled={disabled} maxLength={64} onChange={(event) => setInstallmentPaymentMethod(event.target.value)} placeholder="Ex.: cartão de crédito" value={installmentPaymentMethod} />
-              </label>
-              <div className="record-form-actions record-field-wide">
-                <button className="button button-secondary" disabled={disabled} onClick={generateMonthlyInstallments} type="button">Gerar parcelas mensais</button>
-                <span className="section-footnote">Divide o total igualmente, ajusta os centavos na última e mantém os campos editáveis.</span>
-              </div>
-            </div>
-            {scheduleTemplates.length > 0 && <div className="record-form-grid order-adjustments" aria-label="Aplicar modelo de vencimentos">
-              <label className="record-field"><span className="field-label">Modelo salvo</span>
-                <select className="text-input" disabled={disabled} onChange={(event) => { const nextId = event.target.value; customerPrefillManualRef.current.installments = true; autoScheduleRef.current = Boolean(nextId); setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); setSelectedScheduleTemplateId(nextId); setScheduleTemplateError(null); setScheduleTemplateMessage(null) }} value={selectedScheduleTemplateId}>
-                  <option value="">Selecione um modelo</option>
-                  {scheduleTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
-                </select>
-              </label>
-              <div className="record-form-actions record-field-wide">
-                <button className="button button-secondary" disabled={disabled || !selectedScheduleTemplateId} onClick={() => { customerPrefillManualRef.current.installments = true; setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); applyScheduleTemplate() }} type="button">Reaplicar modelo</button>
-                <span className="section-footnote">O primeiro vencimento acima serve de data-base. Ao trocar o modelo, os vencimentos são recalculados e continuam editáveis.</span>
-              </div>
             </div>}
-            {scheduleTemplateMessage && <p className="form-message form-message-success" role="status">{scheduleTemplateMessage}</p>}
-            {scheduleTemplateError && <p className="form-message form-message-error" role="alert">{scheduleTemplateError}</p>}
-            <div className="order-draft-list">
-              {installments.map((installment, index) => (
-                <div className="order-draft-item installment-draft-item" key={installment.key}>
-                  <label className="record-field order-money-field"><span className="field-label">Valor {installments.length > 1 ? `da parcela ${index + 1}` : 'do pagamento'} <span aria-hidden="true">*</span></span>
-                    <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => updateInstallment(installment.key, { amount: event.target.value })} placeholder="0,00" value={installment.amount} />
-                  </label>
-                  <label className="record-field order-date-field"><span className="field-label">Vencimento <span aria-hidden="true">*</span></span>
-                    <input className="text-input" disabled={disabled} onChange={(event) => updateInstallment(installment.key, { dueOn: event.target.value })} type="date" value={installment.dueOn} />
-                  </label>
-                  <label className="record-field order-method-field"><span className="field-label">Forma de pagamento <span className="field-optional">opcional</span></span>
-                    <input className="text-input" disabled={disabled} maxLength={64} onChange={(event) => updateInstallment(installment.key, { paymentMethod: event.target.value })} placeholder="Ex.: Pix, dinheiro, boleto" value={installment.paymentMethod} />
-                  </label>
-                  <button aria-label={`Remover parcela ${index + 1}`} className="text-button order-remove-button" disabled={disabled || installments.length === 1} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => current.filter((row) => row.key !== installment.key)) }} type="button">Remover</button>
+            <p className="section-footnote order-payment-hint">{paymentPlanMode === 'once'
+              ? `Valor automático: ${Number.isSafeInteger(totalCents) && totalCents > 0 ? formatBRL(totalCents) : 'o total do pedido'}. O pedido não será marcado como recebido.`
+              : paymentPlanMode === 'monthly'
+                ? 'Os valores são divididos automaticamente pelo total; centavos restantes ficam na última parcela. Alterar itens ou total recalcula as parcelas.'
+                : 'Confira as parcelas e os vencimentos personalizados abaixo. A soma precisa fechar o total do pedido.'}</p>
+            {paymentPlanMode === 'monthly' && !automaticMonthlyInstallments && <p className="form-message form-message-error" role="alert">Informe de 2 a 120 parcelas, uma data válida e um total que cubra ao menos R$ 0,01 por parcela.</p>}
+            {scheduleTemplateLoadError && <p className="form-message form-message-warning" role="status">{scheduleTemplateLoadError}</p>}
+            {(paymentPlanMode === 'once' || paymentPlanMode === 'monthly') && <div className="order-payment-preview" aria-live="polite">
+              <strong>{paymentPlanMode === 'once' ? Number.isSafeInteger(totalCents) && totalCents > 0 ? formatBRL(totalCents) : '—' : automaticMonthlyInstallments?.length === 1 ? formatBRL(parseBrazilianCurrency(automaticMonthlyInstallments[0].amount) ?? 0) : automaticMonthlyInstallments ? `${formatBRL(parseBrazilianCurrency(automaticMonthlyInstallments[0].amount) ?? 0)} por parcela` : '—'}</strong>
+              <span>{paymentPlanMode === 'once' ? `1 pagamento · vencimento ${isCalendarDate(scheduleBaseDate) ? formatBusinessDate(scheduleBaseDate) : 'a definir'}` : `${installmentCount || '—'} vencimentos mensais · total do pedido dividido automaticamente`}</span>
+            </div>}
+            <details className="order-payment-advanced">
+              <summary>Mais opções de vencimento</summary>
+              <div className="record-form-actions">
+                {paymentPlanMode !== 'custom' && <button className="button button-secondary" disabled={disabled} onClick={() => {
+                  setInstallments(paymentInstallments.map((installment) => ({ ...installment })))
+                  setPaymentPlanMode('custom')
+                  customerPrefillManualRef.current.installments = true
+                  setSelectedScheduleTemplateId('')
+                }} type="button">Ajustar parcelas manualmente</button>}
+              </div>
+              {scheduleTemplates.length > 0 && <div className="record-form-grid order-adjustments" aria-label="Aplicar modelo de vencimentos">
+                <label className="record-field"><span className="field-label">Modelo salvo</span>
+                  <select className="text-input" disabled={disabled} onChange={(event) => { const nextId = event.target.value; customerPrefillManualRef.current.installments = true; autoScheduleRef.current = Boolean(nextId); setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); setSelectedScheduleTemplateId(nextId); setScheduleTemplateError(null); setScheduleTemplateMessage(null) }} value={selectedScheduleTemplateId}>
+                    <option value="">Selecione um modelo</option>
+                    {scheduleTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+                  </select>
+                </label>
+                <div className="record-form-actions record-field-wide">
+                  <button className="button button-secondary" disabled={disabled || !selectedScheduleTemplateId} onClick={() => { customerPrefillManualRef.current.installments = true; setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); applyScheduleTemplate() }} type="button">Aplicar modelo</button>
+                  <span className="section-footnote">Os vencimentos do modelo são recalculados para este pedido.</span>
                 </div>
-              ))}
-            </div>
+              </div>}
+              {paymentPlanMode === 'custom' && <>
+                <div className="record-form-actions"><button className="text-button" disabled={disabled} onClick={() => setPaymentPlanMode('once')} type="button">Voltar para pagamento automático</button>
+                  <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: installmentPaymentMethod }])} type="button"><Icon name="plus" /> Adicionar vencimento</button>
+                </div>
+                <div className="order-draft-list">
+                  {installments.map((installment, index) => (
+                    <div className="order-draft-item installment-draft-item" key={installment.key}>
+                      <label className="record-field order-money-field"><span className="field-label">Valor da parcela {index + 1} <span aria-hidden="true">*</span></span>
+                        <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => updateInstallment(installment.key, { amount: event.target.value })} placeholder="0,00" value={installment.amount} />
+                      </label>
+                      <label className="record-field order-date-field"><span className="field-label">Vencimento <span aria-hidden="true">*</span></span>
+                        <input className="text-input" disabled={disabled} onChange={(event) => updateInstallment(installment.key, { dueOn: event.target.value })} type="date" value={installment.dueOn} />
+                      </label>
+                      <label className="record-field order-method-field"><span className="field-label">Forma de pagamento <span className="field-optional">opcional</span></span>
+                        <input className="text-input" disabled={disabled} maxLength={64} onChange={(event) => updateInstallment(installment.key, { paymentMethod: event.target.value })} placeholder="Ex.: Pix, dinheiro, boleto" value={installment.paymentMethod} />
+                      </label>
+                      <button aria-label={`Remover vencimento ${index + 1}`} className="text-button order-remove-button" disabled={disabled || installments.length === 1} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setInstallments((current) => current.filter((row) => row.key !== installment.key)) }} type="button">Remover</button>
+                    </div>
+                  ))}
+                </div>
+              </>}
+              {!scheduleTemplateLoadError && <div className="record-form-grid order-adjustments">
+                <label className="record-field"><span className="field-label">Nome para salvar este cronograma</span>
+                  <input className="text-input" disabled={disabled || templateSaving} maxLength={80} onChange={(event) => setNewTemplateName(event.target.value)} placeholder="Ex.: entrada e saldo em 30 dias" value={newTemplateName} />
+                </label>
+                <div className="record-form-actions record-field-wide">
+                  <button className="button button-secondary" disabled={disabled || templateSaving || Boolean(scheduleTemplateLoadError) || !newTemplateName.trim()} onClick={() => void saveScheduleTemplate()} type="button">{templateSaving ? 'Salvando modelo…' : 'Salvar cronograma como modelo'}</button>
+                </div>
+              </div>}
+              {scheduleTemplateMessage && <p className="form-message form-message-success" role="status">{scheduleTemplateMessage}</p>}
+              {scheduleTemplateError && <p className="form-message form-message-error" role="alert">{scheduleTemplateError}</p>}
+            </details>
             <p className={`order-schedule-total ${scheduleTotalCents === totalCents ? 'order-schedule-match' : ''}`} aria-live="polite">
-              Soma dos vencimentos: <strong>{formatBRL(scheduleTotalCents)}</strong> · Total do pedido: <strong>{formatBRL(totalCents)}</strong>
+              Total do pagamento: <strong>{formatBRL(scheduleTotalCents)}</strong> · Total do pedido: <strong>{formatBRL(totalCents)}</strong>
             </p>
-            {!scheduleTemplateLoadError && <div className="record-form-grid order-adjustments">
-              <label className="record-field"><span className="field-label">Nome para salvar este cronograma como modelo</span>
-                <input className="text-input" disabled={disabled || templateSaving} maxLength={80} onChange={(event) => setNewTemplateName(event.target.value)} placeholder="Ex.: entrada e saldo em 30 dias" value={newTemplateName} />
-              </label>
-              <div className="record-form-actions record-field-wide">
-                <button className="button button-secondary" disabled={disabled || templateSaving || Boolean(scheduleTemplateLoadError) || !newTemplateName.trim()} onClick={() => void saveScheduleTemplate()} type="button">{templateSaving ? 'Salvando modelo…' : 'Salvar vencimentos como modelo'}</button>
-                {scheduleTemplates.length === 0 && !scheduleTemplateLoadError && <span className="section-footnote">O modelo será salvo para este negócio e usado somente quando você o selecionar.</span>}
-              </div>
-            </div>}
           </section>
 
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
@@ -1730,7 +1780,7 @@ export function NewOrderPage() {
             <button className="button button-primary" disabled={saving || customerPrefillLoading || customerSearchPending || (!uncertain && (customers.length === 0 || products.length === 0))} type="submit">
               {saving ? 'Salvando pedido…' : customerPrefillLoading ? 'Buscando pedido anterior…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Criar pedido'}
             </button>
-            <span className="section-footnote">Os vencimentos são registros manuais; nenhuma cobrança ou pagamento será processado.</span>
+            <span className="section-footnote">O sistema registra os vencimentos, mas não cobra nem marca pagamentos como recebidos automaticamente.</span>
           </div>
         </form>
       )}

@@ -137,14 +137,18 @@ export function OrderDetailPage() {
       return
     }
     if (showBusy) setLoading(true)
+    let orderExists = false
     try {
       const orderResult = await supabaseClient.from('orders')
         .select('id, customer_id, customer_name_snapshot, delivery_address_snapshot, subtotal_cents, delivery_fee_cents, discount_cents, total_cents, notes, status, cancellation_reason, created_at, cancelled_at, requires_delivery')
         .eq('business_id', businessId).eq('id', orderId).maybeSingle()
       if (orderResult.error || !orderResult.data) {
-        setError(orderResult.error ? 'Não foi possível carregar este pedido. Tente novamente.' : 'Este pedido não está disponível.')
+        setError(locationState?.successMessage
+          ? 'O pedido foi criado, mas não consegui carregar os detalhes agora. Atualize esta tela ou volte à lista para abri-lo novamente.'
+          : orderResult.error ? 'Não foi possível carregar este pedido. Tente novamente.' : 'Este pedido não está disponível.')
         return
       }
+      orderExists = true
 
       const [linesResult, installmentsResult, paymentsResult, eventsResult, componentsResult, deliveryResult] = await Promise.all([
         supabaseClient.from('order_lines')
@@ -166,8 +170,16 @@ export function OrderDetailPage() {
           .select('id, status, delivery_worker_id, scheduled_on, time_window, notes, canceled_at, dispatched_at, delivered_at, attempted_at, returned_at')
           .eq('business_id', businessId).eq('order_id', orderId).maybeSingle(),
       ])
-      if (linesResult.error || installmentsResult.error || paymentsResult.error || eventsResult.error || componentsResult.error || deliveryResult.error) {
-        setError('Não foi possível carregar o histórico completo do pedido. Tente novamente.')
+      const failedRead = [
+        { label: 'os produtos do pedido', error: linesResult.error },
+        { label: 'o cronograma de pagamento do pedido', error: installmentsResult.error },
+        { label: 'os pagamentos recebidos', error: paymentsResult.error },
+        { label: 'o histórico do pedido', error: eventsResult.error },
+        { label: 'os itens das cestas', error: componentsResult.error },
+        { label: 'os dados da entrega', error: deliveryResult.error },
+      ].find((result) => result.error)
+      if (failedRead) {
+        setError(`O pedido foi salvo, mas não consegui carregar ${failedRead.label}. Atualize esta tela para tentar novamente.`)
         return
       }
       let deliveryEventRows: DeliveryEvent[] = []
@@ -181,7 +193,7 @@ export function OrderDetailPage() {
             : Promise.resolve({ data: null, error: null }),
         ])
         if (deliveryEventsResult.error || workerResult.error) {
-          setError('Não foi possível carregar o histórico de entrega. Tente novamente.')
+          setError('O pedido foi salvo, mas não consegui carregar o histórico de entrega. Atualize esta tela para tentar novamente.')
           return
         }
         deliveryEventRows = (deliveryEventsResult.data ?? []) as DeliveryEvent[]
@@ -195,7 +207,7 @@ export function OrderDetailPage() {
           .eq('business_id', businessId).eq('order_id', orderId)
           .in('payment_id', loadedPayments.map((payment) => payment.id))
         if (allocationResult.error) {
-          setError('Não foi possível carregar as destinações dos recebimentos. Tente novamente.')
+          setError('O pedido foi salvo, mas não consegui carregar a distribuição dos recebimentos. Atualize esta tela para tentar novamente.')
           return
         }
         loadedAllocations = (allocationResult.data ?? []) as PaymentAllocation[]
@@ -212,11 +224,13 @@ export function OrderDetailPage() {
       setEvents((eventsResult.data ?? []) as OrderEvent[])
       setError(null)
     } catch {
-      setError('Não foi possível carregar este pedido. Tente novamente.')
+      setError(orderExists || locationState?.successMessage
+        ? 'O pedido está salvo, mas não consegui carregar os detalhes agora. Atualize esta tela ou volte à lista para abri-lo novamente.'
+        : 'Não foi possível carregar este pedido. Tente novamente.')
     } finally {
       setLoading(false)
     }
-  }, [businessId, orderId])
+  }, [businessId, orderId, locationState])
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadDetail() }, [loadDetail])
@@ -524,6 +538,7 @@ export function OrderDetailPage() {
       <div className="page-stack">
         <Link className="quiet-link" to="/pedidos">← Voltar para pedidos</Link>
         <div className="inline-state inline-state-error" role="alert">
+          {locationState?.successMessage && <p className="form-message form-message-success" role="status">{locationState.successMessage}</p>}
           <p>{error ?? 'Este pedido não está disponível.'}</p>
           <button className="text-button" onClick={() => void loadDetail()} type="button">Tentar novamente</button>
         </div>
