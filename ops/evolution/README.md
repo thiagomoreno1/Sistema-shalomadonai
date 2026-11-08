@@ -15,18 +15,32 @@ docker volume create shalom-evolution-prod_evolution_instances
 docker compose -p shalom-evolution-prod --env-file .env -f compose.yaml -f compose.contabo.yaml up -d
 ```
 
-For a data migration, stop the source Evolution API before creating the final PostgreSQL dump and archiving the container path `/evolution/instances`. Transfer both files over SSH into `/root/transfer`, then restore in this order:
+For a data migration from the local Windows Compose project, stop the source Evolution API before creating the final PostgreSQL dump and archiving the container path `/evolution/instances`. Run in PowerShell from the repository root, changing `C:\secure-transfer` to a private staging directory:
+
+```powershell
+$evolution = 'ops/evolution'
+$transfer = 'C:\secure-transfer'
+New-Item -ItemType Directory -Force $transfer | Out-Null
+docker compose -f "$evolution/compose.yaml" --env-file "$evolution/.env" stop evolution-api
+docker exec shalom-evolution-local-postgres-1 sh -c 'pg_dump -Fc -U evolution -d evolution -f /tmp/evolution.dump && chmod 600 /tmp/evolution.dump'
+docker cp shalom-evolution-local-postgres-1:/tmp/evolution.dump "$transfer/evolution.dump"
+docker cp shalom-evolution-local-evolution-api-1:/evolution/instances "$transfer/instances"
+tar -czf "$transfer/instances.tar.gz" -C $transfer instances
+```
+
+Transfer only `evolution.dump` and `instances.tar.gz` over SSH into `/root/transfer` on Contabo, then restore in this order:
 
 ```sh
 docker volume create shalom-evolution-prod_evolution_instances
 docker compose -p shalom-evolution-prod --env-file .env -f compose.yaml -f compose.contabo.yaml up -d postgres redis
+until [ "$(docker inspect --format '{{.State.Health.Status}}' shalom-evolution-prod-postgres-1)" = healthy ]; do sleep 2; done
 docker cp /root/transfer/evolution.dump shalom-evolution-prod-postgres-1:/tmp/evolution.dump
 docker exec shalom-evolution-prod-postgres-1 sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore --no-owner --no-privileges --exit-on-error --single-transaction -U evolution -h 127.0.0.1 -d evolution /tmp/evolution.dump'
 docker run --rm -v shalom-evolution-prod_evolution_instances:/instances -v /root/transfer:/transfer:ro postgres:15-alpine sh -c 'mkdir -p /tmp/unpack && tar -xzf /transfer/instances.tar.gz -C /tmp/unpack && cp -a /tmp/unpack/instances/. /instances/ && chown -R root:root /instances'
 docker compose -p shalom-evolution-prod --env-file .env -f compose.yaml -f compose.contabo.yaml up -d evolution-api
 ```
 
-Keep dumps and session archives out of Git and remove temporary copies after confirming the cutover. For rollback, stop the Contabo Evolution API first and restart the source only after disabling the Contabo instance, so two servers never use the same WhatsApp session at once. The source database and volume are the rollback copy; keep them until the new instance has been confirmed.
+Keep dumps and session archives out of Git and remove temporary copies after confirming the cutover. The source database and volume are a **pre-cutover snapshot**. If Contabo has accepted new messages and you need a lossless rollback, stop the Contabo API, dump its current database and session volume, restore those into the source, then start only the source API. Simply restarting the old source can lose post-cutover messages or require WhatsApp to be paired again. Never run both APIs with the same WhatsApp session at once.
 
 ## Subir a Evolution
 
