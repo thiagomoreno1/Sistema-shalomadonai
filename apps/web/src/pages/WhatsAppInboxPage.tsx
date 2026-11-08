@@ -15,6 +15,8 @@ type Attachment = {
   id: string
   file_type: string | null
   extension: string | null
+  file_name?: string | null
+  mime_type?: string | null
   file_size: number | null
   width: number | null
   height: number | null
@@ -59,6 +61,7 @@ type CallListResponse = { calls?: CallEvent[] }
 
 const EMPTY_CONVERSATIONS: Conversation[] = []
 const COMMON_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
+const MESSAGE_EMOJIS = ['😀', '😃', '😄', '😁', '😆', '😂', '🤣', '😊', '😍', '🥰', '😘', '😉', '😎', '🤔', '😢', '😭', '😡', '👍', '👎', '👏', '🙏', '👋', '❤️', '💙', '🎉', '🔥', '✅', '✨', '💰', '🤝', '🙌', '💪']
 
 function uniqueConversations(rows: Conversation[]): Conversation[] {
   const uniqueById = new Map<string, Conversation>()
@@ -99,10 +102,33 @@ function messageKindLabel(value: string | null | undefined) {
 }
 
 function attachmentName(attachment: Attachment) {
-  const extension = attachment.extension && /^[a-z0-9]{1,16}$/i.test(attachment.extension)
-    ? `.${attachment.extension}`
-    : ''
-  return `whatsapp-anexo-${attachment.id}${extension}`
+  const extension = attachmentExtension(attachment)
+  const suppliedName = attachment.file_name?.split(/[\\/]/).pop()?.replace(/[\u0000-\u001f\u007f]/g, '').trim()
+  if (suppliedName && suppliedName.length <= 120) return suppliedName
+  return `whatsapp-anexo-${attachment.id}${extension ? `.${extension}` : ''}`
+}
+
+function attachmentExtension(attachment: Attachment) {
+  const filenameExtension = attachment.file_name?.split(/[\\/]/).pop()?.match(/\.([a-z0-9]{1,16})$/i)?.[1]
+  if (filenameExtension && /^[a-z0-9]{1,16}$/i.test(filenameExtension)) return filenameExtension.toLowerCase()
+  const mimeType = attachment.mime_type?.split(';', 1)[0].trim().toLowerCase()
+  const knownMimeExtensions: Record<string, string> = {
+    'application/pdf': 'pdf',
+    'application/zip': 'zip', 'application/x-zip-compressed': 'zip',
+    'application/vnd.rar': 'rar', 'application/x-rar-compressed': 'rar',
+    'application/x-7z-compressed': '7z', 'application/x-tar': 'tar', 'application/gzip': 'gz',
+    'application/msword': 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/vnd.ms-excel': 'xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+    'application/vnd.ms-powerpoint': 'ppt',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+    'text/plain': 'txt', 'text/csv': 'csv',
+  }
+  if (mimeType && knownMimeExtensions[mimeType]) return knownMimeExtensions[mimeType]
+  const candidate = attachment.extension ?? ''
+  if (/^[a-z0-9]{1,16}$/i.test(candidate)) return candidate.toLowerCase()
+  return ''
 }
 
 function timestampLabel(value: string | null | undefined) {
@@ -185,11 +211,16 @@ function isProviderIdentifier(value: string | null | undefined) {
 }
 
 function conversationMessagePreview(conversation: Conversation) {
-  const content = conversation.last_message?.content?.trim()
+  const lastMessage = conversation.last_message
+  if (!lastMessage) return 'Nenhuma mensagem sincronizada'
+  const content = lastMessage.content?.trim()
   if (isProviderIdentifier(content)) return 'Mensagem recebida'
   if (content) return content
-  if (conversation.last_message?.attachments.length) return `${conversation.last_message.attachments.length} anexo(s)`
-  return 'Sem mensagem de texto'
+  if (lastMessage.message_kind && !['text', 'unknown'].includes(lastMessage.message_kind)) {
+    return messageKindLabel(lastMessage.message_kind).replace(/ recebido?$/i, '').replace(/ recebida$/i, '')
+  }
+  if (lastMessage.attachments.length) return `${lastMessage.attachments.length} anexo(s)`
+  return 'Mensagem recebida'
 }
 
 function senderDisplayName(sender: Message['sender'], fallback: string) {
@@ -349,7 +380,7 @@ function fileToBase64(file: File): Promise<string> {
 const SAFE_INLINE_ATTACHMENT_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif',
   'audio/aac', 'audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/3gpp',
-  'video/mp4', 'video/webm', 'video/3gpp',
+  'video/mp4', 'video/webm', 'video/3gpp', 'application/pdf',
 ])
 
 function attachmentSizeLabel(bytes: number | null) {
@@ -363,7 +394,8 @@ function attachmentKindLabel(attachment: Attachment) {
   if (attachment.file_type === 'image') return 'Imagem'
   if (attachment.file_type === 'audio') return 'Áudio'
   if (attachment.file_type === 'video') return 'Vídeo'
-  return 'Arquivo'
+  const extension = attachmentExtension(attachment)
+  return extension ? extension.toUpperCase() : 'Arquivo'
 }
 
 function isAttachmentSizeError(error: unknown) {
@@ -412,7 +444,7 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
   }, [error, file])
 
   useEffect(() => {
-    const isInlineMedia = sticker || ['image', 'sticker', 'audio'].includes(attachment.file_type ?? '')
+    const isInlineMedia = sticker || ['image', 'sticker', 'audio', 'video'].includes(attachment.file_type ?? '')
     const container = attachmentContainer.current
     if (!isInlineMedia || !container || file || error || tooLarge || autoLoadAttempted.current || typeof IntersectionObserver === 'undefined') return
     const observer = new IntersectionObserver((entries) => {
@@ -518,7 +550,8 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
       {file.mimeType.startsWith('image/') && <a aria-label={`Abrir ${label} em tamanho maior`} className="whatsapp-image-link" href={file.url} rel="noreferrer" target="_blank"><img className="whatsapp-attachment-preview" alt={label} loading="lazy" onError={handlePreviewError} src={file.url} /></a>}
       {file.mimeType.startsWith('audio/') && <audio aria-label={label} className="whatsapp-attachment-audio" controls onEnded={handlePlaybackEnd} onError={handlePreviewError} onPause={handlePlaybackEnd} onPlay={() => { playbackActive.current = true }} preload="metadata" src={file.url}>{`Seu navegador não reproduz ${label.toLocaleLowerCase('pt-BR')}.`}</audio>}
       {file.mimeType.startsWith('video/') && <video aria-label={label} className="whatsapp-attachment-video" controls onEnded={handlePlaybackEnd} onError={handlePreviewError} onPause={handlePlaybackEnd} onPlay={() => { playbackActive.current = true }} playsInline preload="metadata" src={file.url}>{`Seu navegador não reproduz ${label.toLocaleLowerCase('pt-BR')}.`}</video>}
-      {file.mimeType === 'application/octet-stream' && <a className="whatsapp-attachment-document" download={name} href={file.url}>Baixar arquivo</a>}
+      {file.mimeType === 'application/pdf' && <div className="whatsapp-attachment-pdf-wrap"><iframe aria-label="Prévia do PDF" className="whatsapp-attachment-pdf" sandbox="" src={file.url} title="Prévia do PDF" /><a className="whatsapp-attachment-document" download={name} href={file.url}>Baixar PDF</a></div>}
+      {file.mimeType === 'application/octet-stream' && <a className="whatsapp-attachment-document" download={name} href={file.url}>Baixar {attachmentExtension(attachment).toUpperCase() || 'arquivo'}</a>}
     </div>
   )
 }
@@ -564,6 +597,7 @@ export function WhatsAppInboxPage() {
   const [olderMessagesError, setOlderMessagesError] = useState<string | null>(null)
   const [olderMessagesNotice, setOlderMessagesNotice] = useState<string | null>(null)
   const [messageDraft, setMessageDraft] = useState('')
+  const messageDraftInput = useRef<HTMLTextAreaElement>(null)
   const [sending, setSending] = useState(false)
   const [mediaSending, setMediaSending] = useState(false)
   const mediaPicker = useRef<HTMLInputElement>(null)
@@ -811,9 +845,20 @@ export function WhatsAppInboxPage() {
         if (active && detailRequest.current === request) setHistoryHasMore(result.meta?.has_more === true)
         if (active && detailRequest.current === request && conversation && conversation.unread_count > 0) {
           try {
-            const readResult = await invokeInbox<{ conversation?: Conversation }>({ action: 'mark_read', business_id: businessId, conversationId: selectedId })
-            conversation = readResult.conversation ?? { ...conversation, unread_count: 0 }
-            setConversations((current) => current.map((item) => item.id === selectedId ? { ...item, unread_count: 0 } : item))
+            const markConversationRead = () => invokeInbox<{ conversation?: Conversation }>({ action: 'mark_read', business_id: businessId, conversationId: selectedId })
+            let readResult: { conversation?: Conversation }
+            try {
+              readResult = await markConversationRead()
+            } catch {
+              // A newly received message may change the unread counter while the
+              // remote receipt is in flight. Retry once using the fresh count.
+              readResult = await markConversationRead()
+            }
+            const updatedConversation = readResult.conversation ?? { ...conversation, unread_count: 0 }
+            conversation = updatedConversation
+            setConversations((current) => current.map((item) => item.id === selectedId
+              ? { ...item, unread_count: updatedConversation.unread_count }
+              : item))
           } catch {
             setActionError('A conversa abriu, mas não foi possível atualizar o estado de leitura.')
           }
@@ -864,9 +909,18 @@ export function WhatsAppInboxPage() {
         // Keep the conversation usable if the small status refresh is temporarily unavailable.
       }
     }
+    const reconcileProviderStatuses = async () => {
+      try {
+        await invokeInbox({ action: 'sync_message_statuses', business_id: businessId, conversationId: selectedId })
+      } catch {
+        // Provider status reconciliation is a fallback; webhook receipts remain the primary source.
+      }
+    }
     void refreshMessageStatuses()
+    void reconcileProviderStatuses()
     const interval = window.setInterval(() => { void refreshMessageStatuses() }, 5000)
-    return () => { active = false; window.clearInterval(interval) }
+    const providerSyncInterval = window.setInterval(() => { void reconcileProviderStatuses() }, 30_000)
+    return () => { active = false; window.clearInterval(interval); window.clearInterval(providerSyncInterval) }
   }, [businessId, configured, selectedId])
 
   const selectedLink = selectedId ? links[selectedId] : undefined
@@ -955,6 +1009,21 @@ export function WhatsAppInboxPage() {
     } finally {
       setReactionSavingMessageId(null)
     }
+  }
+
+  function insertMessageEmoji(emoji: string, button: HTMLButtonElement) {
+    const textarea = messageDraftInput.current
+    const start = textarea?.selectionStart ?? messageDraft.length
+    const end = textarea?.selectionEnd ?? start
+    const nextDraft = `${messageDraft.slice(0, start)}${emoji}${messageDraft.slice(end)}`
+    const caret = start + emoji.length
+    setMessageDraft(nextDraft)
+    button.closest('details')?.removeAttribute('open')
+    window.requestAnimationFrame(() => {
+      if (!textarea) return
+      textarea.focus()
+      textarea.setSelectionRange(caret, caret)
+    })
   }
   const [customerDraft, setCustomerDraft] = useState('')
   const [orderDraft, setOrderDraft] = useState('')
@@ -1470,8 +1539,8 @@ export function WhatsAppInboxPage() {
           <form className="whatsapp-compose" onSubmit={(event) => void handleSend(event)}>
             {currentConversation && !currentConversation.can_reply && <p className="section-footnote">O canal não permite responder a esta conversa neste momento.</p>}
             <label className="visually-hidden" htmlFor="whatsapp-message-draft">Mensagem</label>
-            <textarea disabled={!currentConversation?.can_reply || mediaSending} id="whatsapp-message-draft" maxLength={4000} onChange={(event) => setMessageDraft(event.target.value)} placeholder="Escreva uma mensagem…" value={messageDraft} />
-            <div className="whatsapp-compose-tools"><span>{mediaSending ? 'Enviando arquivo…' : `${messageDraft.length}/4000`}</span><button className="button button-secondary whatsapp-attach-button" disabled={mediaSending || sending || !currentConversation?.can_reply} onClick={() => mediaPicker.current?.click()} type="button">Anexar arquivo</button><input accept="image/jpeg,image/png,image/webp,audio/aac,audio/mpeg,audio/mp4,audio/ogg,audio/wav,audio/webm,video/mp4,application/pdf" aria-label="Escolher imagem, áudio compatível, vídeo MP4 ou PDF de até 2 MiB" className="visually-hidden" onChange={(event) => void handleSendMedia(event.target.files?.[0])} ref={mediaPicker} type="file" /><button className="button button-primary" disabled={sending || mediaSending || !messageDraft.trim() || !currentConversation?.can_reply} type="submit">{sending ? 'Enviando…' : 'Enviar'}</button></div>
+            <textarea disabled={!currentConversation?.can_reply || mediaSending} id="whatsapp-message-draft" maxLength={4000} onChange={(event) => setMessageDraft(event.target.value)} placeholder="Escreva uma mensagem…" ref={messageDraftInput} value={messageDraft} />
+            <div className="whatsapp-compose-tools"><span>{mediaSending ? 'Enviando arquivo…' : `${messageDraft.length}/4000`}</span><details className="whatsapp-compose-emoji-picker"><summary aria-label="Adicionar emoji" title="Adicionar emoji">😀</summary><div aria-label="Escolha um emoji para a mensagem" className="whatsapp-compose-emoji-grid" role="group">{MESSAGE_EMOJIS.map((emoji) => <button aria-label={`Inserir ${emoji}`} disabled={!currentConversation?.can_reply || mediaSending} key={emoji} onClick={(event) => insertMessageEmoji(emoji, event.currentTarget)} type="button">{emoji}</button>)}</div></details><button className="button button-secondary whatsapp-attach-button" disabled={mediaSending || sending || !currentConversation?.can_reply} onClick={() => mediaPicker.current?.click()} type="button">Anexar arquivo</button><input accept="image/jpeg,image/png,image/webp,audio/aac,audio/mpeg,audio/mp4,audio/ogg,audio/wav,audio/webm,video/mp4,application/pdf" aria-label="Escolher imagem, áudio compatível, vídeo MP4 ou PDF de até 2 MiB" className="visually-hidden" onChange={(event) => void handleSendMedia(event.target.files?.[0])} ref={mediaPicker} type="file" /><button className="button button-primary" disabled={sending || mediaSending || !messageDraft.trim() || !currentConversation?.can_reply} type="submit">{sending ? 'Enviando…' : 'Enviar'}</button></div>
           </form>
 
           <details className="whatsapp-context-disclosure" key={selectedId}>

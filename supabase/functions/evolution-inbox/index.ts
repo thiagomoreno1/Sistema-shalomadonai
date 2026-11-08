@@ -9,6 +9,7 @@ const CONTACT_NAME_MAX_PAGES = 20
 const LEGACY_SYNC_COOLDOWN_MS = 60_000
 const CONTACT_NAMES_COOLDOWN_MS = 60_000
 const CONTACT_IDENTITY_RECONCILE_COOLDOWN_MS = 30_000
+const PROVIDER_MESSAGE_STATUS_COOLDOWN_MS = 30_000
 const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 const MAX_PROFILE_PICTURE_BYTES = 2 * 1024 * 1024
 const MAX_OUTBOUND_MEDIA_BYTES = 2 * 1024 * 1024
@@ -39,6 +40,7 @@ const recentContactNames = new Map<string, {
 const recentGroupMetadata = new Map<string, { at: number; subject: string | null; pictureUrl: string | null }>()
 const recentGroupMetadataLookups = new Map<string, number>()
 const recentGroupDirectory = new Map<string, { at: number; directory: Map<string, GroupMetadata> }>()
+const recentProviderMessageStatusSync = new Map<string, number>()
 
 type JsonRecord = Record<string, unknown>
 type EvolutionConfig = {
@@ -117,6 +119,88 @@ async function applyMessageDeliveryStatus(
     p_delivery_status: deliveryStatus,
   })
   if (error) throw new RequestError(500, 'message_status_update_failed')
+}
+
+function providerStatusValue(value: unknown): string | null {
+  if (isRecord(value)) {
+    return providerStatusValue(value.status ?? value.messageStatus ?? value.message_status
+      ?? value.ack ?? value.state ?? value.value)
+  }
+  return messageDeliveryStatus(value)
+}
+
+function providerMessageDeliveryStatus(record: JsonRecord): string | null {
+  const key = isRecord(record.key) ? record.key : {}
+  const updatesValue = record.MessageUpdate ?? record.messageUpdate ?? record.message_update
+  const updates = Array.isArray(updatesValue) ? updatesValue.filter(isRecord)
+    : isRecord(updatesValue) ? [updatesValue] : []
+  const candidates = [record.status, key.status, ...updates.flatMap((update) => {
+    const nested = isRecord(update.update) ? update.update
+      : isRecord(update.messageUpdate) ? update.messageUpdate
+        : isRecord(update.message_update) ? update.message_update : update
+    return [nested.status, nested.messageStatus, nested.message_status, nested.ack, nested.state, nested.value]
+  })].map(providerStatusValue).filter((status): status is string => Boolean(status))
+  const rank: Record<string, number> = { pending: 0, failed: 0, sent: 1, delivered: 2, read: 3, played: 4, deleted: 5 }
+  return candidates.sort((left, right) => (rank[right] ?? 0) - (rank[left] ?? 0))[0] ?? null
+}
+
+async function syncPendingProviderMessageStatuses(
+  admin: any,
+  config: EvolutionConfig,
+  businessId: string,
+  conversation: JsonRecord,
+) {
+  const conversationId = text(conversation.id, 64)
+  if (!conversationId) return
+  const syncKey = `${businessId}:${config.instanceName}:${conversationId}`
+  const now = Date.now()
+  const lastSync = recentProviderMessageStatusSync.get(syncKey) ?? 0
+  if (now - lastSync < PROVIDER_MESSAGE_STATUS_COOLDOWN_MS) return
+  recentProviderMessageStatusSync.set(syncKey, now)
+  if (recentProviderMessageStatusSync.size > 500) {
+    for (const [key, syncedAt] of recentProviderMessageStatusSync) {
+      if (now - syncedAt > 60 * 60_000) recentProviderMessageStatusSync.delete(key)
+    }
+  }
+
+  try {
+    const { data: messageRows, error } = await admin.from('whatsapp_messages')
+      .select('provider_message_id, delivery_status')
+      .eq('business_id', businessId).eq('instance_name', config.instanceName)
+      .eq('conversation_id', conversationId).eq('direction', 'outgoing')
+      .order('provider_timestamp', { ascending: false }).limit(MESSAGE_HISTORY_LIMIT)
+    if (error) return
+    const currentStatuses = new Map<string, string | null>()
+    for (const row of messageRows ?? []) {
+      const messageId = text(row.provider_message_id, 256)
+      if (messageId && (row.delivery_status === null || row.delivery_status === 'pending' || row.delivery_status === 'sent')) {
+        currentStatuses.set(messageId, typeof row.delivery_status === 'string' ? row.delivery_status : null)
+      }
+    }
+    if (!currentStatuses.size) return
+
+    const jids = [...new Set([text(conversation.remote_jid, 256), text(conversation.remote_jid_alt, 256)]
+      .filter((jid): jid is string => Boolean(jid && !jid.startsWith('unknown-call:'))))]
+    for (const jid of jids) {
+      const result = await evolutionRequest(config, `/chat/findMessages/${encodeURIComponent(config.instanceName)}`, {
+        method: 'POST',
+        body: JSON.stringify({ where: { key: { remoteJid: jid } }, offset: MESSAGE_HISTORY_LIMIT, page: 1 }),
+      })
+      const records = recordsFromEvolution(result, ['messages', 'records', 'data'])
+      for (const record of records) {
+        const key = isRecord(record.key) ? record.key : {}
+        const messageId = text(key.id, 256)
+        if (!messageId || key.fromMe !== true || !currentStatuses.has(messageId)) continue
+        const status = providerMessageDeliveryStatus(record)
+        if (!status) continue
+        await applyMessageDeliveryStatus(admin, businessId, config.instanceName, messageId, status)
+        currentStatuses.delete(messageId)
+      }
+      if (!currentStatuses.size) break
+    }
+  } catch {
+    // Receipt refresh is a fallback; keep stored statuses visible when Evolution is temporarily unavailable.
+  }
 }
 
 function phoneDirectoryKeys(value: string): string[] {
@@ -686,8 +770,9 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       ? phoneFromWhatsAppJid(jidAlt ?? '') ?? phoneFromWhatsAppJid(jid)
       : phoneFromWhatsAppJid(jid)
     const activity = providerTimestamp(chat.lastMessageRecvTimestamp ?? chat.conversationTimestamp ?? chat.updatedAt)
-    const unread = typeof chat.unreadCount === 'number' && Number.isInteger(chat.unreadCount) ? Math.max(0, chat.unreadCount)
-      : typeof chat.unreadMessages === 'number' && Number.isInteger(chat.unreadMessages) ? Math.max(0, chat.unreadMessages) : 0
+    const unreadCount = typeof chat.unreadCount === 'number' && Number.isInteger(chat.unreadCount) ? Math.max(0, chat.unreadCount)
+      : typeof chat.unreadMessages === 'number' && Number.isInteger(chat.unreadMessages) ? Math.max(0, chat.unreadMessages) : undefined
+    const unread = unreadCount ?? 0
     const existing = await findConversationByJidOrAlias(admin, businessId, config.instanceName, jid, jidAlt)
     let conversationId = typeof existing?.id === 'string' ? existing.id : null
     let aliasJidAlt: string | null = null
@@ -708,7 +793,7 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       aliasJidAlt = resolvedAltJid
       update.remote_jid_alt = resolvedAltJid
       if (!existing.last_activity_at || activity > String(existing.last_activity_at)) update.last_activity_at = activity
-      if (unread > 0) update.unread_count = unread
+      if (unreadCount !== undefined) update.unread_count = unreadCount
       if (Object.keys(update).length) {
         const { error } = await admin.from('whatsapp_conversations').update(update)
           .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId)
@@ -910,6 +995,8 @@ function normalizedMessage(row: JsonRecord, savedContactNames?: ContactDirectory
       id: row.id,
       file_type: fileType,
       extension: mimeType?.split('/')[1]?.split(';')[0] ?? null,
+      file_name: text(mediaMetadata.file_name, 255),
+      mime_type: mimeType,
       file_size: fileSize,
       width: null,
       height: null,
@@ -1612,8 +1699,8 @@ async function mediaResponse(admin: any, config: EvolutionConfig, businessId: st
   if (!bytes.length || bytes.byteLength > MAX_MEDIA_BYTES) throw new RequestError(413, 'media_too_large')
   const sourceMimeType = text(payload.mimetype ?? payload.mimeType ?? metadata.mime_type, 160) ?? 'application/octet-stream'
   const mimeType = sourceMimeType.split(';', 1)[0].trim().toLowerCase()
-  const disposition = ['image', 'audio', 'video', 'sticker'].includes(message.message_kind) ? 'inline' : 'attachment'
-  const safeMimeType = /^(?:image\/(?:jpeg|png|webp|gif)|audio\/(?:ogg|mpeg|mp4|wav|webm|aac|3gpp)|video\/mp4|application\/pdf)$/i.test(mimeType)
+  const disposition = ['image', 'audio', 'video', 'sticker'].includes(message.message_kind) || mimeType === 'application/pdf' ? 'inline' : 'attachment'
+  const safeMimeType = /^(?:image\/(?:jpeg|png|webp|gif)|audio\/(?:ogg|mpeg|mp4|wav|webm|aac|3gpp)|video\/(?:mp4|webm|3gpp)|application\/pdf)$/i.test(mimeType)
     ? mimeType
     : 'application/octet-stream'
   const responseBytes = new Uint8Array(bytes.byteLength)
@@ -1768,7 +1855,7 @@ export default {
     const businessId = body.business_id
     const userId = text(context.userClaims?.id, 64)
     if (!userId || !isUuid(businessId)) return json({ error: 'invalid_request' }, 400)
-    if (!['status', 'list', 'calls', 'conversation', 'message_statuses', 'older_messages', 'react', 'mark_read', 'send', 'send_media', 'set_status', 'update_contact_preferences', 'attachment', 'avatar', 'configure_webhook', 'connect', 'disconnect'].includes(action ?? '')) {
+    if (!['status', 'list', 'calls', 'conversation', 'message_statuses', 'sync_message_statuses', 'older_messages', 'react', 'mark_read', 'send', 'send_media', 'set_status', 'update_contact_preferences', 'attachment', 'avatar', 'configure_webhook', 'connect', 'disconnect'].includes(action ?? '')) {
       return json({ error: 'invalid_action' }, 400)
     }
 
@@ -1888,24 +1975,40 @@ export default {
           .order('id', { ascending: true })
           .range(offset, offset + PAGE_SIZE - 1)
         if (error) throw new RequestError(500, 'conversation_list_failed')
-        const ids = (rows ?? []).map((row: JsonRecord) => row.id)
-    let lastMessages: JsonRecord[] = []
+        const ids = (rows ?? []).map((row: JsonRecord) => String(row.id))
+        let lastMessages: JsonRecord[] = []
         if (ids.length) {
           const { data: messages, error: messagesError } = await admin.from('whatsapp_messages')
             .select('id, provider_message_id, conversation_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
             .eq('business_id', businessId)
             .eq('instance_name', config.instanceName)
             .in('conversation_id', ids)
+            .neq('message_kind', 'reaction')
             .order('provider_timestamp', { ascending: false })
+            .order('id', { ascending: false })
             .limit(ids.length * 4)
           if (messagesError) throw new RequestError(500, 'message_list_failed')
           lastMessages = messages ?? []
         }
         const latestByConversation = new Map<string, JsonRecord>()
         for (const message of lastMessages) {
-          if (message.message_kind !== 'reaction' && !latestByConversation.has(String(message.conversation_id))) {
+          if (!latestByConversation.has(String(message.conversation_id))) {
             latestByConversation.set(String(message.conversation_id), message)
           }
+        }
+        const conversationsWithoutLatestMessage = ids.filter((conversationId) => !latestByConversation.has(conversationId))
+        const missingLatestMessages = await Promise.all(conversationsWithoutLatestMessage.map(async (conversationId) => {
+          const { data: message, error: messageError } = await admin.from('whatsapp_messages')
+            .select('id, provider_message_id, conversation_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
+            .eq('business_id', businessId).eq('instance_name', config.instanceName)
+            .eq('conversation_id', conversationId).neq('message_kind', 'reaction')
+            .order('provider_timestamp', { ascending: false }).order('id', { ascending: false })
+            .limit(1).maybeSingle()
+          if (messageError) throw new RequestError(500, 'message_list_failed')
+          return message as JsonRecord | null
+        }))
+        for (const message of missingLatestMessages) {
+          if (message) latestByConversation.set(String(message.conversation_id), message)
         }
         const savedNames = await loadSavedContactNames(config)
         const groupDirectory = await loadGroupDirectory(config)
@@ -2058,6 +2161,11 @@ export default {
       if (conversationError) throw new RequestError(500, 'conversation_lookup_failed')
       if (!conversation) return json({ error: 'conversation_not_found' }, 404)
 
+      if (action === 'sync_message_statuses') {
+        await syncPendingProviderMessageStatuses(admin, config, businessId, conversation as JsonRecord)
+        return json({ synced: true })
+      }
+
       if (action === 'message_statuses') {
         const { data: statusRows, error: statusError } = await admin.from('whatsapp_messages')
           .select('id, delivery_status')
@@ -2149,9 +2257,104 @@ export default {
       }
 
       if (action === 'mark_read') {
-        const { error } = await admin.from('whatsapp_conversations').update({ unread_count: 0 })
+        const unreadCount = Math.max(0, Number(conversation.unread_count) || 0)
+        const remoteJid = text(conversation.remote_jid, 256)
+        if (unreadCount > 0 && (!remoteJid || remoteJid.startsWith('unknown-call:'))) {
+          throw new RequestError(409, 'read_address_unavailable')
+        }
+        if (unreadCount > 0 && remoteJid) {
+          const readMessages = new Map<string, { key: JsonRecord; timestamp: number }>()
+          const pageSize = 100
+          for (let offset = 0; offset < unreadCount; offset += pageSize) {
+            const { data: unreadRows, error: unreadError } = await admin.from('whatsapp_messages')
+              .select('provider_message_id, provider_timestamp, media_metadata')
+              .eq('business_id', businessId).eq('instance_name', config.instanceName)
+              .eq('conversation_id', conversationId).eq('direction', 'incoming')
+              .order('provider_timestamp', { ascending: false }).order('id', { ascending: false })
+              .range(offset, offset + pageSize - 1)
+            if (unreadError) throw new RequestError(500, 'unread_message_lookup_failed')
+            for (const row of unreadRows ?? []) {
+              const messageId = text(row.provider_message_id, 256)
+              if (messageId) {
+                const key: JsonRecord = { remoteJid, fromMe: false, id: messageId }
+                const metadata = isRecord(row.media_metadata) ? row.media_metadata : {}
+                const participant = text(metadata.participant_jid, 256)
+                const participantAlt = text(metadata.participant_alt_jid, 256)
+                if (participant) key.participant = participant
+                if (participantAlt) key.participantAlt = participantAlt
+                readMessages.set(messageId, {
+                  key,
+                  timestamp: Date.parse(String(row.provider_timestamp ?? '')) || 0,
+                })
+              }
+            }
+            if ((unreadRows?.length ?? 0) < pageSize) break
+          }
+
+          // The webhook may have updated the unread badge before storing every
+          // message. Fill only the missing keys from Evolution's bounded chat
+          // query so the local badge never claims success without a remote read.
+          if (unreadCount > 0) {
+            const alternateJid = text(conversation.remote_jid_alt, 256)
+            const jids = [...new Set([remoteJid, alternateJid].filter((jid): jid is string => Boolean(jid)))]
+            const providerMessages: { key: JsonRecord; timestamp: number }[] = []
+            for (const jid of jids) {
+              const result = await evolutionRequest(config, `/chat/findMessages/${encodeURIComponent(config.instanceName)}`, {
+                method: 'POST',
+                body: JSON.stringify({ where: { key: { remoteJid: jid } }, offset: Math.min(Math.max(unreadCount, MESSAGE_HISTORY_LIMIT), 500), page: 1 }),
+              })
+              for (const record of recordsFromEvolution(result, ['messages', 'records', 'data'])) {
+                const providerKey = isRecord(record.key) ? record.key : {}
+                const messageId = text(providerKey.id, 256)
+                if (!messageId || providerKey.fromMe !== false) continue
+                const providerJid = text(providerKey.remoteJid, 256) ?? jid
+                const key: JsonRecord = { remoteJid: providerJid, fromMe: false, id: messageId }
+                const participant = text(providerKey.participant, 256)
+                const participantAlt = text(providerKey.participantAlt, 256)
+                if (participant) key.participant = participant
+                if (participantAlt) key.participantAlt = participantAlt
+                providerMessages.push({
+                  key,
+                  timestamp: Date.parse(providerTimestamp(record.messageTimestamp ?? record.messageTimestampMs)) || 0,
+                })
+              }
+              if (new Set(providerMessages.map((message) => String(message.key.id))).size >= unreadCount) break
+            }
+            providerMessages.sort((left, right) => right.timestamp - left.timestamp)
+            const localMessages = [...readMessages.values()]
+            readMessages.clear()
+            for (const message of providerMessages) {
+              const messageId = String(message.key.id)
+              if (!readMessages.has(messageId)) readMessages.set(messageId, message)
+              if (readMessages.size >= unreadCount) break
+            }
+            for (const message of localMessages) {
+              const messageId = String(message.key.id)
+              if (!readMessages.has(messageId)) readMessages.set(messageId, message)
+              if (readMessages.size >= unreadCount) break
+            }
+          }
+
+          if (readMessages.size < unreadCount) throw new RequestError(409, 'read_messages_not_found')
+          const keys = [...readMessages.values()].slice(0, unreadCount).map((message) => message.key)
+          for (let index = 0; index < keys.length; index += pageSize) {
+            const result = await evolutionRequest(config, `/chat/markMessageAsRead/${encodeURIComponent(config.instanceName)}`, {
+              method: 'POST',
+              body: JSON.stringify({ readMessages: keys.slice(index, index + pageSize) }),
+            })
+            const response = isRecord(result) ? result : {}
+            const responseData = isRecord(response.data) ? response.data : {}
+            const readStatus = text(response.read ?? responseData.read, 40)?.toLowerCase()
+            if (Number(response.status) >= 400 || typeof response.error === 'string' || readStatus !== 'success') {
+              throw new RequestError(502, 'whatsapp_read_receipt_failed')
+            }
+          }
+        }
+        const { data: clearedConversation, error } = await admin.from('whatsapp_conversations').update({ unread_count: 0 })
           .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId)
+          .eq('unread_count', unreadCount).select('id').maybeSingle()
         if (error) throw new RequestError(500, 'mark_read_failed')
+        if (!clearedConversation) throw new RequestError(409, 'new_message_arrived')
       } else if (action === 'set_status') {
         const status = body.status
         if (status !== 'open' && status !== 'resolved') return json({ error: 'invalid_status' }, 400)

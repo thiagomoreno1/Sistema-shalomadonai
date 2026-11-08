@@ -548,6 +548,7 @@ async function upsertConversation(
       ? safePhone ?? phoneFromJid(remoteJidAlt ?? existingJidAlt) ?? existingPhone
       : safePhone
     if (allowAlternateIdentity && matchingPhone && !safePhone) update.contact_phone = matchingPhone
+    if (unreadCount !== undefined) update.unread_count = unreadCount
     if (Object.keys(update).length) {
       const { error } = await admin.from('whatsapp_conversations').update(update)
         .eq('business_id', businessId).eq('id', existing.id)
