@@ -81,24 +81,14 @@ function mergeConversationMessages(current: Conversation | null, fresh: Conversa
   if (!current || current.id !== fresh.id) return fresh
   const currentMessages = current.messages ?? []
   const freshMessages = fresh.messages ?? []
-  if (!currentMessages.length || !freshMessages.length) {
-    return { ...current, ...fresh, messages: freshMessages.length ? freshMessages : currentMessages }
-  }
-
-  // The detail endpoint returns the newest page. Keep the older pages the user
-  // already loaded, otherwise the 30-second refresh makes history disappear.
-  const firstFreshMessage = freshMessages.reduce((first, message) => {
-    const messageTime = message.created_at ?? ''
-    const firstTime = first.created_at ?? ''
-    return messageTime < firstTime || (messageTime === firstTime && message.id < first.id) ? message : first
-  })
-  const firstFreshKey = `${firstFreshMessage.created_at ?? ''}\u0000${firstFreshMessage.id}`
-  const olderMessages = currentMessages.filter((message) => `${message.created_at ?? ''}\u0000${message.id}` < firstFreshKey)
   const merged = new Map<string, Message>()
-  for (const message of [...olderMessages, ...freshMessages]) merged.set(message.id, message)
+  // Keep every page already loaded locally. The detail refresh can be partial
+  // or race with a new message, so it must not evict IDs it did not return.
+  for (const message of currentMessages) merged.set(message.id, message)
+  for (const message of freshMessages) merged.set(message.id, message)
   const messages = [...merged.values()].sort((left, right) =>
     (left.created_at ?? '').localeCompare(right.created_at ?? '') || left.id.localeCompare(right.id))
-  return { ...current, ...fresh, messages }
+  return { ...current, ...fresh, last_message: fresh.last_message ?? current.last_message, messages }
 }
 
 function digitsOnly(value: string | null | undefined) {
@@ -394,6 +384,10 @@ function WhatsAppAvatar({ businessId, conversation }: { businessId: string; conv
     const key = `${businessId}:${conversation.id}`
     const retryPhoto = () => {
       if (document.visibilityState !== 'visible') return
+      const cachedBefore = contactAvatarCache.get(key)
+      const cached = cachedContactAvatar(key)
+      if (cached) return
+      if (!photoUnavailable && !cachedBefore) return
       invalidateContactAvatar(key)
       setPhoto({ conversationId: conversation.id, url: null })
       setPhotoUnavailable(false)
@@ -405,11 +399,11 @@ function WhatsAppAvatar({ businessId, conversation }: { businessId: string; conv
       window.removeEventListener('online', retryPhoto)
       document.removeEventListener('visibilitychange', retryPhoto)
     }
-  }, [businessId, conversation?.id])
+  }, [businessId, conversation?.id, photoUnavailable])
 
   const initials = label.slice(0, 1).toLocaleUpperCase('pt-BR') || '?'
   return <span aria-hidden="true" className={`whatsapp-contact-avatar${isGroup ? ' is-group' : ''}`} ref={avatarRef} title={label || (isGroup ? 'Grupo' : 'Contato')}>
-    {photoUrl && !photoUnavailable ? <img alt="" loading="lazy" onError={() => setPhotoUnavailable(true)} src={photoUrl} /> : isGroup ? '👥' : initials}
+    {photoUrl && !photoUnavailable ? <img alt="" loading="lazy" onError={() => { if (conversation) invalidateContactAvatar(`${businessId}:${conversation.id}`); setPhotoUnavailable(true) }} src={photoUrl} /> : isGroup ? '👥' : initials}
   </span>
 }
 
