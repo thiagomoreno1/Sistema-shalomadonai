@@ -433,6 +433,8 @@ function messagePayload(value: unknown): JsonRecord | null {
   if (mimeType) mediaMetadata.mime_type = mimeType
   if (fileName) mediaMetadata.file_name = fileName
   if (fileLength !== null && fileLength >= 0) mediaMetadata.file_size = fileLength
+  mediaMetadata.provider_remote_jid = remoteJid
+  if (remoteJidAlt) mediaMetadata.provider_remote_jid_alt = remoteJidAlt
 
   const fromMe = key?.fromMe === true
   const isGroup = isGroupJid(remoteJid)
@@ -528,6 +530,7 @@ async function upsertConversation(
 
   if (existing?.id) {
     const update: JsonRecord = {}
+    if (unreadCount !== undefined) update.unread_count = Math.max(0, Math.floor(unreadCount))
     if (isGroup) {
       update.contact_name = null
       if (authoritativeName && name) update.group_subject = name
@@ -552,6 +555,12 @@ async function upsertConversation(
       const { error } = await admin.from('whatsapp_conversations').update(update)
         .eq('business_id', businessId).eq('id', existing.id)
       if (error) throw new Error('conversation_update_failed')
+    }
+    if (unreadCount !== undefined && unreadCount <= 0) {
+      const { error } = await admin.from('whatsapp_messages').update({ count_as_unread: false })
+        .eq('business_id', businessId).eq('instance_name', instanceName).eq('conversation_id', existing.id)
+        .eq('direction', 'incoming').eq('count_as_unread', true)
+      if (error) throw new Error('conversation_read_state_update_failed')
     }
     if (isGroup) {
       const { error: staleMatchError } = await admin.from('whatsapp_conversation_contexts')

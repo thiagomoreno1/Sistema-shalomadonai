@@ -51,7 +51,7 @@ type EvolutionConfig = {
 }
 
 class RequestError extends Error {
-  constructor(readonly status: number, readonly code: string) { super(code) }
+  constructor(readonly status: number, readonly code: string, readonly upstreamStatus?: number) { super(code) }
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -551,7 +551,7 @@ async function evolutionRequest(config: EvolutionConfig, path: string, init?: Re
   })
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined)
-    throw new RequestError(response.status === 401 || response.status === 403 ? 502 : 503, 'evolution_request_failed')
+    throw new RequestError(response.status === 401 || response.status === 403 ? 502 : 503, 'evolution_request_failed', response.status)
   }
   if (response.status === 204) return null
   const raw = await readBoundedEvolutionResponse(response, maximumResponseBytes)
@@ -686,6 +686,8 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       ? phoneFromWhatsAppJid(jidAlt ?? '') ?? phoneFromWhatsAppJid(jid)
       : phoneFromWhatsAppJid(jid)
     const activity = providerTimestamp(chat.lastMessageRecvTimestamp ?? chat.conversationTimestamp ?? chat.updatedAt)
+    const hasReportedUnreadCount = (typeof chat.unreadCount === 'number' && Number.isInteger(chat.unreadCount))
+      || (typeof chat.unreadMessages === 'number' && Number.isInteger(chat.unreadMessages))
     const unread = typeof chat.unreadCount === 'number' && Number.isInteger(chat.unreadCount) ? Math.max(0, chat.unreadCount)
       : typeof chat.unreadMessages === 'number' && Number.isInteger(chat.unreadMessages) ? Math.max(0, chat.unreadMessages) : 0
     const existing = await findConversationByJidOrAlias(admin, businessId, config.instanceName, jid, jidAlt)
@@ -708,10 +710,16 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       aliasJidAlt = resolvedAltJid
       update.remote_jid_alt = resolvedAltJid
       if (!existing.last_activity_at || activity > String(existing.last_activity_at)) update.last_activity_at = activity
-      if (unread > 0) update.unread_count = unread
+      if (hasReportedUnreadCount) update.unread_count = unread
       if (Object.keys(update).length) {
         const { error } = await admin.from('whatsapp_conversations').update(update)
           .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId)
+        if (error) throw new RequestError(500, 'history_sync_failed')
+      }
+      if (hasReportedUnreadCount && unread === 0) {
+        const { error } = await admin.from('whatsapp_messages').update({ count_as_unread: false })
+          .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('conversation_id', conversationId)
+          .eq('direction', 'incoming').eq('count_as_unread', true)
         if (error) throw new RequestError(500, 'history_sync_failed')
       }
     } else {
@@ -1359,6 +1367,9 @@ function providerMessagePayload(value: unknown): JsonRecord | null {
   if (mimeType) metadata.mime_type = mimeType
   if (fileName) metadata.file_name = fileName
   if (Number.isSafeInteger(fileLength) && fileLength >= 0) metadata.file_size = fileLength
+  metadata.provider_remote_jid = remoteJid
+  const providerRemoteJidAlt = text(key.remoteJidAlt, 256)
+  if (providerRemoteJidAlt) metadata.provider_remote_jid_alt = providerRemoteJidAlt
   const senderName = displayableContactName(record.pushName, null)
   const fromMe = key.fromMe === true
   const participant = text(key.participant ?? key.participantAlt, 256)
@@ -1590,22 +1601,42 @@ async function mediaResponse(admin: any, config: EvolutionConfig, businessId: st
   if (conversationLookupError) throw new RequestError(500, 'media_lookup_failed')
   if (!conversation) throw new RequestError(404, 'media_not_found')
   const metadata = isRecord(message.media_metadata) ? message.media_metadata : {}
-  const key: JsonRecord = {
-    id: message.provider_message_id,
-    remoteJid: conversation.remote_jid,
-    fromMe: message.direction === 'outgoing',
-  }
-  if (conversation.remote_jid_alt) key.remoteJidAlt = conversation.remote_jid_alt
   const participant = text(metadata.participant_jid, 256)
   const participantAlt = text(metadata.participant_alt_jid, 256)
-  if (participant) key.participant = participant
-  if (participantAlt) key.participantAlt = participantAlt
-  const result = await evolutionRequest(config, `/chat/getBase64FromMediaMessage/${encodeURIComponent(config.instanceName)}`, {
-    method: 'POST',
-    body: JSON.stringify({ message: { key }, convertToMp4: false }),
-  }, 36 * 1024 * 1024)
-  const resultRecord = isRecord(result) ? result : {}
-  const payload = isRecord(resultRecord.data) ? resultRecord.data : resultRecord
+  const preferredRemoteJid = text(metadata.provider_remote_jid, 256)
+  const remoteJidCandidates = [...new Set([preferredRemoteJid, conversation.remote_jid, conversation.remote_jid_alt]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0))].slice(0, 2)
+  const alternateJidCandidates = [...new Set([text(metadata.provider_remote_jid_alt, 256), conversation.remote_jid_alt, conversation.remote_jid]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0))]
+  let mediaPayload: JsonRecord | null = null
+  let mediaRequestError: unknown = null
+  for (const remoteJid of remoteJidCandidates) {
+    const key: JsonRecord = { id: message.provider_message_id, remoteJid, fromMe: message.direction === 'outgoing' }
+    const remoteJidAlt = alternateJidCandidates.find((candidate) => candidate !== remoteJid)
+    if (remoteJidAlt) key.remoteJidAlt = remoteJidAlt
+    if (participant) key.participant = participant
+    if (participantAlt) key.participantAlt = participantAlt
+    try {
+      const result = await evolutionRequest(config, `/chat/getBase64FromMediaMessage/${encodeURIComponent(config.instanceName)}`, {
+        method: 'POST',
+        body: JSON.stringify({ message: { key }, convertToMp4: message.message_kind === 'video' }),
+        signal: AbortSignal.timeout(30_000),
+      }, 36 * 1024 * 1024)
+      const resultRecord = isRecord(result) ? result : {}
+      const payload = isRecord(resultRecord.data) ? resultRecord.data : resultRecord
+      if (text(payload.base64, MAX_MEDIA_BYTES * 2)) {
+        mediaPayload = payload
+        break
+      }
+      mediaRequestError = new RequestError(502, 'media_unavailable')
+    } catch (error) {
+      if (!(error instanceof RequestError) || error.code !== 'evolution_request_failed'
+        || ![400, 404, 422].includes(error.upstreamStatus ?? 0)) throw error
+      mediaRequestError = error
+    }
+  }
+  if (!mediaPayload) throw mediaRequestError ?? new RequestError(502, 'media_unavailable')
+  const payload = mediaPayload
   const base64 = text(payload.base64, MAX_MEDIA_BYTES * 2)
   if (!base64) throw new RequestError(502, 'media_unavailable')
   const bytes = base64Bytes(base64)
@@ -1889,17 +1920,28 @@ export default {
           .range(offset, offset + PAGE_SIZE - 1)
         if (error) throw new RequestError(500, 'conversation_list_failed')
         const ids = (rows ?? []).map((row: JsonRecord) => row.id)
-    let lastMessages: JsonRecord[] = []
+        let lastMessages: JsonRecord[] = []
         if (ids.length) {
-          const { data: messages, error: messagesError } = await admin.from('whatsapp_messages')
-            .select('id, provider_message_id, conversation_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
-            .eq('business_id', businessId)
-            .eq('instance_name', config.instanceName)
-            .in('conversation_id', ids)
-            .order('provider_timestamp', { ascending: false })
-            .limit(ids.length * 4)
-          if (messagesError) throw new RequestError(500, 'message_list_failed')
-          lastMessages = messages ?? []
+          for (let index = 0; index < ids.length; index += 8) {
+            const batch = await Promise.all(ids.slice(index, index + 8).map(async (id) => {
+              const { data: message, error: messageError } = await admin.from('whatsapp_messages')
+                .select('id, provider_message_id, conversation_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
+                .eq('business_id', businessId)
+                .eq('instance_name', config.instanceName)
+                .eq('conversation_id', id)
+                .neq('message_kind', 'reaction')
+                .is('deleted_at', null)
+                .order('provider_timestamp', { ascending: false })
+                .order('id', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+              if (messageError) throw new RequestError(500, 'message_list_failed')
+              return message
+            }))
+            for (const message of batch) {
+              if (message !== null) lastMessages.push(message)
+            }
+          }
         }
         const latestByConversation = new Map<string, JsonRecord>()
         for (const message of lastMessages) {
@@ -2149,9 +2191,57 @@ export default {
       }
 
       if (action === 'mark_read') {
-        const { error } = await admin.from('whatsapp_conversations').update({ unread_count: 0 })
+        let incomingRows: JsonRecord[] = []
+        for (let offset = 0; offset < 10_000; offset += 500) {
+          const { data: unreadRows, error: incomingError } = await admin.from('whatsapp_messages')
+            .select('provider_message_id, media_metadata')
+            .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('conversation_id', conversationId)
+            .eq('direction', 'incoming').eq('count_as_unread', true).is('deleted_at', null).not('provider_message_id', 'is', null)
+            .order('provider_timestamp', { ascending: false }).order('id', { ascending: false })
+            .range(offset, offset + 499)
+          if (incomingError) throw new RequestError(500, 'mark_read_failed')
+          incomingRows.push(...(unreadRows ?? []))
+          if ((unreadRows?.length ?? 0) < 500) break
+        }
+        if (incomingRows.length === 0 && Number(conversation.unread_count) > 0) {
+          const { data: recentRows, error: recentError } = await admin.from('whatsapp_messages')
+            .select('provider_message_id, media_metadata')
+            .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('conversation_id', conversationId)
+            .eq('direction', 'incoming').is('deleted_at', null).not('provider_message_id', 'is', null)
+            .order('provider_timestamp', { ascending: false }).order('id', { ascending: false })
+            .limit(MESSAGE_HISTORY_LIMIT)
+          if (recentError) throw new RequestError(500, 'mark_read_failed')
+          incomingRows = recentRows ?? []
+        }
+        const readMessages = incomingRows.flatMap((row: JsonRecord) => {
+          const id = text(row.provider_message_id, 256)
+          if (!id) return []
+          const metadata = isRecord(row.media_metadata) ? row.media_metadata : {}
+          const remoteJid = text(metadata.provider_remote_jid, 256) ?? conversation.remote_jid
+          const key: JsonRecord = { id, fromMe: false, remoteJid }
+          const remoteJidAlt = text(metadata.provider_remote_jid_alt, 256)
+          const participant = text(metadata.participant_jid, 256)
+          const participantAlt = text(metadata.participant_alt_jid, 256)
+          if (remoteJidAlt) key.remoteJidAlt = remoteJidAlt
+          if (participant) key.participant = participant
+          if (participantAlt) key.participantAlt = participantAlt
+          return [key]
+        })
+        if (readMessages.length) {
+          for (let index = 0; index < readMessages.length; index += 100) {
+            await evolutionRequest(config, `/chat/markMessageAsRead/${encodeURIComponent(config.instanceName)}`, {
+              method: 'POST',
+              body: JSON.stringify({ readMessages: readMessages.slice(index, index + 100) }),
+            })
+          }
+        }
+        const { error: messageReadError } = await admin.from('whatsapp_messages').update({ count_as_unread: false })
+          .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('conversation_id', conversationId)
+          .eq('direction', 'incoming').eq('count_as_unread', true)
+        if (messageReadError) throw new RequestError(500, 'mark_read_failed')
+        const { error: conversationReadError } = await admin.from('whatsapp_conversations').update({ unread_count: 0 })
           .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId)
-        if (error) throw new RequestError(500, 'mark_read_failed')
+        if (conversationReadError) throw new RequestError(500, 'mark_read_failed')
       } else if (action === 'set_status') {
         const status = body.status
         if (status !== 'open' && status !== 'resolved') return json({ error: 'invalid_status' }, 400)
