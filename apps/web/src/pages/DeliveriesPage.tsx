@@ -99,7 +99,7 @@ export function DeliveriesPage() {
         supabaseClient.from('deliveries').select('id, order_id, status, delivery_worker_id, scheduled_on, time_window, notes, canceled_at, dispatched_at, delivered_at, attempted_at, returned_at, created_at')
           .eq('business_id', businessId).is('canceled_at', null).order('scheduled_on', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false }).range(0, 999),
         supabaseClient.from('delivery_workers').select('id, name, phone, is_active, user_id')
-          .eq('business_id', businessId).order('is_active', { ascending: false }).order('name', { ascending: true }),
+          .eq('business_id', businessId).eq('member_type', 'delivery_driver').order('is_active', { ascending: false }).order('name', { ascending: true }),
         supabaseClient.from('inventory_balances').select('product_id, quantity_on_hand, inventory_unit').eq('business_id', businessId),
       ])
       if (deliveryResult.error || workerResult.error || balanceResult.error) {

@@ -383,7 +383,7 @@ export function NewOrderPage() {
     setLegacyCompositionReviewConfirmed(false)
     try {
       const deliveryWorkersRequest = role === 'owner'
-        ? supabaseClient.from('delivery_workers').select('id, name, user_id').eq('business_id', businessId).eq('is_active', true).not('user_id', 'is', null).order('name', { ascending: true })
+        ? supabaseClient.from('delivery_workers').select('id, name, user_id').eq('business_id', businessId).eq('member_type', 'delivery_driver').eq('is_active', true).not('user_id', 'is', null).order('name', { ascending: true })
         : Promise.resolve({ data: [] as DeliveryWorkerChoice[], error: null })
       const [customersResult, productsResult, stockProductsResult, customComboOrderSupport, deliveryWorkersResult] = await Promise.all([
         supabaseClient.from('customers').select('id, name, phone, whatsapp_phone, delivery_address')
@@ -1603,11 +1603,11 @@ export function NewOrderPage() {
           </section>
 
           <section className="surface-panel record-form" aria-labelledby="order-installments-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO COMBINADO</p><h2 id="order-installments-heading">Vencimentos informados neste pedido</h2></div>
-              <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: '' }]) }} type="button"><Icon name="plus" /> Adicionar vencimento</button>
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO DO CLIENTE</p><h2 id="order-installments-heading">{installments.length > 1 ? `Pagamento em ${installments.length} parcelas` : 'Pagamento em uma vez'}</h2></div>
+              <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: '' }]) }} type="button"><Icon name="plus" /> Adicionar parcela</button>
             </div>
-            <p className="section-footnote order-payment-hint">Informe os vencimentos deste pedido. Se você selecionar um modelo, ele preencherá valores e datas; você pode conferir e ajustar tudo antes de salvar.</p>
-            <p className="section-footnote">Cada pedido pode ter no máximo 120 vencimentos.</p>
+            <p className="section-footnote order-payment-hint">Uma parcela registra um pagamento em uma vez. Para parcelar a venda, adicione uma parcela para cada vencimento. O sistema acompanha o que o cliente deve, mas não faz cobranças automaticamente.</p>
+            {installments.length > 1 && <p className="section-footnote">A soma das parcelas deve fechar o total do pedido.</p>}
             {scheduleTemplateLoadError && <p className="form-message form-message-warning" role="status">{scheduleTemplateLoadError}</p>}
             {scheduleTemplates.length > 0 && <div className="record-form-grid order-adjustments" aria-label="Aplicar modelo de vencimentos">
               <label className="record-field"><span className="field-label">Modelo salvo</span>
@@ -1629,16 +1629,16 @@ export function NewOrderPage() {
             <div className="order-draft-list">
               {installments.map((installment, index) => (
                 <div className="order-draft-item installment-draft-item" key={installment.key}>
-                  <label className="record-field order-money-field"><span className="field-label">Valor do vencimento {index + 1} <span aria-hidden="true">*</span></span>
+                  <label className="record-field order-money-field"><span className="field-label">Valor {installments.length > 1 ? `da parcela ${index + 1}` : 'do pagamento'} <span aria-hidden="true">*</span></span>
                     <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => updateInstallment(installment.key, { amount: event.target.value })} placeholder="0,00" value={installment.amount} />
                   </label>
-                  <label className="record-field order-date-field"><span className="field-label">Data de vencimento <span aria-hidden="true">*</span></span>
+                  <label className="record-field order-date-field"><span className="field-label">Vencimento <span aria-hidden="true">*</span></span>
                     <input className="text-input" disabled={disabled} onChange={(event) => updateInstallment(installment.key, { dueOn: event.target.value })} type="date" value={installment.dueOn} />
                   </label>
-                  <label className="record-field order-method-field"><span className="field-label">Forma combinada <span className="field-optional">texto opcional</span></span>
+                  <label className="record-field order-method-field"><span className="field-label">Forma de pagamento <span className="field-optional">opcional</span></span>
                     <input className="text-input" disabled={disabled} maxLength={64} onChange={(event) => updateInstallment(installment.key, { paymentMethod: event.target.value })} placeholder="Ex.: Pix, dinheiro, boleto" value={installment.paymentMethod} />
                   </label>
-                  <button aria-label={`Remover vencimento ${index + 1}`} className="text-button order-remove-button" disabled={disabled || installments.length === 1} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => current.filter((row) => row.key !== installment.key)) }} type="button">Remover</button>
+                  <button aria-label={`Remover parcela ${index + 1}`} className="text-button order-remove-button" disabled={disabled || installments.length === 1} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'preserved', preservedFields: current.preservedFields.includes('parcelas') ? current.preservedFields : [...current.preservedFields, 'parcelas'] } : current); setInstallments((current) => current.filter((row) => row.key !== installment.key)) }} type="button">Remover</button>
                 </div>
               ))}
             </div>

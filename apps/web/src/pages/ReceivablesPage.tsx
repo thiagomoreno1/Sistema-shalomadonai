@@ -580,8 +580,8 @@ export function ReceivablesPage() {
       {followUpNotice && <p className="form-message form-message-success" role="status">{followUpNotice} <Link to="/atendimento">Abrir fila de Atendimento</Link></p>}
 
       {!loading && !error && <section className="receivable-summary-grid" aria-label="Resumo dos pagamentos a receber">
-        <article className="surface-panel receivable-summary-card"><span>Pagamentos atrasados</span><strong>{formatBRL(groupTotal(overdue))}</strong><small>{overdue.length} parcelas passaram da data</small></article>
-        <article className="surface-panel receivable-summary-card"><span>Parcelas que vencem hoje</span><strong>{formatBRL(groupTotal(dueToday))}</strong><small>{dueToday.length} parcelas ainda sem pagamento</small></article>
+        <article className="surface-panel receivable-summary-card"><span>Parcelas de clientes atrasadas</span><strong>{formatBRL(groupTotal(overdue))}</strong><small>{overdue.length} parcelas passaram da data</small></article>
+        <article className="surface-panel receivable-summary-card"><span>Parcelas de clientes vencendo hoje</span><strong>{formatBRL(groupTotal(dueToday))}</strong><small>{dueToday.length} parcelas ainda sem pagamento</small></article>
         <article className="surface-panel receivable-summary-card"><span>Próximos vencimentos</span><strong>{formatBRL(groupTotal(upcoming))}</strong><small>{upcoming.length} parcelas ainda sem pagamento</small></article>
       </section>}
 
@@ -590,11 +590,11 @@ export function ReceivablesPage() {
       {loading ? <p className="inline-state" aria-live="polite">Carregando vencimentos…</p> : !error && (
         <div className="page-stack receivable-groups">
           <section className="surface-panel record-panel" aria-labelledby="receivable-overdue-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">PRIORIDADE</p><h2 id="receivable-overdue-heading">Pagamentos atrasados</h2></div><span className="neutral-status">{overdue.length}</span></div>
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">PRIORIDADE</p><h2 id="receivable-overdue-heading">Parcelas de clientes atrasadas</h2></div><span className="neutral-status">{overdue.length}</span></div>
             {renderGroup(overdue, 'Nenhum pagamento atrasado.')}
           </section>
           <section className="surface-panel record-panel" aria-labelledby="receivable-today-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">HOJE</p><h2 id="receivable-today-heading">Parcelas que vencem hoje</h2></div><span className="neutral-status">{dueToday.length}</span></div>
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">HOJE</p><h2 id="receivable-today-heading">Parcelas de clientes vencendo hoje</h2></div><span className="neutral-status">{dueToday.length}</span></div>
             {renderGroup(dueToday, 'Nenhuma parcela vence hoje.')}
           </section>
           <section className="surface-panel record-panel" aria-labelledby="receivable-upcoming-heading">
