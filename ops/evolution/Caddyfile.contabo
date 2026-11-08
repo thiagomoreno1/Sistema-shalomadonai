@@ -1,15 +1,9 @@
-45.13.235.147 {
-	tls {
-		issuer acme {
-			profile shortlived
-		}
-	}
-
+shalomadonai.duckdns.org {
 	@evolution path /evolution /evolution/*
 	handle @evolution {
 		uri strip_prefix /evolution
 		reverse_proxy 127.0.0.1:8081 {
-			header_up Origin https://45.13.235.147
+			header_up Origin https://shalomadonai.duckdns.org
 		}
 	}
 
