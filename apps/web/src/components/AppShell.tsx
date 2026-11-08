@@ -29,7 +29,7 @@ const desktopItems: NavItem[] = [
   { to: '/estoque', label: 'Estoque', icon: 'box' },
   { to: '/entregas', label: 'Entregas', icon: 'truck' },
   { to: '/equipe', label: 'Equipe', icon: 'people' },
-  { to: '/relatorios', label: 'Relatórios', icon: 'chart' },
+  { to: '/relatorios', label: 'Relatórios', icon: 'reports' },
 ]
 
 const routeLabels: Record<string, string> = {

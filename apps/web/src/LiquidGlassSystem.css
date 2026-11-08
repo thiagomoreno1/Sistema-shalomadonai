@@ -79,6 +79,59 @@ body { background: var(--canvas); }
   box-shadow: var(--shadow);
 }
 
+/* Give desktop cards a shared, restrained hover response. Only links lift. */
+@media (hover: hover) and (pointer: fine) {
+  :is(
+    .attention-panel,
+    .surface-panel,
+    .module-empty-panel,
+    .record-panel,
+    .record-form,
+    .setup-card,
+    .recovery-card,
+    .dashboard-priority-block,
+    .indicator-card,
+    .quick-link,
+    .module-link,
+    .dashboard-summary-link,
+    .report-summary-card,
+    .dashboard-trend-panel,
+    .dashboard-composition-panel,
+    .bank-reconciliation-summary-card,
+    .belvo-sandbox-card
+  ) {
+    transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+  }
+
+  :is(
+    .attention-panel,
+    .surface-panel,
+    .module-empty-panel,
+    .record-panel,
+    .record-form,
+    .setup-card,
+    .recovery-card,
+    .dashboard-priority-block,
+    .indicator-card,
+    .quick-link,
+    .module-link,
+    .dashboard-summary-link,
+    .report-summary-card,
+    .dashboard-trend-panel,
+    .dashboard-composition-panel,
+    .bank-reconciliation-summary-card,
+    .belvo-sandbox-card
+  ):hover {
+    border-color: var(--line-strong);
+    box-shadow: 0 6px 18px rgba(22, 35, 54, 0.075);
+  }
+
+  :is(.quick-link, .module-link, .dashboard-summary-link):hover {
+    transform: translateY(-2px);
+    border-color: var(--accent);
+  }
+}
+
 .text-input,
 select:not([multiple]),
 textarea {
@@ -165,9 +218,37 @@ textarea:focus-visible {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
+
+  :is(.attention-panel, .surface-panel, .module-empty-panel, .record-panel, .record-form, .setup-card, .recovery-card, .dashboard-priority-block, .indicator-card, .quick-link, .module-link, .dashboard-summary-link, .report-summary-card, .dashboard-trend-panel, .dashboard-composition-panel, .bank-reconciliation-summary-card, .belvo-sandbox-card):hover {
+    box-shadow: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .attention-panel,
+  .surface-panel,
+  .module-empty-panel,
+  .record-panel,
+  .record-form,
+  .setup-card,
+  .recovery-card,
+  .dashboard-priority-block,
+  .indicator-card,
+  .quick-link,
+  .module-link,
+  .dashboard-summary-link,
+  .report-summary-card,
+  .dashboard-trend-panel,
+  .dashboard-composition-panel,
+  .bank-reconciliation-summary-card,
+  .belvo-sandbox-card,
+  .accent-option { transition: none; }
+
+  .quick-link:hover,
+  .module-link:hover,
+  .dashboard-summary-link:hover,
+  .accent-option:hover { transform: none; }
+
   .desktop-sidebar .nav-link,
   .topbar,
   .mobile-bottom-nav,

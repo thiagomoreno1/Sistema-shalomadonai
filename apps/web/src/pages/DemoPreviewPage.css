@@ -105,12 +105,12 @@
 .demo-driver { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
 .demo-driver strong { min-width: 0; flex: 1; color: var(--ink); font-size: 10px; }
 .demo-driver-avatar { width: 29px; height: 29px; flex: 0 0 auto; }
-.demo-connection-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
-.demo-connection-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 55px; border-top: 1px solid var(--line); }
-.demo-connection-list li:first-child { border-top: 0; }
-.demo-connection-list strong, .demo-connection-list small { display: block; }
-.demo-connection-list strong { color: var(--ink); font-size: 11px; }
-.demo-connection-list small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.demo-setting-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.demo-setting-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 55px; border-top: 1px solid var(--line); }
+.demo-setting-list li:first-child { border-top: 0; }
+.demo-setting-list strong, .demo-setting-list small { display: block; }
+.demo-setting-list strong { color: var(--ink); font-size: 11px; }
+.demo-setting-list small { margin-top: 3px; color: var(--muted); font-size: 9px; }
 
 @media (max-width: 1100px) {
   .demo-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
