@@ -4,7 +4,7 @@ O Shalom conversa diretamente com a Evolution API. A caixa própria do Shalom re
 
 ## Contabo
 
-Use `compose.contabo.yaml` only as an overlay to the pinned `compose.yaml`. The public origin is `https://shalomadonai.duckdns.org`; set `SERVER_URL=https://shalomadonai.duckdns.org/evolution` in the root-owned VPS `.env` file. The DuckDNS A record must point to the Contabo IPv4 address `45.13.235.147` before Caddy is reloaded. Do not publish an AAAA record unless the VPS has a reachable IPv6 address. Caddy obtains and renews the hostname certificate automatically over ports 80/443; do not use the IP-only `shortlived` ACME profile for this hostname.
+Use `compose.contabo.yaml` only as an overlay to the pinned `compose.yaml`. The public origin is `https://shalomadonai.duckdns.org`; create the root-owned VPS `.env` from `.env.contabo.example` and set the unique `SERVER_URL`, `EVOLUTION_API_KEY`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD` values. The DuckDNS A record must point to the Contabo IPv4 address `45.13.235.147` before Caddy is reloaded. Do not publish an AAAA record unless the VPS has a reachable IPv6 address. Caddy obtains and renews the hostname certificate automatically over ports 80/443; do not use the IP-only `shortlived` ACME profile for this hostname.
 
 The Caddy proxy supplies the Shalom origin for Supabase Edge Function requests, which arrive without an `Origin` header; the API allows only the Shalom origin and keeps credentialed CORS disabled. The Evolution Manager and API docs are disabled because Shalom uses its own UI. Keep `EVOLUTION_API_KEY`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD` in a root-owned `.env` file with mode `0600`; never commit it.
 
