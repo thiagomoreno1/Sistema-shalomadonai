@@ -4,7 +4,7 @@ O Shalom conversa diretamente com a Evolution API. A caixa própria do Shalom re
 
 ## Contabo
 
-Use `compose.contabo.yaml` only as an overlay to the pinned `compose.yaml`. On the VPS, set `SERVER_URL` to `https://<VPS-IP>/evolution` and `CORS_ORIGIN` to the exact public origin of the Shalom app. Keep `EVOLUTION_API_KEY`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD` in a root-owned `.env` file with mode `0600`; never commit it.
+Use `compose.contabo.yaml` only as an overlay to the pinned `compose.yaml`. On the VPS, set `SERVER_URL` to `https://<VPS-IP>/evolution`. The overlay allows requests without an `Origin` header because Supabase Edge Functions call Evolution server-to-server; `CORS_CREDENTIALS` remains disabled, and the API key must stay in Supabase Vault rather than browser code. Keep `EVOLUTION_API_KEY`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD` in a root-owned `.env` file with mode `0600`; never commit it.
 
 The production API binds only to `127.0.0.1:8081`. The Caddy site in `Caddyfile.contabo` routes `/evolution/*` to that loopback listener and keeps the database and Redis private. Apply the overlay with:
 
