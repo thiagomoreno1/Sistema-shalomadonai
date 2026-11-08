@@ -621,6 +621,10 @@ export function FinancialOutflowsPage() {
         }
         return
       }
+      const paidReceiptIds = outflowType === 'purchase' ? new Set(selectedReceiptIds) : new Set<string>()
+      if (paidReceiptIds.size > 0) {
+        setReceiptOptions((current) => current.filter((receipt) => !paidReceiptIds.has(receipt.id)))
+      }
       setNotice('Gasto pago registrado. O sistema não processou o pagamento nem consultou o banco.')
       setShowForm(false)
       resetForm()
