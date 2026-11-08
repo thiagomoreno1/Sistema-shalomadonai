@@ -1,9 +1,9 @@
-shalomadonai.duckdns.org {
+shalomadonaioperacao.com, www.shalomadonaioperacao.com {
 	@evolution path /evolution /evolution/*
 	handle @evolution {
 		uri strip_prefix /evolution
 		reverse_proxy 127.0.0.1:8081 {
-			header_up Origin https://shalomadonai.duckdns.org
+			header_up Origin https://shalomadonaioperacao.com
 		}
 	}
 
