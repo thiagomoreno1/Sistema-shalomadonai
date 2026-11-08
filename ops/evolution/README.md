@@ -4,15 +4,29 @@ O Shalom conversa diretamente com a Evolution API. A caixa própria do Shalom re
 
 ## Contabo
 
-Use `compose.contabo.yaml` only as an overlay to the pinned `compose.yaml`. On the VPS, set `SERVER_URL` to `https://<VPS-IP>/evolution`. The overlay allows requests without an `Origin` header because Supabase Edge Functions call Evolution server-to-server; `CORS_CREDENTIALS` remains disabled, and the API key must stay in Supabase Vault rather than browser code. Keep `EVOLUTION_API_KEY`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD` in a root-owned `.env` file with mode `0600`; never commit it.
+Use `compose.contabo.yaml` only as an overlay to the pinned `compose.yaml`. On the VPS, set `SERVER_URL` to `https://<VPS-IP>/evolution`. The Caddy proxy supplies the Shalom origin for Supabase Edge Function requests, which arrive without an `Origin` header; the API allows only the Shalom origin and keeps credentialed CORS disabled. The Evolution Manager and API docs are disabled because Shalom uses its own UI. Keep `EVOLUTION_API_KEY`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD` in a root-owned `.env` file with mode `0600`; never commit it.
 
-The production API binds only to `127.0.0.1:8081`. The Caddy site in `Caddyfile.contabo` routes `/evolution/*` to that loopback listener and keeps the database and Redis private. Apply the overlay with:
+The production API binds only to `127.0.0.1:8081`. The Caddy site in `Caddyfile.contabo` routes `/evolution/*` to that loopback listener and keeps the database and Redis private. The Contabo VPS must have Caddy installed and enabled, persistent Caddy certificate storage, the current Shalom release at `/var/www/shalom-releases/current`, and firewall access for ports 22, 80, and 443. Validate the Caddyfile with `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` before reloading. The running deployment stores Caddy's config and certificate state on the VPS; monitor `systemctl status caddy` and `journalctl -u caddy` for renewal errors.
+
+Create the named session volume before first startup. Preserve it and the project-scoped PostgreSQL/Redis volumes; **do not run `docker compose down -v`** on the production project.
 
 ```sh
+docker volume create shalom-evolution-prod_evolution_instances
 docker compose -p shalom-evolution-prod --env-file .env -f compose.yaml -f compose.contabo.yaml up -d
 ```
 
-For a data migration, stop the source Evolution API before creating the final PostgreSQL dump and archiving `/evolution/instances`. Transfer both files over SSH, restore into the target PostgreSQL container, and copy the instance directory into the target volume before starting its API. Keep dumps and session archives out of Git and delete temporary copies after confirming the cutover.
+For a data migration, stop the source Evolution API before creating the final PostgreSQL dump and archiving the container path `/evolution/instances`. Transfer both files over SSH into `/root/transfer`, then restore in this order:
+
+```sh
+docker volume create shalom-evolution-prod_evolution_instances
+docker compose -p shalom-evolution-prod --env-file .env -f compose.yaml -f compose.contabo.yaml up -d postgres redis
+docker cp /root/transfer/evolution.dump shalom-evolution-prod-postgres-1:/tmp/evolution.dump
+docker exec shalom-evolution-prod-postgres-1 sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore --no-owner --no-privileges --exit-on-error --single-transaction -U evolution -h 127.0.0.1 -d evolution /tmp/evolution.dump'
+docker run --rm -v shalom-evolution-prod_evolution_instances:/instances -v /root/transfer:/transfer:ro postgres:15-alpine sh -c 'mkdir -p /tmp/unpack && tar -xzf /transfer/instances.tar.gz -C /tmp/unpack && cp -a /tmp/unpack/instances/. /instances/ && chown -R root:root /instances'
+docker compose -p shalom-evolution-prod --env-file .env -f compose.yaml -f compose.contabo.yaml up -d evolution-api
+```
+
+Keep dumps and session archives out of Git and remove temporary copies after confirming the cutover. For rollback, stop the Contabo Evolution API first and restart the source only after disabling the Contabo instance, so two servers never use the same WhatsApp session at once. The source database and volume are the rollback copy; keep them until the new instance has been confirmed.
 
 ## Subir a Evolution
 

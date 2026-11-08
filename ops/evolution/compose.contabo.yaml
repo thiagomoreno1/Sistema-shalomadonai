@@ -2,7 +2,9 @@ services:
   evolution-api:
     environment:
       SERVER_URL: ${SERVER_URL:?Set SERVER_URL to the public HTTPS Evolution URL}
-      CORS_ORIGIN: "*"
+      SERVER_DISABLE_DOCS: "true"
+      SERVER_DISABLE_MANAGER: "true"
+      CORS_ORIGIN: https://45.13.235.147
       CORS_METHODS: GET,POST,PUT,DELETE
       CORS_CREDENTIALS: "false"
 
