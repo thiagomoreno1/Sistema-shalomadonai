@@ -317,10 +317,35 @@ export function FinancialOutflowsPage() {
         .range(from, from + RECEIPT_OPTION_LIMIT - 1)
       if (error) throw error
       const fetchedRows = (data ?? []) as InventoryReceipt[]
-      const rows = [...fetchedRows]
+      const candidateRows = [...fetchedRows]
       const prefilledReceipt = prefilledReceiptRef.current
-      if (prefilledReceipt && !rows.some((row) => row.id === prefilledReceipt.id)) rows.unshift(prefilledReceipt)
+      if (prefilledReceipt && !candidateRows.some((row) => row.id === prefilledReceipt.id)) candidateRows.unshift(prefilledReceipt)
+      const candidateIds = candidateRows.map((row) => row.id)
+      let activeLinkedReceiptIds = new Set<string>()
+      if (candidateIds.length > 0) {
+        const { data: linkRows, error: linkError } = await supabaseClient.from('financial_outflow_inventory_receipts')
+          .select('outflow_id, inventory_receipt_id')
+          .eq('business_id', businessId)
+          .in('inventory_receipt_id', candidateIds)
+        if (linkError) throw linkError
+        const links = (linkRows ?? []) as OutflowReceiptLink[]
+        const outflowIds = Array.from(new Set(links.map((link) => link.outflow_id)))
+        let voidedOutflowIds = new Set<string>()
+        if (outflowIds.length > 0) {
+          const { data: voidRows, error: voidError } = await supabaseClient.from('financial_outflow_voids')
+            .select('outflow_id')
+            .eq('business_id', businessId)
+            .in('outflow_id', outflowIds)
+          if (voidError) throw voidError
+          voidedOutflowIds = new Set((voidRows ?? []).map((row) => (row as { outflow_id: string }).outflow_id))
+        }
+        activeLinkedReceiptIds = new Set(links
+          .filter((link) => !voidedOutflowIds.has(link.outflow_id))
+          .map((link) => link.inventory_receipt_id))
+      }
+      const rows = candidateRows.filter((row) => !activeLinkedReceiptIds.has(row.id))
       receiptOffsetRef.current = from + fetchedRows.length
+      setSelectedReceiptIds((current) => current.filter((id) => !activeLinkedReceiptIds.has(id)))
       setReceiptOptions((current) => {
         const combined = append ? [...current, ...rows] : rows
         return Array.from(new Map<string, InventoryReceipt>(combined.map((row): [string, InventoryReceipt] => [row.id, row])).values())
@@ -419,6 +444,32 @@ export function FinancialOutflowsPage() {
           return
         }
         const receipt = data as InventoryReceipt
+        const { data: linkRows, error: linkError } = await supabaseClient.from('financial_outflow_inventory_receipts')
+          .select('outflow_id')
+          .eq('business_id', businessId)
+          .eq('inventory_receipt_id', receipt.id)
+        if (!active) return
+        if (linkError) {
+          setPrefillError('Não foi possível verificar se esta compra já foi paga. Nenhum novo lançamento foi preparado.')
+          return
+        }
+        const linkedOutflowIds = (linkRows ?? []).map((row) => (row as { outflow_id: string }).outflow_id)
+        if (linkedOutflowIds.length > 0) {
+          const { data: voidRows, error: voidError } = await supabaseClient.from('financial_outflow_voids')
+            .select('outflow_id')
+            .eq('business_id', businessId)
+            .in('outflow_id', linkedOutflowIds)
+          if (!active) return
+          if (voidError) {
+            setPrefillError('Não foi possível confirmar o status financeiro deste recebimento. Nenhum novo lançamento foi preparado.')
+            return
+          }
+          const voidedOutflowIds = new Set((voidRows ?? []).map((row) => (row as { outflow_id: string }).outflow_id))
+          if (linkedOutflowIds.some((id) => !voidedOutflowIds.has(id))) {
+            setPrefillError('Este recebimento já está vinculado a uma compra paga. Não é necessário registrar outra saída.')
+            return
+          }
+        }
         const { data: lineData, error: lineError } = await supabaseClient.from('inventory_receipt_lines')
           .select('quantity, unit_cost_cents')
           .eq('business_id', businessId)
@@ -569,6 +620,10 @@ export function FinancialOutflowsPage() {
           setFormError('Não foi possível confirmar se o lançamento foi registrado. Tente novamente sem alterar os dados para evitar duplicidade.')
         }
         return
+      }
+      const paidReceiptIds = outflowType === 'purchase' ? new Set(selectedReceiptIds) : new Set<string>()
+      if (paidReceiptIds.size > 0) {
+        setReceiptOptions((current) => current.filter((receipt) => !paidReceiptIds.has(receipt.id)))
       }
       setNotice('Gasto pago registrado. O sistema não processou o pagamento nem consultou o banco.')
       setShowForm(false)
@@ -760,7 +815,7 @@ export function FinancialOutflowsPage() {
               <p className="section-footnote">Este gasto ficará ligado ao recebimento para consulta. O saldo de estoque já foi atualizado quando a mercadoria foi recebida.</p>
               {receiptLoading && <p className="inline-state">Carregando recebimentos físicos…</p>}
               {receiptError && <div className="form-message form-message-warning" role="status"><p>{receiptError}</p><button className="text-button" disabled={saving || uncertain} onClick={() => void loadReceiptOptions()} type="button">Tentar carregar novamente</button></div>}
-              {!receiptLoading && !receiptError && receiptOptions.length === 0 && <p className="inline-state">Nenhum recebimento físico disponível para vincular. A compra ainda pode ser registrada sem vínculo.</p>}
+              {!receiptLoading && !receiptError && receiptOptions.length === 0 && <p className="inline-state">Nenhum recebimento disponível neste lote. Compras já pagas ficam ocultas.</p>}
               {!receiptLoading && !receiptError && receiptOptions.length > 0 && (
                 <div className="inventory-receipt-choice-list">
                   {receiptOptions.map((receipt) => {
@@ -771,10 +826,10 @@ export function FinancialOutflowsPage() {
                       <span>{supplier}{reference ? ` · Ref. ${reference}` : ''} · {formatBusinessDate(receipt.received_on)}</span>
                     </label>
                   })}
-                  <p className="field-optional">Mostrando {receiptOptions.length} de {receiptOptionsTotal} recebimentos físicos recentes.</p>
-                  {receiptOptions.length < receiptOptionsTotal && <button className="text-button" disabled={saving || uncertain || receiptLoadingMore} onClick={() => void loadReceiptOptions(true)} type="button">{receiptLoadingMore ? 'Carregando…' : 'Carregar recebimentos anteriores'}</button>}
+                  <p className="field-optional">{receiptOptions.length} recebimentos disponíveis entre {Math.min(receiptOffsetRef.current, receiptOptionsTotal)} analisados; compras já pagas ficam ocultas.</p>
                 </div>
               )}
+              {!receiptLoading && !receiptError && receiptOffsetRef.current < receiptOptionsTotal && <button className="text-button" disabled={saving || uncertain || receiptLoadingMore} onClick={() => void loadReceiptOptions(true)} type="button">{receiptLoadingMore ? 'Carregando…' : 'Carregar recebimentos anteriores'}</button>}
             </div>}
 
             {outflowType === 'delivery_cost' && <div className="record-field record-field-wide">

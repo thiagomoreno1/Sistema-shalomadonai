@@ -1824,8 +1824,11 @@ export default {
           if (!instanceExists) return json({ configured: true, connected: false, instance_exists: false, connection_state: 'not_created' })
           const result = await evolutionRequest(config, `/instance/connectionState/${encodeURIComponent(config.instanceName)}`)
           const stateRecord = isRecord(result) && isRecord(result.instance) ? result.instance : isRecord(result) ? result : {}
-          const state = text(stateRecord.state ?? stateRecord.connectionStatus, 64) ?? 'unknown'
-          return json({ configured: true, connected: state.toLowerCase() === 'open', instance_exists: true, connection_state: state })
+          const providerState = text(stateRecord.state ?? stateRecord.connectionStatus ?? stateRecord.connection_state ?? stateRecord.status, 64)?.trim() ?? ''
+          const normalizedState = providerState.toLowerCase()
+          const connected = normalizedState === 'open' || normalizedState === 'connected' || (!normalizedState && stateRecord.connected === true)
+          const state = connected && !normalizedState ? 'open' : providerState || 'unknown'
+          return json({ configured: true, connected, instance_exists: true, connection_state: state })
         } catch {
           return json({ configured: true, connected: false, connection_state: 'unavailable' })
         }

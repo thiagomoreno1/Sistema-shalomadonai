@@ -566,6 +566,8 @@
 .order-delivery-toggle small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .inventory-summary { margin-bottom: 2px; }
 .inventory-form-hint { margin: -2px 0 14px; }
+.inventory-purchase-total { margin-top: 5px; padding-top: 10px; border-top: 1px solid var(--line); }
+.inventory-purchase-total > .section-footnote { margin: 4px 0 0 27px; }
 .inventory-line-list { display: flex; flex-direction: column; gap: 9px; }
 .inventory-line-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(125px, 0.3fr) minmax(145px, 0.35fr) auto; align-items: end; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
 .inventory-line-row .text-input { margin-bottom: 0; }
