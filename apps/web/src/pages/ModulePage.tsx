@@ -39,8 +39,8 @@ const secondaryModules: Array<{ to: string; title: string; description: string; 
   { to: '/equipe', title: 'Equipe', description: 'Entregadores e acesso ao painel', icon: 'people' },
   { to: '/whatsapp', title: 'WhatsApp', description: 'Caixa de entrada e conversas', icon: 'message' },
   { to: '/financeiro', title: 'Dashboard', description: 'Pagamentos a receber e gastos pagos', icon: 'coin' },
-  { to: '/relatorios', title: 'Relatórios', description: 'Visões diárias e mensais', icon: 'chart' },
-  { to: '/configuracoes', title: 'Configurações', description: 'Conta e conexões', icon: 'settings' },
+  { to: '/relatorios', title: 'Relatórios', description: 'Visões diárias e mensais', icon: 'reports' },
+  { to: '/configuracoes', title: 'Configurações', description: 'Perfil, acesso e aparência', icon: 'settings' },
 ]
 
 export function MorePage() {

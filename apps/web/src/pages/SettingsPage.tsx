@@ -232,7 +232,7 @@ export function SettingsPage() {
         <div>
           <p className="eyebrow">SISTEMA</p>
           <h1>Configurações</h1>
-          <p className="page-description">Seu perfil, senha, aparência, equipe e conexões.</p>
+          <p className="page-description">Perfil, acesso, equipe e aparência do sistema.</p>
         </div>
         <span className="module-heading-icon"><Icon name="settings" /></span>
       </header>
@@ -398,47 +398,6 @@ export function SettingsPage() {
           <li><span><strong>Mensagens pelo WhatsApp</strong><small>Aguardando a conexão do canal.</small></span><span className="neutral-status">Pendente</span></li>
           <li><span><strong>Avisos e lembretes</strong><small>Regras serão definidas antes de ativar.</small></span><span className="neutral-status">Não configurado</span></li>
         </ul>
-      </section>
-
-      <section className="surface-panel settings-panel settings-integration-panel" aria-labelledby="connections-title">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">INTEGRAÇÕES</p>
-            <h2 id="connections-title">Conexões externas</h2>
-          </div>
-          <span className="neutral-status">Nenhuma conexão ativa</span>
-        </div>
-        <div className="settings-integration-grid">
-          <article className="settings-integration-card" aria-labelledby="whatsapp-title">
-            <div className="settings-integration-heading">
-              <h3 id="whatsapp-title">Caixa de entrada WhatsApp</h3>
-              <span className="neutral-status">Não conectada</span>
-            </div>
-            <p className="settings-integration-copy">O Shalom usa a Evolution API diretamente para receber mensagens, anexos e registros de chamadas.</p>
-            <dl className="settings-detail-list settings-integration-details">
-              <div><dt>Integração</dt><dd>Evolution API · conexão em preparação</dd></div>
-              <div><dt>Servidor</dt><dd>Local · acesso protegido</dd></div>
-              <div><dt>Número WhatsApp Business</dt><dd>Não informado</dd></div>
-              <div><dt>Credenciais</dt><dd>Ainda não configuradas nos secrets do servidor</dd></div>
-            </dl>
-            <p className="settings-integration-note">A conexão só será considerada ativa após validar o webhook e trocar mensagens com um número de teste.</p>
-          </article>
-
-          <article className="settings-integration-card" aria-labelledby="fiscal-title">
-            <div className="settings-integration-heading">
-              <h3 id="fiscal-title">Configuração fiscal</h3>
-              <span className="neutral-status">Pendente</span>
-            </div>
-            <p className="settings-integration-copy">Os demais dados fiscais serão definidos com orientação contábil.</p>
-            <dl className="settings-detail-list settings-integration-details">
-              <div><dt>Local da empresa</dt><dd>Niterói/RJ</dd></div>
-              <div><dt>Regime tributário</dt><dd>Pendente de orientação contábil</dd></div>
-              <div><dt>Tipos de documento</dt><dd>Pendente de orientação contábil</dd></div>
-              <div><dt>Provedor fiscal</dt><dd>Pendente de orientação contábil</dd></div>
-            </dl>
-          </article>
-        </div>
-        <p className="section-footnote">Conexões aparecem como ativas após configuração e teste.</p>
       </section>
 
       <section className="surface-panel settings-panel" aria-labelledby="records-title">

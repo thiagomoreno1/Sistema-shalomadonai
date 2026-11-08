@@ -155,7 +155,7 @@
 .section-footnote { margin: 9px 1px 0; color: var(--quiet); font-size: 11px; line-height: 1.45; }
 .dashboard-columns { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr); gap: 14px; }
 .surface-panel { padding: 20px 21px; }
-.status-list, .settings-connection-list { margin: 0; padding: 0; list-style: none; }
+.status-list { margin: 0; padding: 0; list-style: none; }
 .status-list li { display: grid; grid-template-columns: 9px minmax(75px, 1fr) auto; align-items: center; gap: 10px; min-height: 39px; border-top: 1px solid var(--line); }
 .status-indicator { width: 8px; height: 8px; border-radius: 50%; background: var(--gold); }
 .status-name { color: var(--ink); font-size: 12px; font-weight: 580; }
@@ -227,21 +227,7 @@
 .settings-team-feedback .form-message { flex: 1 1 240px; margin: 0; }
 .settings-team-feedback .button { min-height: 44px; }
 .settings-team-success:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 4px; }
-.settings-connection-list { margin-top: 12px; }
-.settings-connection-list li { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 61px; border-top: 1px solid var(--line); }
-.settings-connection-list strong, .settings-connection-list small { display: block; }
-.settings-connection-list strong { color: var(--ink); font-size: 12px; }
-.settings-connection-list small { margin-top: 2px; color: var(--muted); font-size: 11px; }
-.settings-integration-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; margin-top: 18px; }
-.settings-integration-card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
-.settings-integration-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; }
-.settings-integration-heading h3 { margin: 2px 0 0; color: var(--ink); font-size: 13px; font-weight: 620; line-height: 1.35; }
-.settings-integration-heading .neutral-status { flex: 0 0 auto; }
-.settings-integration-copy { min-height: 34px; margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
-.settings-integration-details { margin-top: 10px; }
-.settings-integration-details > div { grid-template-columns: minmax(90px, 0.85fr) minmax(0, 1fr); gap: 8px; padding: 9px 2px; }
-.settings-integration-details dt, .settings-integration-details dd { font-size: 12px; line-height: 1.45; }
-.settings-integration-note, .settings-records-note { margin: 12px 1px 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.settings-records-note { margin: 12px 1px 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .settings-records-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
 .settings-records-shortcuts a { display: inline-flex; min-height: 44px; align-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; }
 .settings-records-shortcuts a:hover { background: var(--accent-soft); }
@@ -807,7 +793,6 @@
   .app-column { margin-left: 220px; }
   .indicator-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboard-priority-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .settings-integration-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
@@ -843,8 +828,6 @@
   .dashboard-columns { grid-template-columns: 1fr; gap: 11px; }
   .quick-links { grid-template-columns: 1fr; gap: 8px; }
   .quick-link { min-height: 65px; }
-  .settings-integration-grid { grid-template-columns: 1fr; }
-  .settings-integration-copy { min-height: 0; }
   .belvo-sandbox-card { padding: 15px; }
   .belvo-sandbox-header { flex-direction: column; }
   .belvo-sandbox-header .neutral-status { align-self: flex-start; }
@@ -935,9 +918,6 @@
   .follow-up-date small { grid-column: auto; }
   .follow-up-actions { gap: 10px; }
   .follow-up-actions .text-button { font-size: 11px; }
-  .settings-connection-list li { grid-template-columns: 9px minmax(0, 1fr) auto; gap: 9px; }
-  .settings-connection-list small { font-size: 10px; }
-  .settings-connection-list .neutral-status { min-height: 25px; padding: 0 8px; font-size: 10px; }
   .mobile-bottom-nav { position: fixed; z-index: 15; inset: auto 0 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); min-height: 68px; padding: 7px 5px max(7px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 97%, transparent); backdrop-filter: blur(10px); }
   .nav-link-compact { flex-direction: column; justify-content: center; gap: 3px; min-width: 0; min-height: 48px; padding: 4px 2px; border-radius: 7px; color: var(--muted); font-size: 9px; line-height: 1.2; text-align: center; white-space: nowrap; }
   .nav-link-compact svg { width: 19px; height: 19px; }
