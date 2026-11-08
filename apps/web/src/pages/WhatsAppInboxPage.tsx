@@ -250,8 +250,31 @@ function orderLabel(order: Order) {
 async function invokeInbox<T>(body: Record<string, unknown>) {
   if (!supabaseClient) throw new Error('A conexão segura com o Supabase não está disponível.')
   const { data, error } = await supabaseClient.functions.invoke('evolution-inbox', { body })
-  if (error) throw error
+  if (error) {
+    const response = (error as Error & { context?: unknown }).context
+    if (response instanceof Response) {
+      try {
+        const payload = await response.clone().json() as { error?: unknown }
+        const code = typeof payload.error === 'string' ? payload.error : 'request_failed'
+        throw new InboxRequestError(code, response.status)
+      } catch (parseError) {
+        if (parseError instanceof InboxRequestError) throw parseError
+      }
+    }
+    throw new InboxRequestError('request_failed')
+  }
   return data as T
+}
+
+class InboxRequestError extends Error {
+  readonly code: string
+  readonly status?: number
+
+  constructor(code: string, status?: number) {
+    super(code)
+    this.code = code
+    this.status = status
+  }
 }
 
 const contactAvatarCache = new Map<string, { url: string; at: number }>()
@@ -562,6 +585,8 @@ export function WhatsAppInboxPage() {
   const [connectionChecking, setConnectionChecking] = useState(true)
   const [configured, setConfigured] = useState(false)
   const [connectionState, setConnectionState] = useState('')
+  const [connectionSelected, setConnectionSelected] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<'pending' | 'active' | null>(null)
   const [instanceExists, setInstanceExists] = useState(false)
   const [pairingLoading, setPairingLoading] = useState(false)
   const [pairingPhone, setPairingPhone] = useState('')
@@ -793,10 +818,12 @@ export function WhatsAppInboxPage() {
       setConnectionChecking(true)
       setConnectionError(null)
       try {
-        const result = await invokeInbox<{ configured?: boolean; connected?: boolean; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
+        const result = await invokeInbox<{ configured?: boolean; connected?: boolean; connection_selected?: boolean; connection_status?: 'pending' | 'active' | null; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
         if (active && requestId === connectionStatusRequest.current) {
           setConfigured(result.configured === true)
           setConnectionState(connectionStateFromStatus(result))
+          setConnectionSelected(result.connection_selected === true)
+          setConnectionStatus(result.connection_status ?? null)
           setInstanceExists(result.instance_exists === true)
         }
       } catch {
@@ -821,11 +848,13 @@ export function WhatsAppInboxPage() {
       requestInFlight = true
       const requestId = ++connectionStatusRequest.current
       try {
-        const result = await invokeInbox<{ configured?: boolean; connected?: boolean; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
+        const result = await invokeInbox<{ configured?: boolean; connected?: boolean; connection_selected?: boolean; connection_status?: 'pending' | 'active' | null; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
         if (!active || requestId !== connectionStatusRequest.current) return
         const nextState = connectionStateFromStatus(result)
         const becameConnected = isWhatsAppConnected(nextState) && !isWhatsAppConnected(connectionState)
         setConnectionState(nextState)
+        setConnectionSelected(result.connection_selected === true)
+        setConnectionStatus(result.connection_status ?? null)
         setInstanceExists(result.instance_exists === true)
         if (isWhatsAppConnected(nextState)) {
           setQrImage(null)
@@ -1286,10 +1315,12 @@ export function WhatsAppInboxPage() {
     setConnectionChecking(true)
     setConnectionError(null)
     try {
-      const result = await invokeInbox<{ configured?: boolean; connected?: boolean; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
+      const result = await invokeInbox<{ configured?: boolean; connected?: boolean; connection_selected?: boolean; connection_status?: 'pending' | 'active' | null; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
       if (requestId === connectionStatusRequest.current) {
         setConfigured(result.configured === true)
         setConnectionState(connectionStateFromStatus(result))
+        setConnectionSelected(result.connection_selected === true)
+        setConnectionStatus(result.connection_status ?? null)
         setInstanceExists(result.instance_exists === true)
       }
     } catch {
@@ -1310,12 +1341,16 @@ export function WhatsAppInboxPage() {
     setQrImage(null)
     setPairingCode(null)
     try {
-      const result = await invokeInbox<{ qr_image?: string; pairing_code?: string; connection_state?: string; instance_exists?: boolean; connected?: boolean; error?: string }>({
+      const result = await invokeInbox<{ qr_image?: string; pairing_code?: string; connection_state?: string; connection_selected?: boolean; connection_status?: 'pending' | 'active' | null; instance_exists?: boolean; connected?: boolean; error?: string }>({
         action: 'connect', business_id: businessId,
         pairing_method: method,
         ...(method === 'phone' ? { phone_number: pairingPhone } : {}),
       })
       setConnectionState(connectionStateFromStatus(result))
+      setConnectionSelected(result.connection_selected ?? true)
+      if ('connection_status' in result) setConnectionStatus(result.connection_status ?? null)
+      else if (result.connected) setConnectionStatus('active')
+      else if (result.instance_exists) setConnectionStatus('pending')
       if (result.instance_exists) setInstanceExists(true)
       if (result.connected) {
         setQrImage(null)
@@ -1327,6 +1362,21 @@ export function WhatsAppInboxPage() {
       }
       if (result.error === 'webhook_setup_failed') {
         setPairingError('A instância foi criada, mas o webhook não ficou pronto. Tente novamente; o telefone ainda não foi pareado.')
+        return
+      }
+      if (result.error === 'connection_must_be_archived_first') {
+        setConnectionSelected(true)
+        setConnectionStatus('active')
+        setPairingError('Para conectar um número diferente, arquive primeiro a caixa atual. O histórico dela continuará salvo e separado.')
+        return
+      }
+      if (result.error === 'connection_archived_during_pairing') {
+        setConnectionSelected(false)
+        setConnectionStatus(null)
+        setInstanceExists(false)
+        setPairingMethodsOpen(false)
+        setPhonePairingOpen(false)
+        setPairingError('Esta tentativa foi arquivada em outra aba. Gere uma nova conexão para parear o número em uma caixa separada.')
         return
       }
       if (result.error === 'invalid_pairing_phone') {
@@ -1352,7 +1402,23 @@ export function WhatsAppInboxPage() {
       setConnectionState(result.connection_state ?? 'connecting')
       setInstanceExists(true)
       setWebhookFeedback('Evolution pronta. Escaneie o QR Code com o WhatsApp para concluir a conexão.')
-    } catch {
+    } catch (error) {
+      if (error instanceof InboxRequestError && error.code === 'connection_must_be_archived_first') {
+        setConnectionSelected(true)
+        setConnectionStatus('active')
+        setPairingError('Para conectar um número diferente, arquive primeiro a caixa atual. O histórico dela continuará salvo e separado.')
+        return
+      }
+      if (error instanceof InboxRequestError && error.code === 'connection_archived_during_pairing') {
+        setConnectionSelected(false)
+        setConnectionStatus(null)
+        setInstanceExists(false)
+        setPairingMethodsOpen(false)
+        setPhonePairingOpen(false)
+        setConnectionState('not_created')
+        setPairingError('Esta tentativa foi arquivada em outra aba. Gere uma nova conexão para parear o número em uma caixa separada.')
+        return
+      }
       setConnectionState((current) => isWhatsAppConnected(current) ? current : 'unavailable')
       setPairingError(method === 'phone'
         ? 'Não foi possível falar com a Evolution. Confira o número e tente novamente; você também pode conectar pelo QR Code.'
@@ -1371,13 +1437,19 @@ export function WhatsAppInboxPage() {
     setPairingError(null)
     setWebhookFeedback(null)
     try {
-      const result = await invokeInbox<{ connection_state?: string }>({ action: 'disconnect', business_id: businessId })
+      const result = await invokeInbox<{ connection_state?: string; provider_logout_failed?: boolean }>({ action: 'disconnect', business_id: businessId })
       setQrImage(null)
       setPairingCode(null)
       setPhonePairingOpen(false)
       setPairingMethodsOpen(false)
       setConnectionState(result.connection_state ?? 'close')
-      setWebhookFeedback('Número desconectado. Conecte outro número pelo QR Code ou por código de pareamento.')
+      setConnectionSelected(false)
+      setConnectionStatus(null)
+      setInstanceExists(false)
+      setConfigured(true)
+      setWebhookFeedback(result.provider_logout_failed
+        ? 'A caixa foi arquivada e isolada. A Evolution estava indisponível, então a sessão antiga pode precisar ser encerrada no provedor.'
+        : 'Número desconectado. O histórico foi arquivado; conecte o novo número para abrir uma caixa separada.')
       setSelectedId(null)
       setSelectedConversation(null)
       listRequest.current += 1
@@ -1439,6 +1511,7 @@ export function WhatsAppInboxPage() {
     && loadedListScope === currentListScope && conversations.length > 0
   const normalizedConnectionState = normalizeConnectionState(connectionState)
   const canStartWhatsAppPairing = isWhatsAppExplicitlyDisconnected(connectionState)
+  const mustArchiveCurrentConnection = connectionSelected && connectionStatus === 'active'
 
   const disconnectedScreen = (
     <section className="whatsapp-disconnected" aria-label="Conexão WhatsApp">
@@ -1448,7 +1521,9 @@ export function WhatsAppInboxPage() {
         {webhookFeedback && <span className="whatsapp-webhook-feedback">{webhookFeedback}</span>}
         {role === 'owner' && normalizedConnectionState === 'unavailable' && <button className="button button-secondary" disabled={connectionChecking} onClick={() => void handleCheckConnection()} type="button">{connectionChecking ? 'Verificando…' : 'Verificar conexão'}</button>}
         {role === 'owner' && !canStartWhatsAppPairing && normalizedConnectionState !== 'unavailable' && <button className="button button-secondary" disabled={connectionChecking} onClick={() => void handleCheckConnection()} type="button">{connectionChecking ? 'Verificando…' : 'Verificar conexão'}</button>}
-        {role === 'owner' && canStartWhatsAppPairing && <button className="button button-primary" disabled={pairingLoading} onClick={() => { setPairingError(null); setWebhookFeedback(null); setPhonePairingOpen(false); setPairingMethodsOpen(true) }} type="button">{pairingLoading ? 'Preparando…' : instanceExists ? 'Conectar número' : 'Criar e conectar WhatsApp'}</button>}
+        {role === 'owner' && mustArchiveCurrentConnection && <button className="button button-primary" disabled={disconnecting || pairingLoading} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Trocar número</button>}
+        {role === 'owner' && canStartWhatsAppPairing && !mustArchiveCurrentConnection && <button className="button button-primary" disabled={pairingLoading} onClick={() => { setPairingError(null); setWebhookFeedback(null); setPhonePairingOpen(false); setPairingMethodsOpen(true) }} type="button">{pairingLoading ? 'Preparando…' : connectionSelected ? 'Continuar pareamento' : 'Criar e conectar WhatsApp'}</button>}
+        {role === 'owner' && connectionSelected && !mustArchiveCurrentConnection && <button className="button button-secondary" disabled={disconnecting || pairingLoading} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Cancelar pareamento</button>}
         {role === 'owner' && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
       </div>
 
@@ -1456,12 +1531,22 @@ export function WhatsAppInboxPage() {
         <span className="empty-icon"><Icon name="message" /></span>
         <p className="eyebrow">EVOLUTION API · WHATSAPP</p>
         <h2 id="whatsapp-disconnected-title">{connectionState === 'connecting' || connectionState === 'connecting...' ? 'Conectando o WhatsApp' : canStartWhatsAppPairing ? 'WhatsApp desconectado' : 'Não foi possível confirmar a conexão'}</h2>
-        <p>{canStartWhatsAppPairing ? 'As conversas e chamadas continuam salvas. Elas voltarão a aparecer quando o número for conectado.' : connectionState === 'connecting' || connectionState === 'connecting...' ? 'Aguardando a confirmação do pareamento para carregar as conversas.' : 'A caixa foi ocultada até confirmar a conexão. Verifique se a Evolution está disponível e tente consultar novamente.'}</p>
+        <p>{mustArchiveCurrentConnection
+          ? 'Esta caixa já pertence a um número. Para conectar o número do cliente, arquive esta caixa primeiro. O histórico atual será preservado e ficará separado.'
+          : canStartWhatsAppPairing
+            ? connectionSelected
+              ? 'O pareamento ainda não terminou. Você pode continuar usando QR Code ou código no celular.'
+              : 'O histórico do número anterior fica arquivado. Ao conectar outro número, ele abre uma caixa separada com os mesmos recursos.'
+          : connectionState === 'connecting' || connectionState === 'connecting...'
+            ? 'Aguardando a confirmação do pareamento para carregar as conversas.'
+            : 'A caixa foi ocultada até confirmar a conexão. Verifique se a Evolution está disponível e tente consultar novamente.'}</p>
         {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
 
-        {role === 'owner' && pairingMethodsOpen && <div className="whatsapp-pairing-methods" aria-label="Escolha como conectar">
+        {role === 'owner' && pairingMethodsOpen && !mustArchiveCurrentConnection && <div className="whatsapp-pairing-methods" aria-label="Escolha como conectar">
           <h3>Escolha como conectar</h3>
-          <p>Use o QR Code ou pareie pelo celular com um código.</p>
+          <p>{connectionSelected
+            ? 'Continue o pareamento pendente desta caixa pelo QR Code ou por um código no celular.'
+            : 'O novo número terá uma caixa separada. Use o QR Code ou pareie pelo celular com um código.'}</p>
           <div>
             <button className="button button-secondary" disabled={pairingLoading} onClick={() => void handleConnectWhatsApp('qr')} type="button">Conectar por QR Code</button>
             <button className="button button-secondary" disabled={pairingLoading} onClick={() => { setPairingMethodsOpen(false); setPhonePairingOpen(true) }} type="button">Usar número e código</button>
@@ -1497,13 +1582,13 @@ export function WhatsAppInboxPage() {
       <span className="empty-icon"><Icon name="message" /></span>
       <p className="eyebrow">{connectionError ? 'CONEXÃO INDISPONÍVEL' : 'ETAPA 1 · CAIXA DE ENTRADA'}</p>
       <h2 id="whatsapp-pending-title">{connectionError ? 'Não foi possível verificar a integração' : 'A caixa está pronta; falta configurar a Evolution API'}</h2>
-      <p>{connectionError ?? 'Esta tela reúne conversas e chamadas recebidas pela Evolution API. Configure os secrets do servidor e conecte um número de teste para começar.'}</p>
+      <p>{connectionError ?? 'Esta tela reúne as conversas e chamadas do número da empresa. Configure os secrets do servidor e conecte o WhatsApp da empresa para começar.'}</p>
       <ol className="whatsapp-setup-steps">
         <li><span>1</span><div><strong>Configurar a conexão segura</strong><small>Endereço e chave da Evolution ficam nos secrets do servidor, nunca no navegador.</small></div><span className="neutral-status">Pendente</span></li>
         <li><span>2</span><div><strong>Configurar o webhook</strong><small>O Supabase precisa receber eventos por uma rede local compartilhada ou endpoint HTTPS seguro.</small></div><span className="neutral-status">Pendente</span></li>
-        <li><span>3</span><div><strong>Conectar um número de teste</strong><small>Depois, validar mensagens, chamadas, arquivos e identificação por telefone.</small></div><span className="neutral-status">Pendente</span></li>
+        <li><span>3</span><div><strong>Conectar o número da empresa</strong><small>O histórico desse número ficará separado da conexão usada nos testes.</small></div><span className="neutral-status">Pendente</span></li>
       </ol>
-      {connectionError && <button className="button button-secondary" onClick={() => { setConnectionChecking(true); setConnectionError(null); void invokeInbox<{ configured?: boolean; connected?: boolean; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId }).then((result) => { setConfigured(result.configured === true); setConnectionState(connectionStateFromStatus(result)); setInstanceExists(result.instance_exists === true) }).catch(() => setConnectionError('Não foi possível verificar a conexão com o servidor.')).finally(() => setConnectionChecking(false)) }} type="button">Tentar novamente</button>}
+      {connectionError && <button className="button button-secondary" onClick={() => { setConnectionChecking(true); setConnectionError(null); void invokeInbox<{ configured?: boolean; connected?: boolean; connection_selected?: boolean; connection_status?: 'pending' | 'active' | null; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId }).then((result) => { setConfigured(result.configured === true); setConnectionState(connectionStateFromStatus(result)); setConnectionSelected(result.connection_selected === true); setConnectionStatus(result.connection_status ?? null); setInstanceExists(result.instance_exists === true) }).catch(() => setConnectionError('Não foi possível verificar a conexão com o servidor.')).finally(() => setConnectionChecking(false)) }} type="button">Tentar novamente</button>}
       <Link className="quiet-link" to="/configuracoes">Ver preparação da conexão <Icon name="arrow" /></Link>
     </section>
   ) : !isWhatsAppConnected(connectionState) ? disconnectedScreen : (
@@ -1676,12 +1761,12 @@ export function WhatsAppInboxPage() {
         <section aria-describedby="whatsapp-disconnect-description" aria-labelledby="whatsapp-disconnect-title" aria-modal="true" className="whatsapp-dialog surface-panel" ref={disconnectDialogRef} role="dialog" tabIndex={-1}>
           <span className="whatsapp-dialog-icon" aria-hidden="true"><Icon name="message" /></span>
           <p className="eyebrow">CONEXÃO WHATSAPP</p>
-          <h2 id="whatsapp-disconnect-title">Desconectar o WhatsApp?</h2>
-          <p id="whatsapp-disconnect-description">A conexão será encerrada. O histórico continuará salvo no sistema, e você poderá conectar outro número depois.</p>
+          <h2 id="whatsapp-disconnect-title">{mustArchiveCurrentConnection ? 'Arquivar esta caixa e trocar o número?' : isWhatsAppConnected(connectionState) ? 'Desconectar o WhatsApp?' : 'Cancelar este pareamento?'}</h2>
+          <p id="whatsapp-disconnect-description">O histórico desta caixa será arquivado, sem ser apagado. Se a Evolution estiver indisponível, a sessão antiga pode precisar ser encerrada diretamente no provedor. O novo número ficará em uma caixa separada, com os mesmos recursos.</p>
           {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
           <div className="whatsapp-dialog-actions">
-            <button className="button button-secondary" disabled={disconnecting} onClick={() => setDisconnectConfirmationOpen(false)} ref={disconnectCancelRef} type="button">Manter conectado</button>
-            <button className="button button-danger" disabled={disconnecting} onClick={() => void handleDisconnectWhatsApp()} type="button">{disconnecting ? 'Desconectando…' : 'Desconectar número'}</button>
+            <button className="button button-secondary" disabled={disconnecting} onClick={() => setDisconnectConfirmationOpen(false)} ref={disconnectCancelRef} type="button">{mustArchiveCurrentConnection && !isWhatsAppConnected(connectionState) ? 'Voltar' : 'Manter conectado'}</button>
+            <button className="button button-danger" disabled={disconnecting} onClick={() => void handleDisconnectWhatsApp()} type="button">{disconnecting ? 'Arquivando…' : mustArchiveCurrentConnection ? 'Arquivar e continuar' : isWhatsAppConnected(connectionState) ? 'Desconectar número' : 'Arquivar tentativa'}</button>
           </div>
           {disconnecting && <p className="whatsapp-dialog-progress" role="status">Encerrando a conexão com segurança…</p>}
         </section>
