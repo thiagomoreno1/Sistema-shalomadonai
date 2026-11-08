@@ -587,10 +587,19 @@ async function setEvolutionWebhook(config: EvolutionConfig): Promise<void> {
       enabled: true,
       url: config.webhookUrl,
       headers: { Authorization: `Bearer ${webhookToken}` },
-      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE', 'GROUPS_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
+      events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
       byEvents: false,
       base64: false,
     } }),
+  })
+}
+
+function logWebhookSetupFailure(stage: 'configure_webhook' | 'connect', error: unknown): void {
+  const requestError = error instanceof RequestError ? error : null
+  console.error('Evolution webhook setup failed', {
+    stage,
+    code: requestError?.code ?? 'unexpected_error',
+    ...(requestError?.upstreamStatus !== undefined ? { upstream_status: requestError.upstreamStatus } : {}),
   })
 }
 
@@ -1866,7 +1875,12 @@ export default {
       if (action === 'configure_webhook') {
         if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
         if (!config.instanceName) return json({ error: 'whatsapp_connection_not_started' }, 409)
-        await setEvolutionWebhook(config)
+        try {
+          await setEvolutionWebhook(config)
+        } catch (error) {
+          logWebhookSetupFailure('configure_webhook', error)
+          throw error
+        }
         return json({ configured: true })
       }
 
@@ -1897,7 +1911,8 @@ export default {
             }),
           })
         }
-        try { await setEvolutionWebhook(connectionConfig) } catch {
+        try { await setEvolutionWebhook(connectionConfig) } catch (error) {
+          logWebhookSetupFailure('connect', error)
           return json({ error: 'webhook_setup_failed', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'close' })
         }
         let result: unknown
