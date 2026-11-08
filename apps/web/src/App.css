@@ -1279,6 +1279,7 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .whatsapp-setup-steps small { max-width: 600px; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .whatsapp-inbox { display: grid; grid-template-columns: minmax(270px, 0.82fr) minmax(0, 1.7fr); align-items: stretch; gap: 0; min-width: 0; overflow: hidden; border: 1px solid #d8dfdc; border-radius: 9px; background: #fff; box-shadow: 0 2px 10px rgba(12, 40, 31, 0.04); }
 .whatsapp-connection-banner { display: flex; grid-column: 1 / -1; align-items: center; gap: 10px; min-height: 58px; padding: 8px 13px; border: 0; border-bottom: 1px solid #d8dfdc; border-radius: 0; box-shadow: none; background: #f0f2f5; }
+.whatsapp-offline-notice { grid-column: 1 / -1; padding: 9px 13px; border-bottom: 1px solid #ead9ad; color: #75521b; background: #fff7e6; font-size: 11px; line-height: 1.45; }
 .whatsapp-connection-banner > div { display: grid; gap: 2px; }
 .whatsapp-connection-banner strong { color: var(--ink); font-size: 11px; }
 .whatsapp-connection-banner span:not(.whatsapp-connection-dot) { color: var(--muted); font-size: 10px; }

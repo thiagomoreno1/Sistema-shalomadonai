@@ -77,6 +77,30 @@ function uniqueConversations(rows: Conversation[]): Conversation[] {
   })
 }
 
+function mergeConversationMessages(current: Conversation | null, fresh: Conversation): Conversation {
+  if (!current || current.id !== fresh.id) return fresh
+  const currentMessages = current.messages ?? []
+  const freshMessages = fresh.messages ?? []
+  if (!currentMessages.length || !freshMessages.length) {
+    return { ...current, ...fresh, messages: freshMessages.length ? freshMessages : currentMessages }
+  }
+
+  // The detail endpoint returns the newest page. Keep the older pages the user
+  // already loaded, otherwise the 30-second refresh makes history disappear.
+  const firstFreshMessage = freshMessages.reduce((first, message) => {
+    const messageTime = message.created_at ?? ''
+    const firstTime = first.created_at ?? ''
+    return messageTime < firstTime || (messageTime === firstTime && message.id < first.id) ? message : first
+  })
+  const firstFreshKey = `${firstFreshMessage.created_at ?? ''}\u0000${firstFreshMessage.id}`
+  const olderMessages = currentMessages.filter((message) => `${message.created_at ?? ''}\u0000${message.id}` < firstFreshKey)
+  const merged = new Map<string, Message>()
+  for (const message of [...olderMessages, ...freshMessages]) merged.set(message.id, message)
+  const messages = [...merged.values()].sort((left, right) =>
+    (left.created_at ?? '').localeCompare(right.created_at ?? '') || left.id.localeCompare(right.id))
+  return { ...current, ...fresh, messages }
+}
+
 function digitsOnly(value: string | null | undefined) {
   return (value ?? '').replace(/\D/g, '')
 }
@@ -268,6 +292,13 @@ function cachedContactAvatar(key: string): string | null {
   return cached.url
 }
 
+function invalidateContactAvatar(key: string) {
+  const cached = contactAvatarCache.get(key)
+  if (cached) URL.revokeObjectURL(cached.url)
+  contactAvatarCache.delete(key)
+  contactAvatarFailures.delete(key)
+}
+
 async function loadContactAvatar(businessId: string, conversationId: string): Promise<string | null> {
   const cacheKey = `${businessId}:${conversationId}`
   const cached = cachedContactAvatar(cacheKey)
@@ -314,6 +345,7 @@ function WhatsAppAvatar({ businessId, conversation }: { businessId: string; conv
     url: conversation ? cachedContactAvatar(`${businessId}:${conversation.id}`) : null,
   }))
   const [photoUnavailable, setPhotoUnavailable] = useState(false)
+  const [retryRevision, setRetryRevision] = useState(0)
   const avatarRef = useRef<HTMLSpanElement>(null)
   const isGroup = conversation?.is_group === true
   const label = conversation?.contact.name || conversation?.contact.phone || ''
@@ -355,7 +387,25 @@ function WhatsAppAvatar({ businessId, conversation }: { businessId: string; conv
       active = false
       observer?.disconnect()
     }
-  }, [businessId, conversation?.id, isGroup])
+  }, [businessId, conversation?.id, isGroup, retryRevision])
+
+  useEffect(() => {
+    if (!conversation) return
+    const key = `${businessId}:${conversation.id}`
+    const retryPhoto = () => {
+      if (document.visibilityState !== 'visible') return
+      invalidateContactAvatar(key)
+      setPhoto({ conversationId: conversation.id, url: null })
+      setPhotoUnavailable(false)
+      setRetryRevision((current) => current + 1)
+    }
+    window.addEventListener('online', retryPhoto)
+    document.addEventListener('visibilitychange', retryPhoto)
+    return () => {
+      window.removeEventListener('online', retryPhoto)
+      document.removeEventListener('visibilitychange', retryPhoto)
+    }
+  }, [businessId, conversation?.id])
 
   const initials = label.slice(0, 1).toLocaleUpperCase('pt-BR') || '?'
   return <span aria-hidden="true" className={`whatsapp-contact-avatar${isGroup ? ' is-group' : ''}`} ref={avatarRef} title={label || (isGroup ? 'Grupo' : 'Contato')}>
@@ -461,6 +511,20 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
   }, [attachment.file_type, error, file, sticker, tooLarge])
 
   useEffect(() => {
+    const retryFailedMedia = () => {
+      if (!error || tooLarge || document.visibilityState !== 'visible') return
+      autoLoadAttempted.current = false
+      setError(false)
+    }
+    window.addEventListener('online', retryFailedMedia)
+    document.addEventListener('visibilitychange', retryFailedMedia)
+    return () => {
+      window.removeEventListener('online', retryFailedMedia)
+      document.removeEventListener('visibilitychange', retryFailedMedia)
+    }
+  }, [error, tooLarge])
+
+  useEffect(() => {
     const isInlineMedia = sticker || ['image', 'sticker', 'audio', 'video'].includes(attachment.file_type ?? '')
     const region = previewRegion.current
     if (!file || !isInlineMedia || !region || typeof IntersectionObserver === 'undefined') return
@@ -559,6 +623,8 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
 export function WhatsAppInboxPage() {
   const { id: businessId, role } = useBusiness()
   const [searchParams, setSearchParams] = useSearchParams()
+  const [isOnline, setIsOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine)
+  const [connectivityRevision, setConnectivityRevision] = useState(0)
   const [connectionChecking, setConnectionChecking] = useState(true)
   const [configured, setConfigured] = useState(false)
   const [connectionState, setConnectionState] = useState('')
@@ -657,6 +723,28 @@ export function WhatsAppInboxPage() {
     }
   }, [businessId, configured])
 
+  useEffect(() => {
+    const handleOffline = () => setIsOnline(false)
+    const handleOnline = () => {
+      setIsOnline(true)
+      setConnectivityRevision((revision) => revision + 1)
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        setIsOnline(true)
+        setConnectivityRevision((revision) => revision + 1)
+      }
+    }
+    window.addEventListener('offline', handleOffline)
+    window.addEventListener('online', handleOnline)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('offline', handleOffline)
+      window.removeEventListener('online', handleOnline)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
+
   const loadConversations = useCallback(async (page = 1, append = false) => {
     if (!configured) return
     const requestScope = conversationScopeKey(status, search, segment)
@@ -685,7 +773,7 @@ export function WhatsAppInboxPage() {
   }, [businessId, configured, search, segment, status])
 
   const refreshLoadedConversations = useCallback(async () => {
-    if (!configured) return
+    if (!configured || !navigator.onLine) return
     const requestScope = conversationScopeKey(status, search, segment)
     if (requestScope !== activeListScope.current) return
     if (refreshScopeInFlight.current?.scope === requestScope) return
@@ -717,12 +805,14 @@ export function WhatsAppInboxPage() {
       setLoadedListScope(requestScope)
       setListPage(currentPage)
       setHasMore(morePages)
-      if (selectedId && refreshedConversations.some((conversation) => conversation.id === selectedId)) {
+      if (selectedId) {
         const result = await invokeInbox<{ conversation?: Conversation }>({
           action: 'conversation', business_id: businessId, conversationId: selectedId,
         })
         if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
-        setSelectedConversation(result.conversation ?? null)
+        if (result.conversation) {
+          setSelectedConversation((current) => mergeConversationMessages(current, result.conversation!))
+        }
       } else {
         setSelectedConversation(null)
       }
@@ -800,16 +890,24 @@ export function WhatsAppInboxPage() {
   }, [businessId, configured])
   useEffect(() => { if (configured && view === 'calls') void loadCalls() }, [configured, loadCalls, view])
   useEffect(() => {
+    if (!configured || !isOnline || connectivityRevision === 0) return
+    void refreshLoadedConversations()
+    void loadBusinessContext()
+    if (view === 'calls') void loadCalls()
+  }, [configured, connectivityRevision, isOnline, loadBusinessContext, loadCalls, refreshLoadedConversations, view])
+  useEffect(() => {
     if (!configured || view !== 'calls') return
-    const interval = window.setInterval(() => { void loadCalls() }, 30_000)
+    const interval = window.setInterval(() => { if (navigator.onLine) void loadCalls() }, 30_000)
     return () => window.clearInterval(interval)
   }, [configured, loadCalls, view])
 
   useEffect(() => {
     if (!configured) return
     const interval = window.setInterval(() => {
-      void refreshLoadedConversations()
-      void loadBusinessContext()
+      if (navigator.onLine) {
+        void refreshLoadedConversations()
+        void loadBusinessContext()
+      }
     }, 30_000)
     return () => window.clearInterval(interval)
   }, [configured, loadBusinessContext, refreshLoadedConversations])
@@ -1407,6 +1505,7 @@ export function WhatsAppInboxPage() {
         {role === 'owner' && connectionState.toLowerCase() === 'open' && <button className="button button-secondary" disabled={disconnecting} onClick={() => void handleDisconnectWhatsApp()} type="button">{disconnecting ? 'Desconectando…' : 'Desconectar / trocar número'}</button>}
         {role === 'owner' && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
       </div>
+      {!isOnline && <div className="whatsapp-offline-notice" role="status">Sem conexão com a internet. As conversas e mídias serão sincronizadas quando a conexão voltar.</div>}
       {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
       {role === 'owner' && connectionState.toLowerCase() !== 'open' && connectionState.toLowerCase() !== 'unavailable' && <details className="surface-panel whatsapp-phone-pairing">
         <summary>Conectar usando número e código</summary>

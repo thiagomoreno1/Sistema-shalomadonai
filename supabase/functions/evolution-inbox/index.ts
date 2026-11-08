@@ -1000,7 +1000,6 @@ function normalizedMessage(row: JsonRecord, savedContactNames?: ContactDirectory
       file_size: fileSize,
       width: null,
       height: null,
-      mime_type: mimeType,
       message_kind: kind,
     }] : [],
     message_kind: kind,
