@@ -657,7 +657,7 @@ export function FinancialReportsPage() {
           <article className="surface-panel report-summary-card"><span>Faturamento líquido</span><strong>{completedBilling?.netBillingCents === null ? 'A conferir' : formatBRLExact(completedBilling?.netBillingCents ?? 0n)}</strong><small>Vendas após descontos − custo dos produtos</small></article>
           <article className="surface-panel report-summary-card"><span>Pagamentos recebidos</span><strong>{formatBRLExact(summary.receipts.amount_cents)}</strong><small>{summary.receipts.record_count} pagamentos registrados</small></article>
           <article className="surface-panel report-summary-card"><span>Saldo a receber</span><strong>{formatBRLExact(summary.receivables.open_balance_cents)}</strong><small>{summary.receivables.installment_count} parcelas pendentes</small></article>
-          <article className="surface-panel report-summary-card"><span>Pagamentos atrasados</span><strong>{formatBRLExact(summary.receivables.overdue_balance_cents)}</strong><small>Parcelas fora do prazo</small></article>
+          <article className="surface-panel report-summary-card"><span>Parcelas de clientes atrasadas</span><strong>{formatBRLExact(summary.receivables.overdue_balance_cents)}</strong><small>Valores que os clientes ainda não pagaram no prazo</small></article>
           <article className="surface-panel report-summary-card"><span>Gastos pagos</span><strong>{formatBRLExact(summary.outflows.total_cents)}</strong><small>{summary.outflows.record_count} gastos registrados</small></article>
         </section>
 

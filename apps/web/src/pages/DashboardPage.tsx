@@ -21,6 +21,13 @@ type DashboardPriorities = {
     due_today_balance_cents: string
     items: Array<{ installment_id: string; order_id: string; installment_number: number; due_on: string; customer_name: string; balance_cents: string; overdue: boolean }>
   }
+  payroll: {
+    overdue_count: number
+    overdue_amount_cents: string
+    due_today_count: number
+    due_today_amount_cents: string
+    items: Array<{ worker_id: string; name: string; member_type: 'delivery_driver' | 'employee'; period_start: string; due_on: string; amount_cents: string; paid_on: string | null; outflow_id: string | null }>
+  }
   deliveries: {
     pending_count: number
     items: Array<{ delivery_id: string; order_id: string; customer_name: string; status: 'awaiting_separation' | 'ready' | 'dispatched' | 'attempted' | 'rescheduled'; scheduled_on: string | null; time_window: string | null; delivery_worker_name: string | null }>
@@ -74,7 +81,7 @@ type DashboardPriorityAction = {
 const actionFilters: Array<{ value: ActionFilter; label: string }> = [
   { value: 'all', label: 'Todos' },
   { value: 'followups', label: 'Retornos' },
-  { value: 'receivables', label: 'Pagamentos' },
+  { value: 'receivables', label: 'Clientes e salários' },
   { value: 'deliveries', label: 'Entregas' },
   { value: 'inventory', label: 'Estoque' },
 ]
@@ -126,6 +133,15 @@ function createDemoPriorities(today: string): DashboardPriorities {
         { installment_id: 'demo-installment-1', order_id: 'demo-order-1', installment_number: 2, due_on: twoDaysAgo, customer_name: 'Mercado Boa Praça', balance_cents: '12000', overdue: true },
         { installment_id: 'demo-installment-4', order_id: 'demo-order-5', installment_number: 1, due_on: yesterday, customer_name: 'Lavanderia Ponto Limpo', balance_cents: '19800', overdue: true },
         { installment_id: 'demo-installment-2', order_id: 'demo-order-2', installment_number: 1, due_on: today, customer_name: 'Condomínio Vila Verde', balance_cents: '8700', overdue: false },
+      ],
+    },
+    payroll: {
+      overdue_count: 1,
+      overdue_amount_cents: '180000',
+      due_today_count: 0,
+      due_today_amount_cents: '0',
+      items: [
+        { worker_id: 'demo-team-1', name: 'Rafael', member_type: 'delivery_driver', period_start: `${yesterday.slice(0, 7)}-01`, due_on: yesterday, amount_cents: '180000', paid_on: null, outflow_id: null },
       ],
     },
     deliveries: {
@@ -278,11 +294,11 @@ export function DashboardPage() {
   const prioritiesLoading = currentPriorities.loading
   const prioritiesError = currentPriorities.error
   const [actionFilter, setActionFilter] = useState<ActionFilter>('all')
-  const noActions = priorities !== null && priorities.follow_ups.pending_count === 0 && priorities.receivables.overdue_count === 0 && priorities.receivables.due_today_count === 0 && priorities.deliveries.pending_count === 0 && priorities.inventory.attention_count === 0
+  const noActions = priorities !== null && priorities.follow_ups.pending_count === 0 && priorities.receivables.overdue_count === 0 && priorities.receivables.due_today_count === 0 && priorities.payroll.overdue_count === 0 && priorities.payroll.due_today_count === 0 && priorities.deliveries.pending_count === 0 && priorities.inventory.attention_count === 0
   const visibleActionCount = priorities === null ? null : {
-    all: priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count,
+    all: priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.payroll.overdue_count + priorities.payroll.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count,
     followups: priorities.follow_ups.pending_count,
-    receivables: priorities.receivables.overdue_count + priorities.receivables.due_today_count,
+    receivables: priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.payroll.overdue_count + priorities.payroll.due_today_count,
     deliveries: priorities.deliveries.pending_count,
     inventory: priorities.inventory.attention_count,
   }[actionFilter]
@@ -403,12 +419,19 @@ export function DashboardPage() {
         return
       }
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
-      const { data, error } = await supabaseClient.rpc('get_dashboard_priorities', {
-        p_business_id: businessId,
-        p_today: today,
-      })
-      if (error || !data) throw error
-      if (requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data: data as DashboardPriorities })
+      const [priorityResult, payrollResult] = await Promise.all([
+        supabaseClient.rpc('get_dashboard_priorities', {
+          p_business_id: businessId,
+          p_today: today,
+        }),
+        supabaseClient.rpc('get_team_salary_status', {
+          p_business_id: businessId,
+          p_today: today,
+        }),
+      ])
+      if (priorityResult.error || !priorityResult.data || payrollResult.error || !payrollResult.data) throw priorityResult.error ?? payrollResult.error
+      const data = { ...(priorityResult.data as Omit<DashboardPriorities, 'payroll'>), payroll: payrollResult.data } as DashboardPriorities
+      if (requestId === prioritiesRequestId.current) setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data })
     } catch {
       if (requestId === prioritiesRequestId.current) setPriorityState((previous) => ({
         scopeKey: prioritiesScopeKey,
@@ -490,7 +513,7 @@ export function DashboardPage() {
   const productCostCents = financialSummary?.item_cost_cents === null || !financialSummary ? null : BigInt(financialSummary.item_cost_cents)
   const grossProfitCents = financialSummary?.available && productCostCents !== null && netBillingCents !== null ? netBillingCents - productCostCents : null
   const totalPriorityActionCount = priorities
-    ? priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count
+    ? priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.payroll.overdue_count + priorities.payroll.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count
     : null
   const priorityActionCandidates: DashboardPriorityAction[] = [
     ...(priorities?.follow_ups.items.map((followUp) => ({
@@ -514,6 +537,17 @@ export function DashboardPage() {
       title: receivable.customer_name,
       detail: `Parcela ${receivable.installment_number} · ${formatBusinessDate(receivable.due_on)} · ${formatBRLExact(receivable.balance_cents)}`,
       state: receivable.overdue ? 'Atrasado' : 'Vence hoje',
+    })) ?? []),
+    ...(priorities?.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).map((item) => ({
+      key: `salary-${item.worker_id}-${item.period_start}`,
+      dueOn: item.due_on,
+      severity: item.due_on < today ? 0 : 1,
+      category: 1,
+      href: '/equipe',
+      icon: 'coin' as const,
+      title: `Salário · ${item.name}`,
+      detail: `${formatBusinessDate(item.due_on)} · ${formatBRLExact(item.amount_cents)}`,
+      state: item.due_on < today ? 'Atrasado' : 'Vence hoje',
     })) ?? []),
     ...(priorities?.deliveries.items.map((delivery) => ({
       key: delivery.delivery_id,
@@ -573,15 +607,15 @@ export function DashboardPage() {
           <span className="dashboard-summary-count">{priorities ? priorities.follow_ups.pending_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
-        <Link className="dashboard-summary-link is-overdue" to="/financeiro">
+        <Link className="dashboard-summary-link is-overdue" to="/equipe">
           <span className="dashboard-summary-icon"><Icon name="coin" /></span>
-          <span className="dashboard-summary-copy"><strong>Pagamentos atrasados</strong><small>{priorities ? formatBRLExact(priorities.receivables.overdue_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
-          <span className="dashboard-summary-count">{priorities ? priorities.receivables.overdue_count : '—'}</span>
+          <span className="dashboard-summary-copy"><strong>Salários atrasados</strong><small>Equipe · {priorities ? formatBRLExact(priorities.payroll.overdue_amount_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
+          <span className="dashboard-summary-count">{priorities ? priorities.payroll.overdue_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
         <Link className="dashboard-summary-link is-due-today" to="/financeiro">
           <span className="dashboard-summary-icon"><Icon name="clock" /></span>
-          <span className="dashboard-summary-copy"><strong>Parcelas que vencem hoje</strong><small>{priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
+          <span className="dashboard-summary-copy"><strong>Parcelas dos clientes</strong><small>Valores que vencem hoje · {priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.receivables.due_today_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
@@ -645,7 +679,7 @@ export function DashboardPage() {
               </section>}
 
               {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.receivables.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-receivables-title">
-                <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Pagamentos para acompanhar</h3><Link className="quiet-link" to="/financeiro">Ver pagamentos <Icon name="arrow" /></Link></div>
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Parcelas que clientes ainda devem</h3><Link className="quiet-link" to="/financeiro">Ver parcelas <Icon name="arrow" /></Link></div>
                 {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma parcela atrasada ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
                   {priorities.receivables.items.map((item) => <li key={item.installment_id}>
                     <Link to={demoPreview ? '/financeiro' : `/pedidos/${item.order_id}`}>
@@ -657,6 +691,20 @@ export function DashboardPage() {
                   </li>)}
                 </ul>}
                 {priorities.receivables.overdue_count + priorities.receivables.due_today_count > priorities.receivables.items.length && <p className="section-footnote">Mostrando {priorities.receivables.items.length} de {priorities.receivables.overdue_count + priorities.receivables.due_today_count} parcelas prioritárias.</p>}
+              </section>}
+
+              {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.payroll.items.some((item) => item.paid_on === null && item.due_on <= today))) && <section className="dashboard-action-group" aria-labelledby="dashboard-payroll-title">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-payroll-title">Salários da equipe</h3><Link className="quiet-link" to="/equipe">Ver equipe <Icon name="arrow" /></Link></div>
+                {priorities.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).length === 0 ? <p className="dashboard-priority-empty">Nenhum salário vencido ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
+                  {priorities.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).map((item) => <li key={`${item.worker_id}-${item.period_start}`}>
+                    <Link to="/equipe">
+                      <span className={`dashboard-action-symbol${item.due_on < today ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
+                      <span className="dashboard-action-copy"><strong>{item.name}</strong><small>Salário · {formatBusinessDate(item.due_on)}</small></span>
+                      <span className="dashboard-action-meta"><strong>{formatBRLExact(item.amount_cents)}</strong><span className={`dashboard-row-state${item.due_on < today ? ' is-overdue' : ' is-today'}`}>{item.due_on < today ? 'Atrasado' : 'Vence hoje'}</span></span>
+                      <Icon className="dashboard-row-arrow" name="arrow" />
+                    </Link>
+                  </li>)}
+                </ul>}
               </section>}
 
               {(actionFilter === 'deliveries' || (actionFilter === 'all' && priorities.deliveries.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-deliveries-title">

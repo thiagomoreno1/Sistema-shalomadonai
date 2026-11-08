@@ -688,7 +688,7 @@ export function InventoryPage() {
 
       {!loading && balances.length === 0 && <p className="section-footnote" id="inventory-count-prerequisite">Para fazer uma contagem, configure o estoque e o saldo inicial de um produto no <Link to="/catalogo">Catálogo</Link>.</p>}
 
-      {notice && <div className="form-message form-message-success" role="status"><p>{notice}</p>{registeredReceiptId && <Link className="quiet-link" to={`/financeiro/saidas?receiptId=${encodeURIComponent(registeredReceiptId)}`}>Registrar o valor pago desta compra →</Link>}</div>}
+      {notice && <div className="form-message form-message-success" role="status"><p>{notice}</p>{registeredReceiptId && <><p className="section-footnote">O estoque já foi atualizado. Para contar também como dinheiro gasto, registre a compra somente se ela já foi paga.</p><Link className="button button-primary" to={`/financeiro/saidas?receiptId=${encodeURIComponent(registeredReceiptId)}`}>Registrar pagamento da compra →</Link></>}</div>}
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadData() }} type="button">Tentar novamente</button></div>}
       {!loading && balances.length > 500 && <p className="form-message form-message-warning" role="status">A contagem física está indisponível: há {balances.length} produtos com saldo registrado; o limite é 500.</p>}
 

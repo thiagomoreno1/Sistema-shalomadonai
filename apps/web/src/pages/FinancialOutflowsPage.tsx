@@ -29,6 +29,7 @@ type InventoryReceipt = {
   purchase_reference: string | null
   received_on: string
 }
+type InventoryReceiptCostLine = { quantity: string | number; unit_cost_cents: string | number | null }
 type ReceiptPrefillStatus = { receiptId: string; state: 'loading' | 'ready' | 'error'; message: string }
 type OutflowReceiptLink = { outflow_id: string; inventory_receipt_id: string }
 type OutflowVoid = { outflow_id: string; reason: string; created_at: string }
@@ -57,6 +58,24 @@ function outflowTypeLabel(type: OutflowType) {
 
 function formatAmount(cents: string | number) {
   return formatBRLExact(String(cents))
+}
+
+function estimateInventoryReceiptCents(lines: InventoryReceiptCostLine[]) {
+  if (lines.length === 0) return null
+  let total = 0n
+  for (const line of lines) {
+    const quantityMatch = /^(\d+)(?:\.(\d{1,3}))?$/.exec(String(line.quantity))
+    if (!quantityMatch || line.unit_cost_cents === null || !/^\d+$/.test(String(line.unit_cost_cents))) return null
+    const quantityMills = BigInt(quantityMatch[1]) * 1000n + BigInt((quantityMatch[2] ?? '').padEnd(3, '0') || '0')
+    const unitCostCents = BigInt(String(line.unit_cost_cents))
+    total += (quantityMills * unitCostCents + 500n) / 1000n
+    if (total > BigInt(Number.MAX_SAFE_INTEGER)) return null
+  }
+  return total > 0n ? total : null
+}
+
+function centsToBrazilianInput(cents: bigint) {
+  return `${cents / 100n},${String(cents % 100n).padStart(2, '0')}`
 }
 
 async function loadAllPages<T>(
@@ -127,6 +146,7 @@ export function FinancialOutflowsPage() {
   const [receiptPrefillStatus, setReceiptPrefillStatus] = useState<ReceiptPrefillStatus | null>(null)
   const [notes, setNotes] = useState('')
   const receiptPrefillBlocked = receiptPrefillStatus?.state === 'loading' || receiptPrefillStatus?.state === 'error'
+  const salaryExpenseDraft = outflowType === 'operating_expense' && /sal[aá]rios?|folha/i.test(`${description} ${category}`)
 
   const requestIdRef = useRef(newRequestId())
   const historyRequestRef = useRef(0)
@@ -399,6 +419,13 @@ export function FinancialOutflowsPage() {
           return
         }
         const receipt = data as InventoryReceipt
+        const { data: lineData, error: lineError } = await supabaseClient.from('inventory_receipt_lines')
+          .select('quantity, unit_cost_cents')
+          .eq('business_id', businessId)
+          .eq('receipt_id', receipt.id)
+        if (!active) return
+        const receiptLines = (lineData ?? []) as InventoryReceiptCostLine[]
+        const estimateCents = lineError ? null : estimateInventoryReceiptCents(receiptLines)
         prefilledReceiptRef.current = receipt
         setReceiptOptions((current) => [receipt, ...current.filter((row) => row.id !== receipt.id)])
         setSelectedReceiptIds([receipt.id])
@@ -407,12 +434,14 @@ export function FinancialOutflowsPage() {
         setDescription(receipt.purchase_reference
           ? `Compra de estoque · ${receipt.purchase_reference}`.slice(0, 200)
           : 'Compra de estoque')
-        setAmount('')
+        setAmount(estimateCents === null ? '' : centsToBrazilianInput(estimateCents))
         setPaidOnOverride(null)
         setReceiptPrefillStatus({
           receiptId: receipt.id,
           state: 'ready',
-          message: `Recebimento de ${formatBusinessDate(receipt.received_on)} vinculado. Informe o valor que você realmente pagou; nada foi registrado ainda.`,
+          message: estimateCents !== null
+            ? `Recebimento de ${formatBusinessDate(receipt.received_on)} vinculado. O custo cadastrado sugere ${formatBRLExact(String(estimateCents))}; confira o valor realmente pago. Nada foi lançado ainda.`
+            : `Recebimento de ${formatBusinessDate(receipt.received_on)} vinculado. ${lineError ? 'Não foi possível ler o custo cadastrado.' : 'Cadastre o custo unitário de todos os itens ou informe o total pago.'} Informe o valor realmente pago; nada foi lançado ainda.`,
         })
       } catch {
         if (active) setPrefillError('Não foi possível confirmar este recebimento. Nenhum gasto foi lançado; reabra o link ou continue sem vínculo.')
@@ -716,6 +745,7 @@ export function FinancialOutflowsPage() {
               <span className="field-label">Categoria <span className="field-optional">opcional, texto livre</span></span>
               <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={120} onChange={(event) => setCategory(event.target.value)} value={category} />
             </label>
+            {salaryExpenseDraft && <p className="form-message form-message-warning record-field-wide" role="status">Se o salário está cadastrado na equipe, registre o pagamento em <Link className="quiet-link" to="/equipe#pagamentos-equipe">Equipe · Salários a pagar</Link> para evitar lançar a mesma competência duas vezes.</p>}
             <label className="record-field">
               <span className="field-label">{outflowType === 'purchase' ? 'Fornecedor' : outflowType === 'delivery_cost' ? 'Entregador / prestador' : 'Favorecido'} <span className="field-optional">opcional</span></span>
               <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={160} onChange={(event) => setCounterpartyName(event.target.value)} value={counterpartyName} />
