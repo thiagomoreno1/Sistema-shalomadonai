@@ -1,4 +1,9 @@
-:80 {
+45.13.235.147 {
+    tls {
+        issuer acme {
+            profile shortlived
+        }
+    }
     root * /var/www/shalom-releases/current
     encode zstd gzip
     try_files {path} /index.html
