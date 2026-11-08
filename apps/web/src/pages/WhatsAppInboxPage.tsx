@@ -591,6 +591,7 @@ export function WhatsAppInboxPage() {
   const [pairingLoading, setPairingLoading] = useState(false)
   const [pairingPhone, setPairingPhone] = useState('')
   const [pairingCode, setPairingCode] = useState<string | null>(null)
+  const [pairingCodeCopied, setPairingCodeCopied] = useState(false)
   const [pairingMethodsOpen, setPairingMethodsOpen] = useState(false)
   const [phonePairingOpen, setPhonePairingOpen] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
@@ -838,6 +839,14 @@ export function WhatsAppInboxPage() {
     void checkConnection()
     return () => { active = false }
   }, [businessId])
+
+  useEffect(() => {
+    if (role !== 'owner' || pairingLoading || phonePairingOpen || pairingCode || qrImage) return
+    const pairingWasInterrupted = connectionSelected
+      && connectionStatus === 'pending'
+      && normalizeConnectionState(connectionState) === 'connecting'
+    if (pairingWasInterrupted) setPairingMethodsOpen(true)
+  }, [connectionSelected, connectionState, connectionStatus, pairingCode, pairingLoading, phonePairingOpen, qrImage, role])
 
   useEffect(() => {
     if (!configured) return
@@ -1333,6 +1342,17 @@ export function WhatsAppInboxPage() {
     }
   }
 
+  async function handleCopyPairingCode() {
+    if (!pairingCode) return
+    try {
+      await navigator.clipboard.writeText(pairingCode)
+      setPairingCodeCopied(true)
+      setPairingError(null)
+    } catch {
+      setPairingError('Não foi possível copiar o código. Toque e segure sobre ele para copiar manualmente.')
+    }
+  }
+
   async function handleConnectWhatsApp(method: 'qr' | 'phone' = 'qr') {
     if (role !== 'owner' || pairingLoading) return
     connectionStatusRequest.current += 1
@@ -1340,6 +1360,7 @@ export function WhatsAppInboxPage() {
     setPairingError(null)
     setQrImage(null)
     setPairingCode(null)
+    setPairingCodeCopied(false)
     try {
       const result = await invokeInbox<{ qr_image?: string; pairing_code?: string; connection_state?: string; connection_selected?: boolean; connection_status?: 'pending' | 'active' | null; instance_exists?: boolean; connected?: boolean; error?: string }>({
         action: 'connect', business_id: businessId,
@@ -1383,6 +1404,10 @@ export function WhatsAppInboxPage() {
         setPairingError('Informe o número completo com DDI, por exemplo +55 21 99999-9999.')
         return
       }
+      if (result.error === 'pairing_restart_failed') {
+        setPairingError('Não foi possível reiniciar o pareamento. Verifique a conexão; se continuar, cancele o pareamento e comece novamente.')
+        return
+      }
       if (method === 'phone' && result.pairing_code) {
         setPairingCode(result.pairing_code)
         setConnectionState(result.connection_state ?? 'connecting')
@@ -1403,6 +1428,10 @@ export function WhatsAppInboxPage() {
       setInstanceExists(true)
       setWebhookFeedback('Evolution pronta. Escaneie o QR Code com o WhatsApp para concluir a conexão.')
     } catch (error) {
+      if (error instanceof InboxRequestError && error.code === 'pairing_restart_failed') {
+        setPairingError('Não foi possível reiniciar o pareamento. Verifique a conexão; se continuar, cancele o pareamento e comece novamente.')
+        return
+      }
       if (error instanceof InboxRequestError && error.code === 'connection_must_be_archived_first') {
         setConnectionSelected(true)
         setConnectionStatus('active')
@@ -1510,21 +1539,22 @@ export function WhatsAppInboxPage() {
   const showConversationListRefreshing = listRefreshing
     && loadedListScope === currentListScope && conversations.length > 0
   const normalizedConnectionState = normalizeConnectionState(connectionState)
-  const canStartWhatsAppPairing = isWhatsAppExplicitlyDisconnected(connectionState)
   const mustArchiveCurrentConnection = connectionSelected && connectionStatus === 'active'
+  const hasPendingWhatsAppPairing = connectionSelected && connectionStatus === 'pending' && !mustArchiveCurrentConnection
+  const canStartWhatsAppPairing = isWhatsAppExplicitlyDisconnected(connectionState) || hasPendingWhatsAppPairing
 
   const disconnectedScreen = (
     <section className="whatsapp-disconnected" aria-label="Conexão WhatsApp">
       <div ref={connectionBannerRef} aria-label="Status da conexão WhatsApp" className="surface-panel whatsapp-connection-banner" tabIndex={-1}>
         <span className="whatsapp-connection-dot" aria-hidden="true" />
-        <div><strong>Evolution API</strong><span>{connectionStateLabel(connectionState)}</span></div>
-        {webhookFeedback && <span className="whatsapp-webhook-feedback">{webhookFeedback}</span>}
-        {role === 'owner' && normalizedConnectionState === 'unavailable' && <button className="button button-secondary" disabled={connectionChecking} onClick={() => void handleCheckConnection()} type="button">{connectionChecking ? 'Verificando…' : 'Verificar conexão'}</button>}
-        {role === 'owner' && !canStartWhatsAppPairing && normalizedConnectionState !== 'unavailable' && <button className="button button-secondary" disabled={connectionChecking} onClick={() => void handleCheckConnection()} type="button">{connectionChecking ? 'Verificando…' : 'Verificar conexão'}</button>}
-        {role === 'owner' && mustArchiveCurrentConnection && <button className="button button-primary" disabled={disconnecting || pairingLoading} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Trocar número</button>}
-        {role === 'owner' && canStartWhatsAppPairing && !mustArchiveCurrentConnection && <button className="button button-primary" disabled={pairingLoading} onClick={() => { setPairingError(null); setWebhookFeedback(null); setPhonePairingOpen(false); setPairingMethodsOpen(true) }} type="button">{pairingLoading ? 'Preparando…' : connectionSelected ? 'Continuar pareamento' : 'Criar e conectar WhatsApp'}</button>}
-        {role === 'owner' && connectionSelected && !mustArchiveCurrentConnection && <button className="button button-secondary" disabled={disconnecting || pairingLoading} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Cancelar pareamento</button>}
-        {role === 'owner' && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
+        <div className="whatsapp-connection-status"><strong>Evolution API</strong><span>{connectionStateLabel(connectionState)}</span>{webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}</div>
+        <div className="whatsapp-connection-actions">
+          {role === 'owner' && (normalizedConnectionState === 'unavailable' || hasPendingWhatsAppPairing || !isWhatsAppExplicitlyDisconnected(connectionState)) && <button className="button button-secondary" disabled={connectionChecking} onClick={() => void handleCheckConnection()} type="button">{connectionChecking ? 'Verificando…' : 'Verificar conexão'}</button>}
+          {role === 'owner' && mustArchiveCurrentConnection && <button className="button button-primary" disabled={disconnecting || pairingLoading} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Trocar número</button>}
+          {role === 'owner' && canStartWhatsAppPairing && !mustArchiveCurrentConnection && <button className="button button-primary" disabled={pairingLoading} onClick={() => { setPairingError(null); setWebhookFeedback(null); setPhonePairingOpen(false); setPairingMethodsOpen(true) }} type="button">{pairingLoading ? 'Preparando…' : connectionSelected ? 'Continuar pareamento' : 'Criar e conectar WhatsApp'}</button>}
+          {role === 'owner' && connectionSelected && !mustArchiveCurrentConnection && <button className="button button-secondary" disabled={disconnecting || pairingLoading} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Cancelar pareamento</button>}
+          {role === 'owner' && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
+        </div>
       </div>
 
       <section className="surface-panel whatsapp-disconnected-card" aria-labelledby="whatsapp-disconnected-title">
@@ -1555,13 +1585,18 @@ export function WhatsAppInboxPage() {
 
         {role === 'owner' && phonePairingOpen && <section className="whatsapp-phone-pairing" aria-labelledby="whatsapp-phone-pairing-title">
           <div className="whatsapp-pairing-heading"><h3 id="whatsapp-phone-pairing-title">Parear pelo celular</h3><button className="text-button" onClick={() => { setPhonePairingOpen(false); setPairingMethodsOpen(true); setPairingCode(null) }} type="button">Voltar às opções</button></div>
-          <p>Informe o número com DDI. No WhatsApp desse celular, abra <strong>Aparelhos conectados</strong> e escolha <strong>Conectar com número de telefone</strong>.</p>
+          <p>Informe o número com DDI. No celular desse número, abra o WhatsApp (Android: menu ⋮; iPhone: Ajustes) e siga <strong>Aparelhos conectados → Conectar aparelho → Conectar com número de telefone</strong>, em vez de ler um QR Code. Depois digite o código mostrado aqui.</p>
           <form onSubmit={(event) => { event.preventDefault(); void handleConnectWhatsApp('phone') }}>
             <label htmlFor="whatsapp-pairing-phone">Número do WhatsApp com DDI</label>
             <input autoComplete="tel" id="whatsapp-pairing-phone" inputMode="tel" onChange={(event) => setPairingPhone(event.target.value)} placeholder="+55 21 99999-9999" required type="tel" value={pairingPhone} />
             <button className="button button-primary" disabled={pairingLoading || !pairingPhone.trim()} type="submit">{pairingLoading ? 'Gerando código…' : 'Gerar código de pareamento'}</button>
           </form>
-          {pairingCode && <div className="whatsapp-pairing-code" role="status"><span>Código de pareamento</span><strong>{pairingCode}</strong><small>Digite este código no WhatsApp do número informado. A conexão será confirmada automaticamente.</small></div>}
+          {pairingCode && <div className="whatsapp-pairing-code" role="status" aria-live="polite">
+            <span>Código de pareamento</span>
+            <strong aria-label={`Código ${pairingCode}`}>{pairingCode}</strong>
+            <button className="button button-secondary" onClick={() => void handleCopyPairingCode()} type="button">{pairingCodeCopied ? 'Código copiado' : 'Copiar código'}</button>
+            <small>Use este código no WhatsApp do número informado. Se estiver nesta página pelo próprio celular, alterne para o WhatsApp e volte aqui para conferir a conexão.</small>
+          </div>}
         </section>}
 
         {qrImage && <section className="surface-panel whatsapp-qr-panel" aria-labelledby="whatsapp-qr-title" aria-live="polite">
@@ -1595,10 +1630,11 @@ export function WhatsAppInboxPage() {
     <section className="whatsapp-inbox" aria-label="Caixa de entrada WhatsApp">
       <div className="surface-panel whatsapp-connection-banner">
         <span className={`whatsapp-connection-dot${isWhatsAppConnected(connectionState) ? ' is-connected' : ''}`} aria-hidden="true" />
-        <div><strong>Evolution API</strong><span role="status">{connectionStateLabel(connectionState)}</span></div>
-        {webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}
-        {role === 'owner' && isWhatsAppConnected(connectionState) && <button className="button button-secondary" disabled={disconnecting} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Desconectar / trocar número</button>}
-        {role === 'owner' && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
+        <div className="whatsapp-connection-status"><strong>Evolution API</strong><span role="status">{connectionStateLabel(connectionState)}</span>{webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}</div>
+        <div className="whatsapp-connection-actions">
+          {role === 'owner' && isWhatsAppConnected(connectionState) && <button className="button button-secondary" disabled={disconnecting} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Desconectar / trocar número</button>}
+          {role === 'owner' && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
+        </div>
       </div>
       {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
       <aside className={`surface-panel whatsapp-conversation-panel${selectedId ? ' is-mobile-hidden' : ''}`} aria-label="Lista de conversas">
