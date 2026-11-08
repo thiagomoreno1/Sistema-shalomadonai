@@ -895,7 +895,24 @@ function normalizePairingPhone(value: unknown): string | null {
   const candidate = text(value, 40)
   if (!candidate || !/^\+?[\d\s().-]+$/.test(candidate)) return null
   const digits = candidate.replace(/\D/g, '')
-  return digits.length >= 8 && digits.length <= 15 ? digits : null
+  if (digits.length < 8 || digits.length > 15) return null
+  if (!candidate.trim().startsWith('+') && (digits.length === 10 || digits.length === 11)) return `55${digits}`
+  return digits
+}
+
+async function evolutionConnectionState(config: EvolutionConfig): Promise<string | null> {
+  const result = await evolutionRequest(config, `/instance/connectionState/${encodeURIComponent(config.instanceName)}`)
+  const instance = isRecord(result) && isRecord(result.instance) ? result.instance : isRecord(result) ? result : {}
+  return text(instance.state ?? instance.connectionStatus ?? instance.connection_state ?? instance.status, 64)?.toLowerCase() ?? null
+}
+
+async function waitForEvolutionConnectionState(config: EvolutionConfig, wanted: 'close' | 'open'): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const state = await evolutionConnectionState(config)
+    if (state === wanted || (wanted === 'close' && state === 'closed')) return true
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  return false
 }
 
 function displayPhone(value: unknown): string | null {
@@ -1914,6 +1931,32 @@ export default {
         try { await setEvolutionWebhook(connectionConfig) } catch (error) {
           logWebhookSetupFailure('connect', error)
           return json({ error: 'webhook_setup_failed', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'close' })
+        }
+        if (pairingMethod === 'phone') {
+          const providerState = await evolutionConnectionState(connectionConfig).catch(() => null)
+          if (providerState === 'connecting') {
+            // Recheck immediately before logout: the phone may have completed
+            // pairing after the first state read. Never log out a new session.
+            const stateBeforeReset = await evolutionConnectionState(connectionConfig).catch(() => null)
+            if (stateBeforeReset === 'connecting') {
+              try {
+                await evolutionRequest(connectionConfig, `/instance/logout/${encodeURIComponent(connectionConfig.instanceName)}`, { method: 'DELETE' })
+              } catch {
+                return json({ error: 'pairing_restart_failed', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting' })
+              }
+              const stopped = await waitForEvolutionConnectionState(connectionConfig, 'close').catch(() => false)
+              if (!stopped) {
+                const stateAfterReset = await evolutionConnectionState(connectionConfig).catch(() => null)
+                if (stateAfterReset !== 'open') {
+                  return json({ error: 'pairing_restart_failed', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting' })
+                }
+              }
+            } else if (stateBeforeReset !== 'open' && stateBeforeReset !== 'close' && stateBeforeReset !== 'closed') {
+              return json({ error: 'pairing_restart_failed', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting' })
+            }
+          } else if (providerState !== 'open' && providerState !== 'close' && providerState !== 'closed') {
+            return json({ error: 'pairing_restart_failed', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting' })
+          }
         }
         let result: unknown
         const connectPath = `/instance/connect/${encodeURIComponent(connectionConfig.instanceName)}${pairingPhone ? `?number=${encodeURIComponent(pairingPhone)}` : ''}`
