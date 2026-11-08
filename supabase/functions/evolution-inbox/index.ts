@@ -6,7 +6,10 @@ const OLDER_MESSAGE_PAGE_SIZE = 50
 const LEGACY_CHAT_PAGE_SIZE = 25
 const CONTACT_DIRECTORY_PAGE_SIZE = 50
 const CONTACT_NAME_MAX_PAGES = 20
-const LEGACY_SYNC_COOLDOWN_MS = 60_000
+// The provider fills its chat/message tables asynchronously after pairing.
+// Refresh this cache before the inbox's 30s poll so an empty/partial first
+// response does not hide conversations that arrive during history sync.
+const LEGACY_SYNC_COOLDOWN_MS = 15_000
 const CONTACT_NAMES_COOLDOWN_MS = 60_000
 const CONTACT_IDENTITY_RECONCILE_COOLDOWN_MS = 30_000
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024

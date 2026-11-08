@@ -8,8 +8,8 @@ type InboxStatus = 'open' | 'resolved' | 'all'
 type ContactListSegment = 'customers' | 'conversations' | 'hidden'
 type ContactClassification = 'unclassified' | 'customer' | 'personal'
 
-function conversationScopeKey(status: InboxStatus, search: string, segment: ContactListSegment): string {
-  return JSON.stringify([status, search, segment])
+function conversationScopeKey(status: InboxStatus, search: string, segment: ContactListSegment, generation = 0): string {
+  return JSON.stringify([status, search, segment, generation])
 }
 type Attachment = {
   id: string
@@ -603,6 +603,7 @@ export function WhatsAppInboxPage() {
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [status, setStatus] = useState<InboxStatus>('open')
   const [segment, setSegment] = useState<ContactListSegment>('conversations')
+  const [inboxGeneration, setInboxGeneration] = useState(0)
   const [view, setView] = useState<'conversations' | 'calls'>(() => searchParams.get('view') === 'calls' ? 'calls' : 'conversations')
   const [calls, setCalls] = useState<CallEvent[]>([])
   const [callsLoading, setCallsLoading] = useState(false)
@@ -654,8 +655,10 @@ export function WhatsAppInboxPage() {
   const refreshScopeInFlight = useRef<{ scope: string; requestId: number } | null>(null)
   const listRequest = useRef(0)
   const callsRequest = useRef(0)
-  const activeListScope = useRef(conversationScopeKey(status, search, segment))
-  const currentListScope = conversationScopeKey(status, search, segment)
+  const inboxGenerationRef = useRef(0)
+  const businessContextRequest = useRef(0)
+  const activeListScope = useRef(conversationScopeKey(status, search, segment, inboxGeneration))
+  const currentListScope = conversationScopeKey(status, search, segment, inboxGeneration)
   const businessContextLoaded = useRef(false)
 
   useEffect(() => {
@@ -709,12 +712,14 @@ export function WhatsAppInboxPage() {
 
   const loadBusinessContext = useCallback(async () => {
     if (!configured || !supabaseClient) return
+    const requestId = ++businessContextRequest.current
     if (!businessContextLoaded.current) setLinkLoading(true)
     try {
       const [customersResult, linksResult] = await Promise.all([
         supabaseClient.from('customers').select('id, name, phone, whatsapp_phone').eq('business_id', businessId).eq('is_active', true).order('name', { ascending: true }),
         supabaseClient.from('whatsapp_conversation_contexts').select('conversation_id, customer_id, order_id, match_method').eq('business_id', businessId),
       ])
+      if (requestId !== businessContextRequest.current) return
       if (customersResult.error || linksResult.error) {
         setLinkError('Não foi possível carregar os vínculos com clientes e pedidos.')
       } else {
@@ -723,16 +728,19 @@ export function WhatsAppInboxPage() {
         setLinkError(null)
       }
     } catch {
-      setLinkError('Não foi possível carregar os vínculos com clientes e pedidos.')
+      if (requestId === businessContextRequest.current) setLinkError('Não foi possível carregar os vínculos com clientes e pedidos.')
     } finally {
-      businessContextLoaded.current = true
-      setLinkLoading(false)
+      if (requestId === businessContextRequest.current) {
+        businessContextLoaded.current = true
+        setLinkLoading(false)
+      }
     }
   }, [businessId, configured])
 
   const loadConversations = useCallback(async (page = 1, append = false) => {
     if (!configured || !isWhatsAppConnected(connectionState)) return
-    const requestScope = conversationScopeKey(status, search, segment)
+    const generation = inboxGenerationRef.current
+    const requestScope = conversationScopeKey(status, search, segment, generation)
     if (requestScope !== activeListScope.current) return
     const requestId = ++listRequest.current
     setListLoading(true)
@@ -741,7 +749,7 @@ export function WhatsAppInboxPage() {
       const result = await invokeInbox<ConversationListResponse>({
         action: 'list', business_id: businessId, status, segment, page, query: search || undefined,
       })
-      if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
+      if (requestId !== listRequest.current || generation !== inboxGenerationRef.current || requestScope !== activeListScope.current) return
       const next = result.conversations ?? []
       setConversations((current) => uniqueConversations(append ? [...current, ...next] : next))
       setLoadedListScope(requestScope)
@@ -749,17 +757,18 @@ export function WhatsAppInboxPage() {
       setHasMore(result.meta?.has_more ?? next.length >= 25)
       setHistorySyncNotice(result.meta?.history_sync?.notice ?? null)
     } catch {
-      if (requestId === listRequest.current && requestScope === activeListScope.current) {
+      if (requestId === listRequest.current && generation === inboxGenerationRef.current && requestScope === activeListScope.current) {
         setListError('Não foi possível carregar as conversas. Tente novamente.')
       }
     } finally {
-      if (requestId === listRequest.current) setListLoading(false)
+      if (requestId === listRequest.current && generation === inboxGenerationRef.current) setListLoading(false)
     }
-  }, [businessId, configured, connectionState, search, segment, status])
+  }, [businessId, configured, connectionState, inboxGeneration, search, segment, status])
 
   const refreshLoadedConversations = useCallback(async () => {
     if (!configured || !isWhatsAppConnected(connectionState)) return
-    const requestScope = conversationScopeKey(status, search, segment)
+    const generation = inboxGenerationRef.current
+    const requestScope = conversationScopeKey(status, search, segment, generation)
     if (requestScope !== activeListScope.current) return
     if (refreshScopeInFlight.current?.scope === requestScope) return
     const requestId = ++listRequest.current
@@ -776,7 +785,7 @@ export function WhatsAppInboxPage() {
         const result = await invokeInbox<ConversationListResponse>({
           action: 'list', business_id: businessId, status, segment, page: currentPage, query: search || undefined,
         })
-        if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
+        if (requestId !== listRequest.current || generation !== inboxGenerationRef.current || requestScope !== activeListScope.current) return
         const pageRows = result.conversations ?? []
         combined.push(...pageRows)
         morePages = result.meta?.has_more ?? pageRows.length >= 25
@@ -784,7 +793,7 @@ export function WhatsAppInboxPage() {
         if (currentPage >= finalPage || !morePages) break
         currentPage += 1
       }
-      if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
+      if (requestId !== listRequest.current || generation !== inboxGenerationRef.current || requestScope !== activeListScope.current) return
       const refreshedConversations = uniqueConversations(combined)
       setConversations(refreshedConversations)
       setLoadedListScope(requestScope)
@@ -794,23 +803,23 @@ export function WhatsAppInboxPage() {
         const result = await invokeInbox<{ conversation?: Conversation }>({
           action: 'conversation', business_id: businessId, conversationId: selectedId,
         })
-        if (requestId !== listRequest.current || requestScope !== activeListScope.current) return
+        if (requestId !== listRequest.current || generation !== inboxGenerationRef.current || requestScope !== activeListScope.current) return
         setSelectedConversation(result.conversation ?? null)
       } else {
         setSelectedConversation(null)
       }
     } catch {
-      if (requestId === listRequest.current && requestScope === activeListScope.current) {
+      if (requestId === listRequest.current && generation === inboxGenerationRef.current && requestScope === activeListScope.current) {
         setListError('Não foi possível atualizar as conversas. Tente novamente.')
       }
     } finally {
       if (refreshScopeInFlight.current?.requestId === requestId) refreshScopeInFlight.current = null
-      if (requestId === listRequest.current) {
+      if (requestId === listRequest.current && generation === inboxGenerationRef.current) {
         setListLoading(false)
         setListRefreshing(false)
       }
     }
-  }, [businessId, configured, connectionState, listPage, search, segment, selectedId, status])
+  }, [businessId, configured, connectionState, inboxGeneration, listPage, search, segment, selectedId, status])
 
   useEffect(() => {
     let active = true
@@ -860,7 +869,6 @@ export function WhatsAppInboxPage() {
         const result = await invokeInbox<{ configured?: boolean; connected?: boolean; connection_selected?: boolean; connection_status?: 'pending' | 'active' | null; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId })
         if (!active || requestId !== connectionStatusRequest.current) return
         const nextState = connectionStateFromStatus(result)
-        const becameConnected = isWhatsAppConnected(nextState) && !isWhatsAppConnected(connectionState)
         setConnectionState(nextState)
         setConnectionSelected(result.connection_selected === true)
         setConnectionStatus(result.connection_status ?? null)
@@ -869,7 +877,6 @@ export function WhatsAppInboxPage() {
           setQrImage(null)
           setPairingCode(null)
           setPairingError(null)
-          if (becameConnected || qrImage || pairingCode) void refreshLoadedConversations()
         }
       } catch {
         if (active && requestId === connectionStatusRequest.current) setConnectionState((current) => isWhatsAppConnected(current) ? current : 'unavailable')
@@ -888,25 +895,30 @@ export function WhatsAppInboxPage() {
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [businessId, configured, connectionState, pairingCode, qrImage, refreshLoadedConversations])
+  }, [businessId, configured, connectionState])
 
-  useEffect(() => { if (configured && isWhatsAppConnected(connectionState)) void loadConversations() }, [configured, connectionState, loadConversations])
+  useEffect(() => {
+    if (!configured || !isWhatsAppConnected(connectionState)) return
+    void loadConversations()
+    void loadBusinessContext()
+  }, [configured, connectionState, inboxGeneration, loadBusinessContext, loadConversations])
   useEffect(() => { setView(searchParams.get('view') === 'calls' ? 'calls' : 'conversations') }, [searchParams])
   const loadCalls = useCallback(async () => {
     if (!configured || !isWhatsAppConnected(connectionState)) return
+    const generation = inboxGenerationRef.current
     const requestId = ++callsRequest.current
     setCallsLoading(true)
     setCallsError(null)
     try {
       const result = await invokeInbox<CallListResponse>({ action: 'calls', business_id: businessId })
-      if (requestId !== callsRequest.current) return
+      if (requestId !== callsRequest.current || generation !== inboxGenerationRef.current) return
       setCalls(result.calls ?? [])
     } catch {
-      if (requestId === callsRequest.current) setCallsError('Não foi possível carregar o registro de chamadas.')
+      if (requestId === callsRequest.current && generation === inboxGenerationRef.current) setCallsError('Não foi possível carregar o registro de chamadas.')
     } finally {
-      if (requestId === callsRequest.current) setCallsLoading(false)
+      if (requestId === callsRequest.current && generation === inboxGenerationRef.current) setCallsLoading(false)
     }
-  }, [businessId, configured, connectionState])
+  }, [businessId, configured, connectionState, inboxGeneration])
   useEffect(() => { if (configured && isWhatsAppConnected(connectionState) && view === 'calls') void loadCalls() }, [configured, connectionState, loadCalls, view])
   useEffect(() => {
     if (!configured || !isWhatsAppConnected(connectionState) || view !== 'calls') return
@@ -922,8 +934,6 @@ export function WhatsAppInboxPage() {
     }, 30_000)
     return () => window.clearInterval(interval)
   }, [configured, connectionState, loadBusinessContext, refreshLoadedConversations])
-
-  useEffect(() => { void loadBusinessContext() }, [loadBusinessContext])
 
   useEffect(() => {
     if (detailLoading || selectedConversation?.id !== selectedId) return
@@ -941,6 +951,8 @@ export function WhatsAppInboxPage() {
     }
     let active = true
     const request = ++detailRequest.current
+    const generation = inboxGenerationRef.current
+    const isCurrentRequest = () => active && detailRequest.current === request && generation === inboxGenerationRef.current
     async function loadConversation() {
       setSelectedConversation(null)
       setDetailLoading(true)
@@ -950,22 +962,26 @@ export function WhatsAppInboxPage() {
       setOlderMessagesNotice(null)
       try {
         const result = await invokeInbox<ConversationDetailResponse>({ action: 'conversation', business_id: businessId, conversationId: selectedId })
+        if (!isCurrentRequest()) return
         let conversation = result.conversation ?? null
-        if (active && detailRequest.current === request) setHistoryHasMore(result.meta?.has_more === true)
-        if (active && detailRequest.current === request && conversation && conversation.unread_count > 0) {
+        setHistoryHasMore(result.meta?.has_more === true)
+        if (conversation && conversation.unread_count > 0) {
           try {
             const readResult = await invokeInbox<{ conversation?: Conversation }>({ action: 'mark_read', business_id: businessId, conversationId: selectedId })
+            if (!isCurrentRequest()) return
             conversation = readResult.conversation ?? { ...conversation, unread_count: 0 }
-            setConversations((current) => current.map((item) => item.id === selectedId ? { ...item, unread_count: 0 } : item))
+            setConversations((current) => isCurrentRequest()
+              ? current.map((item) => item.id === selectedId ? { ...item, unread_count: 0 } : item)
+              : current)
           } catch {
-            setActionError('A conversa abriu, mas não foi possível atualizar o estado de leitura.')
+            if (isCurrentRequest()) setActionError('A conversa abriu, mas não foi possível atualizar o estado de leitura.')
           }
         }
-        if (active && detailRequest.current === request) setSelectedConversation(conversation)
+        if (isCurrentRequest()) setSelectedConversation(conversation)
       } catch {
-        if (active && detailRequest.current === request) setDetailError('Não foi possível abrir esta conversa. Atualize a lista e tente novamente.')
+        if (isCurrentRequest()) setDetailError('Não foi possível abrir esta conversa. Atualize a lista e tente novamente.')
       } finally {
-        if (active && detailRequest.current === request) setDetailLoading(false)
+        if (isCurrentRequest()) setDetailLoading(false)
       }
     }
     void loadConversation()
@@ -1025,6 +1041,12 @@ export function WhatsAppInboxPage() {
 
   async function handleLoadOlderMessages() {
     if (!currentConversation || !historyHasMore || olderMessagesLoading) return
+    const conversationId = currentConversation.id
+    const generation = inboxGenerationRef.current
+    const detailRequestId = detailRequest.current
+    const isCurrentRequest = () => generation === inboxGenerationRef.current
+      && selectedId === conversationId
+      && detailRequest.current === detailRequestId
     const beforeMessageId = currentConversation.messages[0]?.id
     if (!beforeMessageId) {
       setHistoryHasMore(false)
@@ -1041,10 +1063,11 @@ export function WhatsAppInboxPage() {
         conversationId: currentConversation.id,
         beforeMessageId,
       })
+      if (!isCurrentRequest()) return
       const olderMessages = result.messages ?? []
       setOlderMessagesNotice(result.meta?.notice ?? (olderMessages.length === 0 ? 'Não há mensagens anteriores disponíveis nesta conversa.' : null))
       setSelectedConversation((current) => {
-        if (!current || current.id !== currentConversation.id) return current
+        if (!isCurrentRequest() || !current || current.id !== conversationId) return current
         const knownIds = new Set(current.messages.map((message) => message.id))
         const combined = [...olderMessages.filter((message) => !knownIds.has(message.id)), ...current.messages]
         combined.sort((left, right) => (left.created_at ?? '').localeCompare(right.created_at ?? '') || left.id.localeCompare(right.id))
@@ -1052,13 +1075,15 @@ export function WhatsAppInboxPage() {
       })
       setHistoryHasMore(result.meta?.has_more === true && olderMessages.length > 0)
       window.requestAnimationFrame(() => {
-        if (historyElement) historyElement.scrollTop += historyElement.scrollHeight - previousScrollHeight
+        if (isCurrentRequest() && historyElement) historyElement.scrollTop += historyElement.scrollHeight - previousScrollHeight
       })
     } catch {
-      setOlderMessagesError('Não foi possível carregar mensagens anteriores. Tente novamente.')
-      setOlderMessagesNotice(null)
+      if (isCurrentRequest()) {
+        setOlderMessagesError('Não foi possível carregar mensagens anteriores. Tente novamente.')
+        setOlderMessagesNotice(null)
+      }
     } finally {
-      setOlderMessagesLoading(false)
+      if (isCurrentRequest()) setOlderMessagesLoading(false)
     }
   }
 
@@ -1147,7 +1172,7 @@ export function WhatsAppInboxPage() {
   }, [currentConversation])
 
   function changeStatusFilter(nextStatus: InboxStatus) {
-    const nextScope = conversationScopeKey(nextStatus, search, segment)
+    const nextScope = conversationScopeKey(nextStatus, search, segment, inboxGeneration)
     if (nextScope === activeListScope.current) return
     activeListScope.current = nextScope
     refreshScopeInFlight.current = null
@@ -1163,7 +1188,7 @@ export function WhatsAppInboxPage() {
   }
 
   function changeContactSegment(nextSegment: ContactListSegment) {
-    const nextScope = conversationScopeKey(status, search, nextSegment)
+    const nextScope = conversationScopeKey(status, search, nextSegment, inboxGeneration)
     if (nextScope === activeListScope.current) return
     activeListScope.current = nextScope
     refreshScopeInFlight.current = null
@@ -1182,7 +1207,7 @@ export function WhatsAppInboxPage() {
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const nextSearch = searchInput.trim()
-    const nextScope = conversationScopeKey(status, nextSearch, segment)
+    const nextScope = conversationScopeKey(status, nextSearch, segment, inboxGeneration)
     if (nextScope === activeListScope.current) {
       await refreshLoadedConversations()
       return
@@ -1353,8 +1378,46 @@ export function WhatsAppInboxPage() {
     }
   }
 
+  function resetInboxForConnectionChange() {
+    const nextGeneration = inboxGenerationRef.current + 1
+    inboxGenerationRef.current = nextGeneration
+    setInboxGeneration(nextGeneration)
+    activeListScope.current = conversationScopeKey(status, search, segment, nextGeneration)
+    businessContextRequest.current += 1
+    businessContextLoaded.current = false
+    listRequest.current += 1
+    callsRequest.current += 1
+    detailRequest.current += 1
+    refreshScopeInFlight.current = null
+
+    setConversations([])
+    setLoadedListScope(null)
+    setListPage(1)
+    setHasMore(false)
+    setListLoading(false)
+    setListRefreshing(false)
+    setListError(null)
+    setHistorySyncNotice(null)
+    setCalls([])
+    setCallsLoading(false)
+    setCallsError(null)
+    setSelectedId(null)
+    setSelectedConversation(null)
+    setDetailLoading(false)
+    setDetailError(null)
+    setHistoryHasMore(false)
+    setOlderMessagesLoading(false)
+    setOlderMessagesError(null)
+    setOlderMessagesNotice(null)
+    setLinks({})
+    setLinkLoading(false)
+    setLinkError(null)
+    setLinkMessage(null)
+  }
+
   async function handleConnectWhatsApp(method: 'qr' | 'phone' = 'qr') {
     if (role !== 'owner' || pairingLoading) return
+    resetInboxForConnectionChange()
     connectionStatusRequest.current += 1
     setPairingLoading(true)
     setPairingError(null)
@@ -1378,7 +1441,6 @@ export function WhatsAppInboxPage() {
         setConnectionState(result.connection_state ?? 'open')
         setPairingError(null)
         setWebhookFeedback('WhatsApp já está conectado. As conversas serão atualizadas agora.')
-        await refreshLoadedConversations()
         return
       }
       if (result.error === 'webhook_setup_failed') {
@@ -1479,14 +1541,7 @@ export function WhatsAppInboxPage() {
       setWebhookFeedback(result.provider_logout_failed
         ? 'A caixa foi arquivada e isolada. A Evolution estava indisponível, então a sessão antiga pode precisar ser encerrada no provedor.'
         : 'Número desconectado. O histórico foi arquivado; conecte o novo número para abrir uma caixa separada.')
-      setSelectedId(null)
-      setSelectedConversation(null)
-      listRequest.current += 1
-      callsRequest.current += 1
-      refreshScopeInFlight.current = null
-      setListLoading(false)
-      setListRefreshing(false)
-      setCallsLoading(false)
+      resetInboxForConnectionChange()
       setDisconnectConfirmationOpen(false)
     } catch {
       setPairingError('Não foi possível desconectar o número. Confira se a Evolution está acessível e tente novamente.')
