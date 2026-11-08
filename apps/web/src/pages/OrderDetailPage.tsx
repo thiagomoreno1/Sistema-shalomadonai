@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { Link, useLocation, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { businessLocalDateTimeToIso, businessToday, formatBRL, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
@@ -84,8 +84,9 @@ function formatOrderTimestamp(value: string, withTime = false) {
 
 export function OrderDetailPage() {
   const { orderId = '' } = useParams()
-  const { id: businessId } = useBusiness()
+  const { id: businessId, role } = useBusiness()
   const location = useLocation()
+  const navigate = useNavigate()
   const locationState = location.state as LocationState
   const [order, setOrder] = useState<Order | null>(null)
   const [lines, setLines] = useState<OrderLine[]>([])
@@ -116,6 +117,8 @@ export function OrderDetailPage() {
   const [showCancelForm, setShowCancelForm] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
   const [cancelSaving, setCancelSaving] = useState(false)
+  const [showDeleteForm, setShowDeleteForm] = useState(false)
+  const [deleteSaving, setDeleteSaving] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [showPickupForm, setShowPickupForm] = useState(false)
   const [pickupPreviewLoading, setPickupPreviewLoading] = useState(false)
@@ -249,6 +252,10 @@ export function OrderDetailPage() {
 
   const receivedCents = payments.reduce((sum, payment) => sum + payment.amount_cents, 0)
   const outstandingCents = order?.status === 'open' ? Math.max(0, (order?.total_cents ?? 0) - receivedCents) : 0
+  const deleteEligible = role === 'owner'
+    && payments.length === 0
+    && !pickupEvent
+    && (!delivery || delivery.status === 'awaiting_separation' || delivery.status === 'ready')
   const today = businessToday()
   const paidByInstallment = useMemo(() => {
     const result = new Map<string, number>()
@@ -532,6 +539,31 @@ export function OrderDetailPage() {
     }
   }
 
+  async function handleDeleteSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!supabaseClient || !order || deleteSaving) return
+    setDeleteSaving(true)
+    setActionError(null)
+    try {
+      const { error: rpcError } = await supabaseClient.rpc('delete_unfulfilled_order', {
+        p_business_id: businessId,
+        p_order_id: order.id,
+      })
+      if (rpcError) {
+        setActionError(rpcError.message.includes('order_delete_has_side_effects')
+          ? 'Este pedido já tem pagamento, movimentação de estoque, entrega avançada ou vínculo com atendimento. Ele foi preservado; use o cancelamento quando permitido.'
+          : 'Não foi possível excluir o pedido. Atualize o histórico e tente novamente.')
+        await loadDetail(false)
+        return
+      }
+      navigate('/pedidos', { replace: true, state: { successMessage: 'Pedido excluído.' } })
+    } catch {
+      setActionError('Não consegui confirmar a exclusão. Volte à lista de pedidos e confira se ele ainda aparece antes de tentar novamente.')
+    } finally {
+      setDeleteSaving(false)
+    }
+  }
+
   if (loading) return <p className="inline-state" aria-live="polite">Carregando pedido…</p>
   if (error || !order) {
     return (
@@ -555,6 +587,7 @@ export function OrderDetailPage() {
           {order.status === 'open' && <Link className="button button-secondary" to={`/pedidos/novo?origem=${encodeURIComponent(order.id)}`}>Criar pedido parecido</Link>}
           {order.status === 'open' && outstandingCents > 0 && <button className="button button-primary" onClick={startPayment} type="button"><Icon name="coin" /> Registrar recebimento</button>}
           {order.status === 'open' && payments.length === 0 && !pickupEvent && <button className="button button-secondary order-cancel-trigger" onClick={() => { setShowCancelForm((current) => !current); setActionError(null) }} type="button">{showCancelForm ? 'Fechar cancelamento' : 'Cancelar pedido'}</button>}
+          {deleteEligible && <button className="button button-secondary order-delete-trigger" disabled={deleteSaving} onClick={() => { setShowDeleteForm((current) => !current); setActionError(null) }} type="button">{showDeleteForm ? 'Fechar exclusão' : 'Excluir pedido'}</button>}
         </div>
       </header>
 
@@ -573,6 +606,14 @@ export function OrderDetailPage() {
           <p className="section-footnote">Um pedido com qualquer recebimento não pode ser cancelado nesta etapa. O registro será preservado no histórico.</p>
           <label className="record-field"><span className="field-label">Motivo <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" disabled={cancelSaving} maxLength={1000} onChange={(event) => setCancelReason(event.target.value)} rows={2} value={cancelReason} /></label>
           <div className="record-form-actions"><button className="button button-secondary order-cancel-confirm" disabled={cancelSaving} type="submit">{cancelSaving ? 'Cancelando…' : 'Confirmar cancelamento'}</button><button className="text-button" disabled={cancelSaving} onClick={() => setShowCancelForm(false)} type="button">Manter pedido</button></div>
+        </form>
+      )}
+
+      {showDeleteForm && deleteEligible && (
+        <form className="surface-panel record-form order-delete-form" onSubmit={handleDeleteSubmit}>
+          <p className="eyebrow">EXCLUSÃO DEFINITIVA</p><h2>Apagar este pedido?</h2>
+          <p className="section-footnote">O pedido e os registros de planejamento serão removidos. Só é permitido apagar antes de haver pagamento, baixa de estoque, retirada, entrega avançada ou vínculo com atendimento/WhatsApp.</p>
+          <div className="record-form-actions"><button className="button button-secondary order-delete-confirm" disabled={deleteSaving} type="submit">{deleteSaving ? 'Excluindo…' : 'Apagar pedido definitivamente'}</button><button className="text-button" disabled={deleteSaving} onClick={() => setShowDeleteForm(false)} type="button">Manter pedido</button></div>
         </form>
       )}
 

@@ -74,9 +74,9 @@ export function SignInPage() {
         <div className="auth-intro-footer"><Icon name="shield" /> Acesso protegido à operação</div>
       </aside>
 
-      <section className="auth-panel" aria-labelledby="auth-title">
+      <section className="auth-panel auth-signin-panel" aria-labelledby="auth-title">
         <div className="auth-theme-toggle-wrap"><ThemeToggle /></div>
-        <div className="auth-form-wrap">
+        <div className="auth-form-wrap auth-signin-form">
           <div className="brand-lockup auth-mobile-brand">
             <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
             <span><strong>Shalom Adonai</strong><small>Operação</small></span>

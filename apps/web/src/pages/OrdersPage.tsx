@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { formatBRL } from '../lib/formatters'
@@ -17,6 +17,7 @@ type Order = {
 type Payment = { order_id: string; amount_cents: number }
 
 type OrderSummary = Order & { received_cents: number; outstanding_cents: number; has_pickup: boolean }
+type OrdersLocationState = { successMessage?: string } | null
 
 function formatOrderDate(value: string) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeZone: 'America/Sao_Paulo' }).format(new Date(value))
@@ -24,6 +25,8 @@ function formatOrderDate(value: string) {
 
 export function OrdersPage() {
   const { id: businessId } = useBusiness()
+  const location = useLocation()
+  const locationState = location.state as OrdersLocationState
   const [orders, setOrders] = useState<OrderSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -134,6 +137,8 @@ export function OrdersPage() {
         </div>
         <Link className="button button-primary" to="/pedidos/novo"><Icon name="plus" /> Novo pedido</Link>
       </header>
+
+      {locationState?.successMessage && <p className="form-message form-message-success" role="status">{locationState.successMessage}</p>}
 
       <p className="section-footnote order-policy-note">Cada pedido informa quando o pagamento vence e quanto falta receber. Registrar um pagamento aqui não movimenta a conta bancária.</p>
 
