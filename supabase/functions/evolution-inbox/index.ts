@@ -894,6 +894,10 @@ function conversationResponse(
     ?? phoneFromWhatsAppJid(remoteJid ?? '')
   const fallbackName = stableConversationLabel(row, isGroup)
   const savedName = isGroup ? null : savedNameForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt)
+  const normalizedLastMessage = lastMessage ? normalizedMessage(lastMessage, savedContactNames) : null
+  const latestSenderName = !isGroup && normalizedLastMessage?.message_type === 'incoming'
+    ? displayableContactName(normalizedLastMessage.sender.name, phone)
+    : null
   const name = isGroup
     ? displayableContactName(row.display_name_override, null)
       ?? displayableContactName(groupMetadata?.subject, null)
@@ -902,6 +906,7 @@ function conversationResponse(
     : displayableContactName(row.display_name_override, phone)
       ?? displayableContactName(savedName, phone)
       ?? displayableContactName(row.contact_name, phone)
+      ?? latestSenderName
       ?? (phone ? null : fallbackName)
   return {
     id: row.id,
@@ -918,7 +923,7 @@ function conversationResponse(
     contact_classification: contactClassification(row.contact_classification),
     hidden_from_inbox: row.hidden_from_inbox === true,
     last_activity_at: row.last_activity_at,
-    last_message: lastMessage ? normalizedMessage(lastMessage, savedContactNames) : null,
+    last_message: normalizedLastMessage,
     messages: [],
   }
 }
@@ -1449,7 +1454,7 @@ function providerMessagePayload(value: unknown): JsonRecord | null {
   const fromMe = key.fromMe === true
   const participant = text(key.participant ?? key.participantAlt, 256)
   const participantAlt = text(key.participantAlt, 256)
-  if (group && senderName) metadata.sender_name = senderName
+  if (!fromMe && senderName) metadata.sender_name = senderName
   if (participant) metadata.participant_jid = participant
   if (participantAlt) metadata.participant_alt_jid = participantAlt
   if (kind === 'reaction' && isRecord(contentObject.key)) {
