@@ -2,6 +2,18 @@
 
 O Shalom conversa diretamente com a Evolution API. A caixa própria do Shalom recebe mensagens, anexos, atualizações de entrega e eventos de chamada por webhook. O Chatwoot não faz parte desse fluxo.
 
+## Contabo
+
+Use `compose.contabo.yaml` only as an overlay to the pinned `compose.yaml`. On the VPS, set `SERVER_URL` to `https://<VPS-IP>/evolution` and `CORS_ORIGIN` to the exact public origin of the Shalom app. Keep `EVOLUTION_API_KEY`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD` in a root-owned `.env` file with mode `0600`; never commit it.
+
+The production API binds only to `127.0.0.1:8081`. The Caddy site in `Caddyfile.contabo` routes `/evolution/*` to that loopback listener and keeps the database and Redis private. Apply the overlay with:
+
+```sh
+docker compose -p shalom-evolution-prod --env-file .env -f compose.yaml -f compose.contabo.yaml up -d
+```
+
+For a data migration, stop the source Evolution API before creating the final PostgreSQL dump and archiving `/evolution/instances`. Transfer both files over SSH, restore into the target PostgreSQL container, and copy the instance directory into the target volume before starting its API. Keep dumps and session archives out of Git and delete temporary copies after confirming the cutover.
+
 ## Subir a Evolution
 
 Abra o Docker Desktop e espere o Engine ficar pronto. Neste diretório:

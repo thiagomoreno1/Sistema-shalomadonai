@@ -1,0 +1,7 @@
+services:
+  evolution-api:
+    environment:
+      SERVER_URL: ${SERVER_URL:?Set SERVER_URL to the public HTTPS Evolution URL}
+      CORS_ORIGIN: ${CORS_ORIGIN:?Set CORS_ORIGIN to the Shalom app origin}
+      CORS_METHODS: GET,POST,PUT,DELETE
+      CORS_CREDENTIALS: "false"
