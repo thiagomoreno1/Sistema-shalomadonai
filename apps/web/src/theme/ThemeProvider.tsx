@@ -4,7 +4,7 @@ export type Theme = 'light' | 'dark'
 export type AccentColor = 'blue' | 'violet' | 'teal' | 'green' | 'rose' | 'amber'
 
 export const ACCENT_COLORS: { id: AccentColor; label: string; light: string; dark: string }[] = [
-  { id: 'blue', label: 'Azul', light: '#1769D2', dark: '#62A4FF' },
+  { id: 'blue', label: 'Azul', light: '#0A84FF', dark: '#64A9FF' },
   { id: 'violet', label: 'Violeta', light: '#7047C8', dark: '#B49AFF' },
   { id: 'teal', label: 'Turquesa', light: '#087E8B', dark: '#62D5DD' },
   { id: 'green', label: 'Verde', light: '#287A4B', dark: '#71D39A' },
@@ -14,7 +14,7 @@ export const ACCENT_COLORS: { id: AccentColor; label: string; light: string; dar
 
 const STORAGE_KEY = 'shalom-adonai-theme'
 const ACCENT_STORAGE_KEY = 'shalom-adonai-accent'
-const THEME_COLORS: Record<Theme, string> = { light: '#F5F1E8', dark: '#07172D' }
+const THEME_COLORS: Record<Theme, string> = { light: '#F3F4F6', dark: '#101114' }
 
 function readStoredAccent(): AccentColor {
   try {
@@ -43,10 +43,10 @@ function applyTheme(theme: Theme, accent: AccentColor) {
   const root = document.documentElement.style
   root.setProperty('--accent', value)
   root.setProperty('--accent-hover', theme === 'dark' ? `color-mix(in srgb, ${value} 78%, white)` : `color-mix(in srgb, ${value} 82%, black)`)
-  root.setProperty('--accent-soft', `color-mix(in srgb, ${value} ${theme === 'dark' ? '22%' : '12%'}, ${theme === 'dark' ? '#141D2A' : 'white'})`)
-  root.setProperty('--accent-wash', `color-mix(in srgb, ${value} ${theme === 'dark' ? '16%' : '7%'}, ${theme === 'dark' ? '#0B1018' : '#F4F7FB'})`)
-  root.setProperty('--action', theme === 'dark' ? `color-mix(in srgb, ${value} 48%, #14243A)` : value)
-  root.setProperty('--action-hover', theme === 'dark' ? `color-mix(in srgb, ${value} 62%, #14243A)` : `color-mix(in srgb, ${value} 82%, black)`)
+  root.setProperty('--accent-soft', `color-mix(in srgb, ${value} ${theme === 'dark' ? '22%' : '12%'}, ${theme === 'dark' ? '#1A1B20' : 'white'})`)
+  root.setProperty('--accent-wash', `color-mix(in srgb, ${value} ${theme === 'dark' ? '16%' : '7%'}, ${theme === 'dark' ? '#101114' : '#F3F4F6'})`)
+  root.setProperty('--action', theme === 'dark' ? `color-mix(in srgb, ${value} 48%, #141519)` : value)
+  root.setProperty('--action-hover', theme === 'dark' ? `color-mix(in srgb, ${value} 62%, #141519)` : `color-mix(in srgb, ${value} 82%, black)`)
   root.setProperty('--focus', value)
 }
 
