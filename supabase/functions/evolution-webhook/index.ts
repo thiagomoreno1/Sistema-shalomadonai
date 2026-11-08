@@ -4,7 +4,7 @@ const MAX_BODY_BYTES = 1_000_000
 
 type JsonRecord = Record<string, unknown>
 type AdminClient = SupabaseContext['supabaseAdmin']
-type WebhookConfiguration = { secret: string; instanceName: string; businessId: string }
+type WebhookConfiguration = { secret: string }
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -46,21 +46,14 @@ function json(body: unknown, status = 200): Response {
 }
 
 async function loadWebhookConfiguration(admin: AdminClient): Promise<WebhookConfiguration | null> {
-  const fromEnvironment = {
-    secret: Deno.env.get('EVOLUTION_WEBHOOK_SECRET')?.trim() ?? '',
-    instanceName: Deno.env.get('EVOLUTION_INSTANCE_NAME')?.trim() ?? '',
-    businessId: Deno.env.get('EVOLUTION_BUSINESS_ID')?.trim() ?? '',
-  }
-  if (fromEnvironment.secret && fromEnvironment.instanceName
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fromEnvironment.businessId)) return fromEnvironment
+  const environmentSecret = Deno.env.get('EVOLUTION_WEBHOOK_SECRET')?.trim() ?? ''
+  if (environmentSecret) return { secret: environmentSecret }
   try {
     const { data, error } = await admin.rpc('get_evolution_runtime_config')
     if (error || !isRecord(data)) return null
     const secret = stringValue(data.evolution_webhook_secret, 4096)
-    const instanceName = stringValue(data.evolution_instance_name, 120)
-    const businessId = stringValue(data.evolution_business_id, 64)
-    if (!secret || !instanceName || !businessId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(businessId)) return null
-    return { secret, instanceName, businessId }
+    if (!secret) return null
+    return { secret }
   } catch {
     return null
   }
@@ -951,7 +944,6 @@ export default {
 
   const authorization = request.headers.get('Authorization') ?? ''
   const bearer = authorization.match(/^Bearer\s+([^\s]+)$/i)?.[1] ?? ''
-  if (!bearer || !constantTimeEqual(bearer, configuration.secret)) return json({ error: 'unauthorized' }, 401)
   let rawBody: string | null
   try {
     rawBody = await readBoundedBody(request)
@@ -969,33 +961,53 @@ export default {
     return json({ error: 'invalid_payload' }, 400)
   }
 
-  if (stringValue(body.instance, 120) !== configuration.instanceName) return json({ error: 'instance_mismatch' }, 403)
+  const instanceName = stringValue(body.instance, 120)
+  if (!instanceName) return json({ error: 'invalid_instance' }, 400)
+  const expectedBearer = await instanceWebhookToken(configuration.secret, instanceName)
+  const derivedBearerValid = Boolean(bearer && constantTimeEqual(bearer, expectedBearer))
+  const legacyMasterBearerValid = Boolean(bearer && constantTimeEqual(bearer, configuration.secret))
+  const admin = context.supabaseAdmin
+  const { data: registeredConnection, error: connectionError } = await admin.rpc('get_evolution_webhook_connection', {
+    p_instance_name: instanceName,
+  })
+  if (connectionError) return json({ error: 'connection_lookup_failed' }, 503)
+  if (!isRecord(registeredConnection)) return json({ error: 'unauthorized' }, 401)
+  if (registeredConnection.status === 'archived') {
+    if (derivedBearerValid || legacyMasterBearerValid) return json({ ignored: true, reason: 'archived_instance' })
+    return json({ error: 'unauthorized' }, 401)
+  }
+  if (!derivedBearerValid) return json({ error: 'unauthorized' }, 401)
+  if (registeredConnection.status !== 'pending' && registeredConnection.status !== 'active') {
+    return json({ error: 'instance_not_active' }, 403)
+  }
+  const businessId = stringValue(registeredConnection.business_id, 64)
+  if (!businessId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(businessId)) {
+    return json({ error: 'connection_lookup_failed' }, 503)
+  }
   const event = normalizedEvent(body.event)
   if (!event) return json({ error: 'invalid_event' }, 400)
-  const admin = context.supabaseAdmin
-  const businessId = configuration.businessId
   const payload = body.data
 
   try {
     if (event === 'MESSAGES_UPSERT' || event === 'MESSAGES_SET' || event === 'SEND_MESSAGE') {
       const messages = eventRows(payload, 'messages')
       for (const message of messages) {
-        await processMessageEvent(admin, businessId, configuration.instanceName, message, event !== 'MESSAGES_SET')
+        await processMessageEvent(admin, businessId, instanceName, message, event !== 'MESSAGES_SET')
       }
     } else if (event === 'MESSAGES_UPDATE') {
       await withWebhookStage(event, 'message_status', () =>
-        processMessageStatus(admin, businessId, configuration.instanceName, payload))
+        processMessageStatus(admin, businessId, instanceName, payload))
     } else if (event === 'MESSAGES_DELETE') {
-      await processMessageDelete(admin, businessId, configuration.instanceName, payload)
+      await processMessageDelete(admin, businessId, instanceName, payload)
     } else if (event === 'CALL') {
       for (const call of eventRows(payload, 'calls')) {
-        await processCallEvent(admin, businessId, configuration.instanceName, call)
+        await processCallEvent(admin, businessId, instanceName, call)
       }
     } else if (event === 'CHATS_SET' || event === 'CHATS_UPSERT' || event === 'CHATS_UPDATE'
       || event === 'GROUPS_UPSERT' || event === 'GROUP_UPDATE' || event === 'GROUPS_UPDATE'
       || event === 'CONTACTS_SET' || event === 'CONTACTS_UPSERT' || event === 'CONTACTS_UPDATE') {
       await withWebhookStage(event, 'chat_or_contact', () =>
-        processChatOrContactEvent(admin, businessId, configuration.instanceName, event, payload))
+        processChatOrContactEvent(admin, businessId, instanceName, event, payload))
     }
     return json({ received: true })
   } catch (error) {
@@ -1007,4 +1019,14 @@ export default {
     return json({ error: 'event_persistence_failed' }, 500)
   }
   }),
+}
+
+async function instanceWebhookToken(masterSecret: string, instanceName: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(masterSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  )
+  const signature = await crypto.subtle.sign(
+    'HMAC', key, new TextEncoder().encode(`shalom/evolution-webhook/v1:${instanceName}`),
+  )
+  return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }

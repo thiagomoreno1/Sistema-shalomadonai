@@ -45,9 +45,10 @@ type EvolutionConfig = {
   baseUrl: URL
   apiKey: string
   instanceName: string
-  businessId: string | null
-  webhookUrl: string | null
-  webhookSecret: string | null
+  businessId: string
+  webhookUrl: string
+  webhookSecret: string
+  connectionStatus: 'pending' | 'active' | null
 }
 
 class RequestError extends Error {
@@ -465,7 +466,10 @@ function parseConfiguration(source: JsonRecord): EvolutionConfig | null {
   const businessId = text(source.evolution_business_id, 64)
   const webhookUrl = text(source.evolution_webhook_url, 2048)
   const webhookSecret = text(source.evolution_webhook_secret, 4096)
-  if (!baseUrlValue || !apiKey || !instanceName || !isUuid(businessId) || !webhookUrl || !webhookSecret) return null
+  const rawConnectionStatus = text(source.evolution_connection_status, 16)
+  const connectionStatus = rawConnectionStatus === 'pending' || rawConnectionStatus === 'active'
+    ? rawConnectionStatus : null
+  if (!baseUrlValue || !apiKey || !isUuid(businessId) || !webhookUrl || !webhookSecret) return null
   try {
     const baseUrl = new URL(baseUrlValue)
     const localHost = baseUrl.hostname === 'localhost'
@@ -476,26 +480,30 @@ function parseConfiguration(source: JsonRecord): EvolutionConfig | null {
       || baseUrl.hostname.endsWith('.internal')
     if ((baseUrl.protocol !== 'https:' && !(localHost && baseUrl.protocol === 'http:'))
       || baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) return null
-    return { baseUrl, apiKey, instanceName, businessId, webhookUrl, webhookSecret }
+    return { baseUrl, apiKey, instanceName, businessId, webhookUrl, webhookSecret, connectionStatus }
   } catch {
     return null
   }
 }
 
-async function loadConfiguration(admin: { rpc: (name: string) => PromiseLike<{ data: unknown; error: unknown }> }): Promise<EvolutionConfig | null> {
-  const environment = parseConfiguration({
-    evolution_api_url: Deno.env.get('EVOLUTION_API_URL'),
-    evolution_api_key: Deno.env.get('EVOLUTION_API_KEY'),
-    evolution_instance_name: Deno.env.get('EVOLUTION_INSTANCE_NAME'),
-    evolution_business_id: Deno.env.get('EVOLUTION_BUSINESS_ID'),
-    evolution_webhook_url: Deno.env.get('EVOLUTION_WEBHOOK_URL'),
-    evolution_webhook_secret: Deno.env.get('EVOLUTION_WEBHOOK_SECRET'),
-  })
-  if (environment) return environment
+async function loadConfiguration(
+  admin: { rpc: (name: string, args?: JsonRecord) => PromiseLike<{ data: unknown; error: unknown }> },
+  businessId: string,
+): Promise<EvolutionConfig | null> {
   try {
-    const { data, error } = await admin.rpc('get_evolution_runtime_config')
+    const { data, error } = await admin.rpc('get_evolution_runtime_config', { p_business_id: businessId })
     if (error || !isRecord(data)) return null
-    return parseConfiguration(data)
+    return parseConfiguration({
+      ...data,
+      evolution_api_url: Deno.env.get('EVOLUTION_API_URL') || data.evolution_api_url,
+      evolution_api_key: Deno.env.get('EVOLUTION_API_KEY') || data.evolution_api_key,
+      evolution_webhook_url: Deno.env.get('EVOLUTION_WEBHOOK_URL') || data.evolution_webhook_url,
+      evolution_webhook_secret: Deno.env.get('EVOLUTION_WEBHOOK_SECRET') || data.evolution_webhook_secret,
+      // The active instance is selected by the database registry, never by a
+      // fixed deployment environment variable.
+      evolution_instance_name: data.evolution_instance_name,
+      evolution_business_id: data.evolution_business_id ?? businessId,
+    })
   } catch {
     return null
   }
@@ -561,6 +569,7 @@ async function evolutionRequest(config: EvolutionConfig, path: string, init?: Re
 
 async function setEvolutionWebhook(config: EvolutionConfig): Promise<void> {
   if (!config.webhookUrl || !config.webhookSecret) throw new RequestError(503, 'webhook_not_configured')
+  const webhookToken = await instanceWebhookToken(config.webhookSecret, config.instanceName)
   let parsedUrl: URL
   try { parsedUrl = new URL(config.webhookUrl) } catch { throw new RequestError(503, 'webhook_url_invalid') }
   const localWebhookHost = parsedUrl.hostname === 'kong'
@@ -577,12 +586,22 @@ async function setEvolutionWebhook(config: EvolutionConfig): Promise<void> {
     body: JSON.stringify({ webhook: {
       enabled: true,
       url: config.webhookUrl,
-      headers: { Authorization: `Bearer ${config.webhookSecret}` },
+      headers: { Authorization: `Bearer ${webhookToken}` },
       events: ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE', 'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE', 'GROUPS_UPSERT', 'GROUP_UPDATE', 'GROUPS_UPDATE', 'CALL', 'CONNECTION_UPDATE'],
       byEvents: false,
       base64: false,
     } }),
   })
+}
+
+async function instanceWebhookToken(masterSecret: string, instanceName: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(masterSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  )
+  const signature = await crypto.subtle.sign(
+    'HMAC', key, new TextEncoder().encode(`shalom/evolution-webhook/v1:${instanceName}`),
+  )
+  return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: string, providerPage: number): Promise<JsonRecord> {
@@ -1814,85 +1833,138 @@ export default {
       if (!membership || !['owner', 'staff'].includes(membership.role)) return json({ error: 'forbidden' }, 403)
 
       const admin = context.supabaseAdmin
-      const config = await loadConfiguration(admin)
+      let config = await loadConfiguration(admin, businessId)
       if (config?.businessId && config.businessId !== businessId) return json({ error: 'forbidden' }, 403)
       if (action === 'status') {
-        if (!config) return json({ configured: false, connected: false, connection_state: 'not_configured' })
+        const statusConfig = config
+        if (!statusConfig) return json({ configured: false, connected: false, connection_selected: false, connection_status: null, connection_state: 'not_configured' })
+        if (!statusConfig.instanceName) return json({ configured: true, connected: false, connection_selected: false, connection_status: null, instance_exists: false, connection_state: 'not_created' })
         try {
-          const instances = await evolutionRequest(config, '/instance/fetchInstances')
-          const instanceExists = Array.isArray(instances) && instances.some((entry) => evolutionInstanceName(entry) === config.instanceName)
-          if (!instanceExists) return json({ configured: true, connected: false, instance_exists: false, connection_state: 'not_created' })
-          const result = await evolutionRequest(config, `/instance/connectionState/${encodeURIComponent(config.instanceName)}`)
+          const instances = await evolutionRequest(statusConfig, '/instance/fetchInstances')
+          const instanceExists = Array.isArray(instances) && instances.some((entry) => evolutionInstanceName(entry) === statusConfig.instanceName)
+          if (!instanceExists) return json({ configured: true, connected: false, connection_selected: true, connection_status: statusConfig.connectionStatus, instance_exists: false, connection_state: 'not_created' })
+          const result = await evolutionRequest(statusConfig, `/instance/connectionState/${encodeURIComponent(statusConfig.instanceName)}`)
           const stateRecord = isRecord(result) && isRecord(result.instance) ? result.instance : isRecord(result) ? result : {}
           const providerState = text(stateRecord.state ?? stateRecord.connectionStatus ?? stateRecord.connection_state ?? stateRecord.status, 64)?.trim() ?? ''
           const normalizedState = providerState.toLowerCase()
           const connected = normalizedState === 'open' || normalizedState === 'connected' || (!normalizedState && stateRecord.connected === true)
           const state = connected && !normalizedState ? 'open' : providerState || 'unknown'
-          return json({ configured: true, connected, instance_exists: true, connection_state: state })
+          if (connected) {
+            const { data: activated, error: activationError } = await admin.rpc('activate_evolution_connection', {
+              p_business_id: businessId,
+              p_instance_name: statusConfig.instanceName,
+            })
+            if (activationError || activated !== true) return json({ configured: true, connected: false, connection_selected: false, connection_status: null, instance_exists: false, connection_state: 'not_created' })
+          }
+          return json({ configured: true, connected, connection_selected: true, connection_status: connected ? 'active' : statusConfig.connectionStatus, instance_exists: true, connection_state: state })
         } catch {
-          return json({ configured: true, connected: false, connection_state: 'unavailable' })
+          return json({ configured: true, connected: false, connection_selected: true, connection_status: statusConfig.connectionStatus, connection_state: 'unavailable' })
         }
       }
       if (!config) return json({ error: 'evolution_not_configured' }, 503)
 
       if (action === 'configure_webhook') {
         if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        if (!config.instanceName) return json({ error: 'whatsapp_connection_not_started' }, 409)
         await setEvolutionWebhook(config)
         return json({ configured: true })
       }
 
       if (action === 'connect') {
         if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        let connectionConfig = config
+        if (!connectionConfig) return json({ error: 'evolution_not_configured' }, 503)
         const pairingMethod = body.pairing_method === 'phone' ? 'phone' : 'qr'
         const pairingPhone = pairingMethod === 'phone' ? normalizePairingPhone(body.phone_number) : null
         if (pairingMethod === 'phone' && !pairingPhone) return json({ error: 'invalid_pairing_phone' }, 400)
-        const instanceList = await evolutionRequest(config, '/instance/fetchInstances')
-        const instanceExists = Array.isArray(instanceList) && instanceList.some((entry) => evolutionInstanceName(entry) === config.instanceName)
+        const { data: instanceName, error: startError } = await admin.rpc('start_evolution_connection', { p_business_id: businessId })
+        const selectedInstance = text(instanceName, 120)
+        if (startError?.message?.includes('connection_must_be_archived_first')) {
+          return json({ error: 'connection_must_be_archived_first' }, 409)
+        }
+        if (startError || !selectedInstance) return json({ error: 'whatsapp_connection_setup_failed' }, 500)
+        connectionConfig = { ...connectionConfig, instanceName: selectedInstance, connectionStatus: 'pending' }
+        const instanceList = await evolutionRequest(connectionConfig, '/instance/fetchInstances')
+        const instanceExists = Array.isArray(instanceList) && instanceList.some((entry) => evolutionInstanceName(entry) === connectionConfig.instanceName)
         if (!instanceExists) {
-          await evolutionRequest(config, '/instance/create', {
+          await evolutionRequest(connectionConfig, '/instance/create', {
             method: 'POST',
             body: JSON.stringify({
-              instanceName: config.instanceName,
+              instanceName: connectionConfig.instanceName,
               integration: 'WHATSAPP-BAILEYS',
               qrcode: false,
               syncFullHistory: true,
             }),
           })
         }
-        try { await setEvolutionWebhook(config) } catch {
-          return json({ error: 'webhook_setup_failed', instance_exists: true, connection_state: 'close' })
+        try { await setEvolutionWebhook(connectionConfig) } catch {
+          return json({ error: 'webhook_setup_failed', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'close' })
         }
         let result: unknown
-        const connectPath = `/instance/connect/${encodeURIComponent(config.instanceName)}${pairingPhone ? `?number=${encodeURIComponent(pairingPhone)}` : ''}`
-        try { result = await evolutionRequest(config, connectPath, undefined, 1_600_000) } catch {
-          return json({ error: pairingMethod === 'phone' ? 'pairing_code_unavailable' : 'qrcode_unavailable', instance_exists: true, connection_state: 'close' })
+        const connectPath = `/instance/connect/${encodeURIComponent(connectionConfig.instanceName)}${pairingPhone ? `?number=${encodeURIComponent(pairingPhone)}` : ''}`
+        try { result = await evolutionRequest(connectionConfig, connectPath, undefined, 1_600_000) } catch {
+          return json({ error: pairingMethod === 'phone' ? 'pairing_code_unavailable' : 'qrcode_unavailable', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'close' })
         }
         const outer = isRecord(result) ? result : {}
         const instance = isRecord(outer.instance) ? outer.instance : {}
         const state = text(instance.state ?? outer.state ?? instance.connectionStatus, 64)?.toLowerCase()
-        if (state === 'open') return json({ connected: true, instance_exists: true, connection_state: 'open' })
+        if (state === 'open') {
+          const { data: activated, error: activationError } = await admin.rpc('activate_evolution_connection', {
+            p_business_id: businessId,
+            p_instance_name: connectionConfig.instanceName,
+          })
+          if (activationError || activated !== true) return json({ error: 'connection_archived_during_pairing', connection_selected: false, connection_status: null, instance_exists: false, connection_state: 'not_created' }, 409)
+          return json({ connected: true, connection_selected: true, connection_status: 'active', instance_exists: true, connection_state: 'open' })
+        }
+        const { data: currentRuntime, error: currentRuntimeError } = await admin.rpc('get_evolution_runtime_config', { p_business_id: businessId })
+        if (currentRuntimeError || !isRecord(currentRuntime)) {
+          return json({ error: 'connection_status_unavailable', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting' }, 503)
+        }
+        if (text(currentRuntime.evolution_instance_name, 120) !== connectionConfig.instanceName
+          || currentRuntime.evolution_connection_status !== 'pending') {
+          return json({ error: 'connection_archived_during_pairing', connection_selected: false, connection_status: null, instance_exists: false, connection_state: 'not_created' }, 409)
+        }
         const qr = isRecord(outer.qrcode) ? outer.qrcode : outer
         if (pairingMethod === 'phone') {
           const pairingCode = text(qr.pairingCode ?? qr.pairing_code ?? outer.pairingCode ?? outer.pairing_code, 64)
           if (!pairingCode || !/^[A-Z0-9-]{6,24}$/i.test(pairingCode)) {
-            return json({ error: 'pairing_code_unavailable', instance_exists: true, connection_state: 'connecting' })
+            return json({ error: 'pairing_code_unavailable', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting' })
           }
-          return json({ connected: false, instance_exists: true, connection_state: 'connecting', pairing_code: pairingCode })
+          return json({ connected: false, connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting', pairing_code: pairingCode })
         }
         const imageValue = text(qr.base64 ?? qr.qrcode, 1_500_000)
-        if (!imageValue) return json({ error: 'qrcode_unavailable', instance_exists: true, connection_state: 'connecting' })
+        if (!imageValue) return json({ error: 'qrcode_unavailable', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting' })
         if (!imageValue.startsWith('data:image/') && !/^[A-Za-z0-9+/]+={0,2}$/.test(imageValue)) {
-          return json({ error: 'qrcode_unavailable', instance_exists: true, connection_state: 'connecting' })
+          return json({ error: 'qrcode_unavailable', connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting' })
         }
         const qrImage = imageValue.startsWith('data:image/') ? imageValue : `data:image/png;base64,${imageValue}`
-        return json({ connected: false, instance_exists: true, connection_state: 'connecting', qr_image: qrImage })
+        return json({ connected: false, connection_selected: true, connection_status: 'pending', instance_exists: true, connection_state: 'connecting', qr_image: qrImage })
       }
 
       if (action === 'disconnect') {
         if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
-        await evolutionRequest(config, `/instance/logout/${encodeURIComponent(config.instanceName)}`, { method: 'DELETE' })
-        return json({ connected: false, instance_exists: true, connection_state: 'close' })
+        if (!config.instanceName) return json({ connected: false, connection_selected: false, instance_exists: false, connection_state: 'not_created' })
+        let providerLogoutFailed = false
+        try {
+          const instances = await evolutionRequest(config, '/instance/fetchInstances')
+          const instanceExists = Array.isArray(instances) && instances.some((entry) => evolutionInstanceName(entry) === config.instanceName)
+          if (instanceExists) {
+            await evolutionRequest(config, `/instance/logout/${encodeURIComponent(config.instanceName)}`, { method: 'DELETE' })
+          }
+        } catch {
+          // Archiving is the isolation boundary. If Evolution is unavailable,
+          // still archive it so a replacement number cannot reuse its inbox.
+          providerLogoutFailed = true
+        }
+        const { data: archived, error: archiveError } = await admin.rpc('archive_evolution_connection', {
+          p_business_id: businessId,
+          p_instance_name: config.instanceName,
+        })
+        if (archiveError || archived !== true) return json({ error: 'whatsapp_connection_archive_failed' }, 500)
+        return json({ connected: false, connection_selected: false, connection_status: null, provider_logout_failed: providerLogoutFailed, instance_exists: false, connection_state: 'not_created' })
       }
+
+      if (!config.instanceName) return json({ error: 'whatsapp_connection_not_started' }, 409)
 
       if (action === 'list') {
         const status = body.status
