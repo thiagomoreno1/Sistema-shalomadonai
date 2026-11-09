@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { FinanceNavigation } from '../components/FinanceNavigation'
 import { formatBRLExact, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
+import { firstMonthlyDueDate, formatRecurringDay, type RecurringOperationTemplate } from '../lib/recurringOperations'
 import { useBusinessToday } from '../lib/useBusinessToday'
 import { supabaseClient } from '../lib/supabase'
 
@@ -113,6 +114,21 @@ export function FinancialOutflowsPage() {
   const [historyLoading, setHistoryLoading] = useState(true)
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [referenceWarning, setReferenceWarning] = useState<string | null>(null)
+  const [expenseSchedules, setExpenseSchedules] = useState<RecurringOperationTemplate[]>([])
+  const [expenseScheduleError, setExpenseScheduleError] = useState<string | null>(null)
+  const [showExpenseScheduleForm, setShowExpenseScheduleForm] = useState(false)
+  const [editingExpenseSchedule, setEditingExpenseSchedule] = useState<RecurringOperationTemplate | null>(null)
+  const [expenseScheduleDescription, setExpenseScheduleDescription] = useState('')
+  const [expenseScheduleCategory, setExpenseScheduleCategory] = useState('')
+  const [expenseScheduleCounterparty, setExpenseScheduleCounterparty] = useState('')
+  const [expenseScheduleAmount, setExpenseScheduleAmount] = useState('')
+  const [expenseScheduleDay, setExpenseScheduleDay] = useState(String(Number(today.slice(8, 10))))
+  const [expenseScheduleStartsOn, setExpenseScheduleStartsOn] = useState(today)
+  const [expenseScheduleSaving, setExpenseScheduleSaving] = useState(false)
+  const [expenseScheduleBusyId, setExpenseScheduleBusyId] = useState<string | null>(null)
+  const [selectedExpenseScheduleId, setSelectedExpenseScheduleId] = useState<string | null>(null)
+  const [pendingExpenseScheduleCompletion, setPendingExpenseScheduleCompletion] = useState<{ templateId: string; dueOn: string; outflowId: string } | null>(null)
+  const [expenseScheduleCompletionError, setExpenseScheduleCompletionError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [uncertain, setUncertain] = useState(false)
@@ -299,6 +315,26 @@ export function FinancialOutflowsPage() {
     }
   }, [businessId])
 
+  const loadExpenseSchedules = useCallback(async () => {
+    if (!supabaseClient) {
+      setExpenseScheduleError('Não há conexão para carregar os lembretes de despesas.')
+      return
+    }
+    try {
+      const { data, error } = await supabaseClient.from('recurring_operation_templates')
+        .select('*')
+        .eq('business_id', businessId)
+        .eq('kind', 'operating_expense')
+        .order('is_active', { ascending: false })
+        .order('next_due_on', { ascending: true })
+      if (error) throw error
+      setExpenseSchedules((data ?? []) as RecurringOperationTemplate[])
+      setExpenseScheduleError(null)
+    } catch {
+      setExpenseScheduleError('Não foi possível carregar os lembretes recorrentes.')
+    }
+  }, [businessId])
+
   const loadReceiptOptions = useCallback(async (append = false) => {
     if (!supabaseClient) {
       setReceiptError('A conexão da empresa não está disponível para carregar recebimentos.')
@@ -397,6 +433,8 @@ export function FinancialOutflowsPage() {
   useEffect(() => { void loadHistory(0) }, [loadHistory])
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadReceiptOptions() }, [loadReceiptOptions])
+  // oxlint-disable-next-line react/set-state-in-effect
+  useEffect(() => { void loadExpenseSchedules() }, [loadExpenseSchedules])
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
@@ -541,6 +579,158 @@ export function FinancialOutflowsPage() {
     setNotes('')
     setFormError(null)
     setUncertain(false)
+    setSelectedExpenseScheduleId(null)
+  }
+
+  function openExpenseScheduleForm(template?: RecurringOperationTemplate) {
+    setEditingExpenseSchedule(template ?? null)
+    setExpenseScheduleDescription(template?.description ?? template?.name ?? '')
+    setExpenseScheduleCategory(template?.category ?? '')
+    setExpenseScheduleCounterparty(template?.counterparty_name ?? '')
+    setExpenseScheduleAmount(template?.amount_cents === null || template?.amount_cents === undefined ? '' : centsToBrazilianInput(BigInt(template.amount_cents)))
+    setExpenseScheduleDay(String(template?.day_of_month ?? Number(today.slice(8, 10))))
+    setExpenseScheduleStartsOn(template?.starts_on ?? today)
+    setExpenseScheduleError(null)
+    setShowExpenseScheduleForm(true)
+  }
+
+  async function saveExpenseSchedule(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!supabaseClient || expenseScheduleSaving) return
+    const name = expenseScheduleDescription.trim()
+    const categoryValue = expenseScheduleCategory.trim()
+    const counterpartyValue = expenseScheduleCounterparty.trim()
+    const amountCents = parseBrazilianCurrency(expenseScheduleAmount)
+    const day = Number(expenseScheduleDay)
+    if (!name || name.length > 200 || categoryValue.length > 120 || counterpartyValue.length > 160
+      || amountCents === null || !Number.isSafeInteger(amountCents) || amountCents <= 0
+      || !Number.isInteger(day) || day < 1 || day > 31
+      || !isCalendarDate(expenseScheduleStartsOn)) {
+      setExpenseScheduleError('Informe a descrição, um valor positivo, o dia do mês (1 a 31) e uma data inicial válida.')
+      return
+    }
+    setExpenseScheduleSaving(true)
+    setExpenseScheduleError(null)
+    const dueAnchor = expenseScheduleStartsOn < today ? today : expenseScheduleStartsOn
+    const nextDueOn = editingExpenseSchedule
+      && day === editingExpenseSchedule.day_of_month
+      && expenseScheduleStartsOn === editingExpenseSchedule.starts_on
+      ? editingExpenseSchedule.next_due_on
+      : firstMonthlyDueDate(dueAnchor, day)
+    const templateValues = {
+      name,
+      description: name,
+      category: categoryValue || null,
+      counterparty_name: counterpartyValue || null,
+      product_id: null,
+      quantity: null,
+      expected_unit_cost_cents: null,
+      amount_cents: amountCents,
+      day_of_month: day,
+      starts_on: expenseScheduleStartsOn,
+      next_due_on: nextDueOn,
+      is_active: editingExpenseSchedule?.is_active ?? true,
+    }
+    try {
+      const result = editingExpenseSchedule
+        ? await supabaseClient.from('recurring_operation_templates').update(templateValues).eq('business_id', businessId).eq('id', editingExpenseSchedule.id)
+        : await supabaseClient.from('recurring_operation_templates').insert({ business_id: businessId, kind: 'operating_expense' as const, ...templateValues })
+      if (result.error) throw result.error
+      setShowExpenseScheduleForm(false)
+      setEditingExpenseSchedule(null)
+      setNotice(editingExpenseSchedule ? 'Lembrete de despesa atualizado.' : 'Lembrete de despesa mensal criado. Ele não registra pagamento sozinho.')
+      await loadExpenseSchedules()
+    } catch {
+      setExpenseScheduleError('Não foi possível salvar o lembrete. Confira os dados e tente novamente.')
+    } finally {
+      setExpenseScheduleSaving(false)
+    }
+  }
+
+  async function pauseExpenseSchedule(template: RecurringOperationTemplate) {
+    if (!supabaseClient || expenseScheduleBusyId) return
+    setExpenseScheduleBusyId(template.id)
+    setExpenseScheduleError(null)
+    try {
+      const { error } = await supabaseClient.from('recurring_operation_templates').update({ is_active: false })
+        .eq('business_id', businessId).eq('id', template.id)
+      if (error) throw error
+      await loadExpenseSchedules()
+    } catch {
+      setExpenseScheduleError('Não foi possível pausar este lembrete. Tente novamente.')
+    } finally {
+      setExpenseScheduleBusyId(null)
+    }
+  }
+
+  async function resumeExpenseSchedule(template: RecurringOperationTemplate) {
+    if (!supabaseClient || expenseScheduleBusyId) return
+    setExpenseScheduleBusyId(template.id)
+    setExpenseScheduleError(null)
+    try {
+      const { error } = await supabaseClient.from('recurring_operation_templates').update({ is_active: true })
+        .eq('business_id', businessId).eq('id', template.id)
+      if (error) throw error
+      await loadExpenseSchedules()
+    } catch {
+      setExpenseScheduleError('Não foi possível reativar este lembrete. Tente novamente.')
+    } finally {
+      setExpenseScheduleBusyId(null)
+    }
+  }
+
+  function startScheduledExpense(template: RecurringOperationTemplate) {
+    resetForm()
+    setShowForm(true)
+    setNotice(null)
+    setOutflowType('operating_expense')
+    setDescription(template.description ?? template.name)
+    setCategory(template.category ?? '')
+    setCounterpartyName(template.counterparty_name ?? '')
+    setAmount(template.amount_cents === null ? '' : centsToBrazilianInput(BigInt(template.amount_cents)))
+    setPaidOnOverride(null)
+    setSelectedExpenseScheduleId(template.id)
+  }
+
+  async function completeExpenseSchedule(templateId: string, dueOn: string, outflowId: string) {
+    if (!supabaseClient) {
+      setExpenseScheduleCompletionError('O gasto foi salvo, mas o lembrete continua pendente. Atualize-o sem registrar o pagamento outra vez.')
+      setPendingExpenseScheduleCompletion({ templateId, dueOn, outflowId })
+      return false
+    }
+    try {
+      const { error } = await supabaseClient.rpc('complete_recurring_operation_template', {
+        p_business_id: businessId,
+        p_template_id: templateId,
+        p_due_on: dueOn,
+        p_inventory_receipt_id: null,
+        p_financial_outflow_id: outflowId,
+      })
+      if (error) throw error
+      setPendingExpenseScheduleCompletion(null)
+      setExpenseScheduleCompletionError(null)
+      await loadExpenseSchedules()
+      return true
+    } catch {
+      setExpenseScheduleCompletionError('O gasto foi salvo, mas o lembrete continua pendente. Atualize-o sem registrar o pagamento outra vez.')
+      setPendingExpenseScheduleCompletion({ templateId, dueOn, outflowId })
+      return false
+    }
+  }
+
+  async function retryExpenseScheduleCompletion() {
+    if (!pendingExpenseScheduleCompletion || expenseScheduleBusyId) return
+    setExpenseScheduleBusyId(pendingExpenseScheduleCompletion.templateId)
+    try {
+      const completed = await completeExpenseSchedule(
+        pendingExpenseScheduleCompletion.templateId,
+        pendingExpenseScheduleCompletion.dueOn,
+        pendingExpenseScheduleCompletion.outflowId,
+      )
+      if (completed) setNotice('Lembrete avançado. O pagamento já estava salvo; nenhum lançamento duplicado foi criado.')
+    } finally {
+      setExpenseScheduleBusyId(null)
+    }
   }
 
   function toggleReceipt(receiptId: string) {
@@ -597,7 +787,7 @@ export function FinancialOutflowsPage() {
     setSaving(true)
     setFormError(null)
     try {
-      const { error, status } = await supabaseClient.rpc('record_financial_outflow', {
+      const { data: savedOutflowId, error, status } = await supabaseClient.rpc('record_financial_outflow', {
         p_business_id: businessId,
         p_outflow_type: outflowType,
         p_description: trimmedDescription,
@@ -621,11 +811,26 @@ export function FinancialOutflowsPage() {
         }
         return
       }
+      const linkedSchedule = selectedExpenseScheduleId
+        ? expenseSchedules.find((template) => template.id === selectedExpenseScheduleId)
+        : null
+      const scheduleAdvanced = linkedSchedule && typeof savedOutflowId === 'string'
+        ? await completeExpenseSchedule(linkedSchedule.id, linkedSchedule.next_due_on, savedOutflowId)
+        : null
+      if (linkedSchedule && typeof savedOutflowId !== 'string') {
+        setExpenseScheduleCompletionError('O pagamento foi salvo, mas o identificador não voltou para avançar o lembrete. Atualize a tela antes de fazer novo lançamento.')
+      }
       const paidReceiptIds = outflowType === 'purchase' ? new Set(selectedReceiptIds) : new Set<string>()
       if (paidReceiptIds.size > 0) {
         setReceiptOptions((current) => current.filter((receipt) => !paidReceiptIds.has(receipt.id)))
       }
-      setNotice('Gasto pago registrado. O sistema não processou o pagamento nem consultou o banco.')
+      setNotice(linkedSchedule
+        ? scheduleAdvanced
+          ? 'Despesa paga registrada. O lembrete foi avançado para o próximo mês.'
+          : 'Despesa paga registrada. O lembrete segue pendente; atualize a data sem registrar o pagamento outra vez.'
+        : linkedSchedule
+          ? 'Despesa paga registrada. Confira o aviso do lembrete antes de fechar.'
+          : 'Gasto pago registrado. O sistema não processou o pagamento nem consultou o banco.')
       setShowForm(false)
       resetForm()
       requestIdRef.current = newRequestId()
@@ -738,6 +943,7 @@ export function FinancialOutflowsPage() {
       `${outflow.outflow_type}|${outflow.description}|${outflow.category ?? ''}|${outflow.counterparty_name ?? ''}`,
       outflow,
     ])).values()).slice(0, 4)
+  const dueExpenseSchedules = expenseSchedules.filter((template) => template.is_active && template.next_due_on <= today)
 
   return (
     <div className="page-stack">
@@ -748,11 +954,39 @@ export function FinancialOutflowsPage() {
           <h1>Gastos pagos</h1>
           <p className="page-description">Opcional: registre compras, gastos da empresa e pagamentos de entrega se quiser incluí-los nos relatórios.</p>
         </div>
-        <button className="button button-primary" disabled={Boolean(voidTarget)} onClick={() => { resetForm(); setNotice(null); setVoidNotice(null); setShowForm(true) }} ref={formTriggerRef} type="button">Registrar gasto pago</button>
+        <div className="record-heading-actions"><button className="button button-secondary" disabled={Boolean(voidTarget) || showForm} onClick={() => openExpenseScheduleForm()} type="button">Agendar despesa</button><button className="button button-primary" disabled={Boolean(voidTarget) || showExpenseScheduleForm} onClick={() => { resetForm(); setNotice(null); setVoidNotice(null); setShowForm(true) }} ref={formTriggerRef} type="button">Registrar gasto pago</button></div>
       </header>
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
       {voidNotice && <p className="form-message form-message-success" ref={voidNoticeRef} role="status" tabIndex={-1}>{voidNotice}</p>}
+      {expenseScheduleCompletionError && <div className="form-message form-message-warning" role="alert"><p>{expenseScheduleCompletionError}</p>{pendingExpenseScheduleCompletion && <button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void retryExpenseScheduleCompletion()} type="button">{expenseScheduleBusyId ? 'Atualizando…' : 'Atualizar lembrete'}</button>}</div>}
+      {expenseScheduleError && <p className="form-message form-message-warning" role="status">{expenseScheduleError}</p>}
+
+      {showExpenseScheduleForm && <form className="surface-panel record-form" onSubmit={(event) => void saveExpenseSchedule(event)}>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETE OPCIONAL</p><h2>{editingExpenseSchedule ? 'Editar despesa mensal' : 'Agendar despesa mensal'}</h2></div><button className="text-button" disabled={expenseScheduleSaving} onClick={() => { setShowExpenseScheduleForm(false); setEditingExpenseSchedule(null) }} type="button">Fechar</button></div>
+        <p className="section-footnote">O lembrete não registra nem paga a conta sozinho. No vencimento, use “Registrar como pago” somente depois de pagar a despesa.</p>
+        <div className="record-form-grid">
+          <label className="record-field"><span className="field-label">Despesa</span><input className="text-input" disabled={expenseScheduleSaving} maxLength={200} onChange={(event) => setExpenseScheduleDescription(event.target.value)} placeholder="Ex.: Conta de luz" required value={expenseScheduleDescription} /></label>
+          <label className="record-field"><span className="field-label">Valor previsto · R$</span><input className="text-input" disabled={expenseScheduleSaving} inputMode="decimal" onChange={(event) => setExpenseScheduleAmount(event.target.value)} placeholder="Ex.: 180,00" required value={expenseScheduleAmount} /></label>
+          <label className="record-field"><span className="field-label">Categoria <span className="field-optional">opcional</span></span><input className="text-input" disabled={expenseScheduleSaving} maxLength={120} onChange={(event) => setExpenseScheduleCategory(event.target.value)} value={expenseScheduleCategory} /></label>
+          <label className="record-field"><span className="field-label">Favorecido <span className="field-optional">opcional</span></span><input className="text-input" disabled={expenseScheduleSaving} maxLength={160} onChange={(event) => setExpenseScheduleCounterparty(event.target.value)} value={expenseScheduleCounterparty} /></label>
+          <label className="record-field"><span className="field-label">Dia do mês</span><input className="text-input" disabled={expenseScheduleSaving} inputMode="numeric" max="31" min="1" onChange={(event) => setExpenseScheduleDay(event.target.value)} required type="number" value={expenseScheduleDay} /><small className="field-optional">{expenseScheduleDay ? formatRecurringDay(Number(expenseScheduleDay)) : 'Escolha de 1 a 31'}; em meses curtos, usa o último dia.</small></label>
+          <label className="record-field"><span className="field-label">Começar em</span><input className="text-input" disabled={expenseScheduleSaving} onChange={(event) => setExpenseScheduleStartsOn(event.target.value)} required type="date" value={expenseScheduleStartsOn} /></label>
+        </div>
+        {expenseScheduleError && <p className="form-message form-message-error" role="alert">{expenseScheduleError}</p>}
+        <div className="record-form-actions"><button className="button button-primary" disabled={expenseScheduleSaving} type="submit">{expenseScheduleSaving ? 'Salvando…' : editingExpenseSchedule ? 'Salvar alterações' : 'Salvar lembrete'}</button><button className="text-button" disabled={expenseScheduleSaving} onClick={() => { setShowExpenseScheduleForm(false); setEditingExpenseSchedule(null) }} type="button">Cancelar</button></div>
+      </form>}
+
+      {expenseSchedules.length > 0 && <details className="surface-panel dashboard-trend-details" open={dueExpenseSchedules.length > 0}>
+        <summary>Despesas programadas <span>{dueExpenseSchedules.length ? dueExpenseSchedules.length + ' para conferir' : expenseSchedules.filter((template) => template.is_active).length + ' ativas'}{expenseSchedules.some((template) => !template.is_active) ? ` · ${expenseSchedules.filter((template) => !template.is_active).length} pausadas` : ''}</span></summary>
+        <div className="inventory-history-content"><p className="section-footnote">Marcar como pago cria o lançamento financeiro; este lembrete nunca paga a conta automaticamente.</p>
+          <ul className="inventory-balance-list">{expenseSchedules.map((template) => {
+            const due = template.is_active && template.next_due_on <= today
+            const amountText = template.amount_cents === null ? '' : formatBRLExact(String(template.amount_cents))
+            return <li key={template.id}><span className="inventory-balance-copy"><strong>{template.name}{!template.is_active && ' · Pausada'}</strong><small>{formatRecurringDay(template.day_of_month)} · próxima: {formatBusinessDate(template.next_due_on)} · previsto {amountText}{template.category ? ' · ' + template.category : ''}{template.counterparty_name ? ' · ' + template.counterparty_name : ''}</small></span><span className="record-form-actions">{template.is_active ? <><button className="button button-secondary" disabled={Boolean(expenseScheduleBusyId)} onClick={() => startScheduledExpense(template)} type="button">{due ? 'Registrar como pago' : 'Registrar pagamento'}</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => openExpenseScheduleForm(template)} type="button">Editar</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void pauseExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Pausando…' : 'Pausar'}</button></> : <button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void resumeExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Reativando…' : 'Reativar'}</button>}</span></li>
+          })}</ul>
+        </div>
+      </details>}
 
       {showForm && (
         <form className="surface-panel record-form" onSubmit={handleSubmit}>
@@ -778,7 +1012,7 @@ export function FinancialOutflowsPage() {
           <div className="record-form-grid">
             <label className="record-field">
               <span className="field-label">Tipo de gasto <span aria-hidden="true">*</span></span>
-              <select className="text-input" disabled={saving || uncertain || receiptPrefillBlocked || receiptPrefillStatus?.state === 'ready'} onChange={(event) => changeOutflowType(event.target.value as OutflowType | '')} required value={outflowType}>
+              <select className="text-input" disabled={saving || uncertain || receiptPrefillBlocked || receiptPrefillStatus?.state === 'ready' || Boolean(selectedExpenseScheduleId)} onChange={(event) => changeOutflowType(event.target.value as OutflowType | '')} required value={outflowType}>
                 <option value="">Selecione o tipo de gasto</option>
                 <option value="purchase">Compra de produtos para revenda</option>
                 <option value="operating_expense">Gasto da empresa</option>

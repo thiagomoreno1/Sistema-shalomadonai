@@ -51,6 +51,13 @@ type RecentOrder = {
 type DashboardFinancialSummary = {
   receipts: { amount_cents: string }
   outflows: { purchase_cents: string }
+  inventory_finance: {
+    inventory_value_cents: string | null
+    inventory_value_missing_cost_products: number | string
+    inventory_loss_cents: string | null
+    inventory_loss_movement_count: number | string
+    inventory_loss_missing_cost_count: number | string
+  }
   managerial_result: {
     sales_cents: string
     product_subtotal_cents: string
@@ -195,6 +202,13 @@ function createDemoFinancialSummary(days: DashboardTrendDay[]): DashboardFinanci
   return {
     receipts: { amount_cents: days.reduce((total, day) => total + day.receipts_cents, 0n).toString() },
     outflows: { purchase_cents: inventoryPurchases.toString() },
+    inventory_finance: {
+      inventory_value_cents: '428500',
+      inventory_value_missing_cost_products: 0,
+      inventory_loss_cents: '0',
+      inventory_loss_movement_count: 0,
+      inventory_loss_missing_cost_count: 0,
+    },
     managerial_result: {
       sales_cents: sales.toString(),
       product_subtotal_cents: (grossSales - deliveryFees).toString(),
@@ -396,13 +410,25 @@ export function DashboardPage() {
         return
       }
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
-      const { data, error } = await supabaseClient.rpc('get_financial_report_summary', {
-        p_business_id: businessId,
-        p_start_on: trendStartOn,
-        p_end_on: today,
-      })
-      if (error || !data) throw error
-      const summary = data as DashboardFinancialSummary
+      const [reportResult, inventoryResult] = await Promise.all([
+        supabaseClient.rpc('get_financial_report_summary', {
+          p_business_id: businessId,
+          p_start_on: trendStartOn,
+          p_end_on: today,
+        }),
+        supabaseClient.rpc('get_inventory_finance_summary', {
+          p_business_id: businessId,
+          p_start_on: trendStartOn,
+          p_end_on: today,
+        }),
+      ])
+      if (reportResult.error || !reportResult.data || inventoryResult.error || !inventoryResult.data?.[0]) {
+        throw reportResult.error ?? inventoryResult.error ?? new Error('Inventory finance summary was empty.')
+      }
+      const summary = {
+        ...(reportResult.data as Omit<DashboardFinancialSummary, 'inventory_finance'>),
+        inventory_finance: inventoryResult.data[0] as DashboardFinancialSummary['inventory_finance'],
+      }
       if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: summary })
     } catch {
       if (!silent && requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: true, data: null })
@@ -515,6 +541,18 @@ export function DashboardPage() {
   const netBillingCents = financialSummary ? BigInt(financialSummary.sales_cents) : null
   const productCostCents = financialSummary?.item_cost_cents === null || !financialSummary ? null : BigInt(financialSummary.item_cost_cents)
   const grossProfitCents = financialSummary?.available && productCostCents !== null && netBillingCents !== null ? netBillingCents - productCostCents : null
+  const inventoryFinance = currentFinancialSummary.data?.inventory_finance
+  const inventoryValueMissingCostCount = Number(inventoryFinance?.inventory_value_missing_cost_products ?? 0)
+  const inventoryLossMissingCostCount = Number(inventoryFinance?.inventory_loss_missing_cost_count ?? 0)
+  const inventoryValueCents = inventoryFinance?.inventory_value_cents === null || !inventoryFinance || inventoryValueMissingCostCount > 0
+    ? null
+    : BigInt(inventoryFinance.inventory_value_cents)
+  const inventoryLossCents = inventoryFinance?.inventory_loss_cents === null || !inventoryFinance || inventoryLossMissingCostCount > 0
+    ? null
+    : BigInt(inventoryFinance.inventory_loss_cents)
+  const estimatedProfitCents = financialSummary?.available && financialSummary.result_cents !== null && inventoryLossCents !== null && inventoryLossMissingCostCount === 0
+    ? BigInt(financialSummary.result_cents) - inventoryLossCents
+    : null
   const totalPriorityActionCount = priorities
     ? priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.payroll.overdue_count + priorities.payroll.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count
     : null
@@ -763,7 +801,8 @@ export function DashboardPage() {
               <article className="indicator-card"><p>Faturamento líquido</p><strong>{netBillingCents === null ? '—' : formatBRLExact(netBillingCents)}</strong><span>Vendas após a redução no preço dos pedidos</span></article>
               <article className="indicator-card"><p>Custo dos produtos vendidos</p><strong>{productCostCents === null ? 'Indisponível' : formatBRLExact(productCostCents)}</strong><span>Custo cadastrado dos itens entregues ou retirados</span></article>
               <article className="indicator-card"><p>Compras para estoque</p><strong>{formatBRLExact(currentFinancialSummary.data.outflows.purchase_cents ?? '0')}</strong><span>Valor pago por mercadorias recebidas neste período</span></article>
-              <article className="indicator-card"><p>Lucro estimado</p><strong>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</strong><span>Após custo vendido, despesas e entregas · antes de impostos</span></article>
+              <article className="indicator-card"><p>Valor atual em estoque</p><strong>{inventoryValueCents === null ? 'Indisponível' : formatBRLExact(inventoryValueCents)}</strong><span>Saldo disponível × custo médio atual</span></article>
+              <article className="indicator-card"><p>Lucro estimado</p><strong>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</strong><span>Após custos vendidos, perdas, despesas e entregas</span></article>
             </div>
             <details className="surface-panel dashboard-result-breakdown">
               <summary>Ver faturamento e despesas</summary>
@@ -774,15 +813,18 @@ export function DashboardPage() {
                 <div className="is-total"><dt>Faturamento líquido</dt><dd>{netBillingCents === null ? 'Indisponível' : formatBRLExact(netBillingCents)}</dd></div>
                 <div><dt>Custo dos produtos vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
                 <div className="is-total"><dt>Lucro bruto</dt><dd>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</dd></div>
+                <div><dt>Perdas reais no estoque</dt><dd>{inventoryLossCents === null ? 'Indisponível' : `− ${formatBRLExact(inventoryLossCents)}`}</dd></div>
                 <div><dt>Despesas da empresa, incluindo salários</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
                 <div><dt>Despesas com entregas</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
-                <div className="is-total"><dt>Lucro estimado antes de impostos</dt><dd>{currentFinancialSummary.data.managerial_result.available && currentFinancialSummary.data.managerial_result.result_cents !== null ? formatBRLExact(currentFinancialSummary.data.managerial_result.result_cents) : 'Indisponível'}</dd></div>
+                <div className="is-total"><dt>Lucro estimado antes de impostos</dt><dd>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</dd></div>
               </dl>
               <div className="dashboard-purchase-cash-outflow">
                 <div><strong>Compras de estoque pagas</strong><span>Saída de caixa · fora do cálculo do lucro até os itens serem vendidos</span></div>
                 <strong>{formatBRLExact(currentFinancialSummary.data.outflows.purchase_cents ?? '0')}</strong>
               </div>
-              <p className="dashboard-result-note">Bruto = produtos + taxa de entrega cobrada do cliente. Líquido = bruto − valor reduzido no preço dos pedidos. Essa redução diminui o faturamento; não é uma despesa paga. Lucro estimado = líquido − custo dos produtos vendidos − despesas da empresa − entregas pagas. Compra de estoque aparece como saída de caixa e entra no lucro quando o produto for vendido, para não contar o custo duas vezes.</p>
+              <p className="dashboard-result-note">Bruto = produtos + taxa de entrega cobrada do cliente. Líquido = bruto − valor reduzido no preço dos pedidos. A compra paga permanece no caixa; o valor atual em estoque muda com as contagens. Lucro estimado = líquido − custo dos itens vendidos − perdas reais − despesas pagas − entregas pagas. Uma correção de saldo não é registrada como perda.</p>
+              {inventoryValueMissingCostCount > 0 && <p className="dashboard-result-note">Não foi possível valorar o estoque atual: falta custo em {inventoryValueMissingCostCount} produto(s) com saldo.</p>}
+              {inventoryLossMissingCostCount > 0 && <p className="dashboard-result-note">Não foi possível calcular o lucro porque {inventoryLossMissingCostCount} perda(s) antiga(s) não têm custo registrado.</p>}
               {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">{currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `Falta informar o custo de ${currentFinancialSummary.data.managerial_result.missing_cost_line_count} produto(s). ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) têm devolução sem ajuste.` : ''}</p>}
             </details>
           </>}

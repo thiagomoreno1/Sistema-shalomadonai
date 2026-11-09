@@ -6,7 +6,7 @@ import { businessLocalDateTimeToIso, formatBRLExact, formatBusinessDate } from '
 import { useBusinessToday } from '../lib/useBusinessToday'
 import { supabaseClient } from '../lib/supabase'
 
-type PeriodMode = 'today' | 'month' | 'custom'
+type PeriodMode = 'today' | 'month' | 'year' | 'custom'
 type OrderRow = {
   id: string
   customer_name_snapshot: string
@@ -84,6 +84,13 @@ type Summary = {
     delivery_cost_cents: string
     total_cents: string
   }
+  inventory_finance: {
+    inventory_value_cents: string | null
+    inventory_value_missing_cost_products: number | string
+    inventory_loss_cents: string | null
+    inventory_loss_movement_count: number | string
+    inventory_loss_missing_cost_count: number | string
+  }
   cash_movement: { reported_receipts_cents: string; paid_outflows_cents: string; net_recorded_cents: string }
   managerial_result: {
     completed_order_count: number
@@ -96,6 +103,7 @@ type Summary = {
     returned_order_count: number
     operating_expense_cents: string
     delivery_cost_cents: string
+    inventory_loss_cents: string | null
     available: boolean
     result_cents: string | null
     sales_date_basis: string
@@ -190,7 +198,7 @@ function csvMoney(value: string | bigint) {
 function getCompletedBilling(summary: Summary) {
   const result = summary.managerial_result
   const grossCents = BigInt(result.product_subtotal_cents) + BigInt(result.customer_delivery_fee_cents)
-  const netBillingCents = result.available && result.item_cost_cents !== null
+  const netBillingCents = result.missing_cost_line_count === 0 && result.returned_order_count === 0 && result.item_cost_cents !== null
     ? BigInt(result.sales_cents) - BigInt(result.item_cost_cents)
     : null
   return { grossCents, netBillingCents }
@@ -205,6 +213,7 @@ export function FinancialReportsPage() {
   const { id: businessId } = useBusiness()
   const today = useBusinessToday()
   const firstDayOfMonth = `${today.slice(0, 7)}-01`
+  const firstDayOfYear = `${today.slice(0, 4)}-01-01`
   const [periodMode, setPeriodMode] = useState<PeriodMode>('month')
   const [customStartOverride, setCustomStartOverride] = useState<string | null>(null)
   const [customEndOverride, setCustomEndOverride] = useState<string | null>(null)
@@ -224,8 +233,9 @@ export function FinancialReportsPage() {
   const { startOn, endOn } = useMemo(() => {
     if (periodMode === 'today') return { startOn: today, endOn: today }
     if (periodMode === 'month') return { startOn: firstDayOfMonth, endOn: today }
+    if (periodMode === 'year') return { startOn: firstDayOfYear, endOn: today }
     return { startOn: customStart, endOn: customEnd }
-  }, [customEnd, customStart, firstDayOfMonth, periodMode, today])
+  }, [customEnd, customStart, firstDayOfMonth, firstDayOfYear, periodMode, today])
   const rangeError = useMemo(() => {
     if (periodMode !== 'custom') return null
     if (!customStart || !customEnd) return 'Informe as duas datas do intervalo.'
@@ -452,12 +462,27 @@ export function FinancialReportsPage() {
         allocations.push(...(allocationResult.data ?? []))
       }
       if (reportRequestId.current !== requestId) return
-      const summaryResult = await client.rpc('get_financial_report_summary', {
-        p_business_id: businessId,
-        p_start_on: startOn,
-        p_end_on: endOn,
-      })
-      if (summaryResult.error || !summaryResult.data) throw new Error('Não foi possível calcular o resumo deste período.')
+      const [summaryResult, inventoryFinanceResult] = await Promise.all([
+        client.rpc('get_financial_report_summary', {
+          p_business_id: businessId,
+          p_start_on: startOn,
+          p_end_on: endOn,
+        }),
+        client.rpc('get_inventory_finance_summary', {
+          p_business_id: businessId,
+          p_start_on: startOn,
+          p_end_on: endOn,
+        }),
+      ])
+      if (summaryResult.error || !summaryResult.data || inventoryFinanceResult.error || !inventoryFinanceResult.data?.[0]) {
+        throw new Error('Não foi possível calcular o resumo deste período.')
+      }
+      const baseSummary = summaryResult.data as Omit<Summary, 'inventory_finance'>
+      const inventoryFinance = inventoryFinanceResult.data[0] as Summary['inventory_finance']
+      const inventoryLossMissingCostCount = Number(inventoryFinance.inventory_loss_missing_cost_count)
+      const inventoryLossCents = inventoryFinance.inventory_loss_cents === null || inventoryLossMissingCostCount > 0
+        ? null
+        : String(inventoryFinance.inventory_loss_cents)
 
       const paidByInstallment = new Map<string, bigint>()
       for (const allocation of allocations) {
@@ -473,7 +498,20 @@ export function FinancialReportsPage() {
         ...payment,
         customer_name: orderById.get(payment.order_id)?.customer_name_snapshot ?? 'Pedido não disponível',
       }))
-      const reportSummary = summaryResult.data as Summary
+      const resultAvailable = baseSummary.managerial_result.available && inventoryLossCents !== null
+      const adjustedResultCents = resultAvailable && baseSummary.managerial_result.result_cents !== null
+        ? (cents(baseSummary.managerial_result.result_cents) - cents(inventoryLossCents)).toString()
+        : null
+      const reportSummary: Summary = {
+        ...baseSummary,
+        inventory_finance: inventoryFinance,
+        managerial_result: {
+          ...baseSummary.managerial_result,
+          inventory_loss_cents: inventoryLossCents,
+          available: resultAvailable,
+          result_cents: adjustedResultCents,
+        },
+      }
       const activeOrders = loadedOrders.filter((order) => order.status === 'open')
       const cancelledOrders = loadedOrders.filter((order) => order.status === 'cancelled')
       const sum = (values: Array<number | string>) => values.reduce((total, value) => total + cents(value), 0n)
@@ -496,7 +534,10 @@ export function FinancialReportsPage() {
         : null
       const operatingExpenseTotal = sum(operatingOutflows.map((outflow) => outflow.amount_cents))
       const deliveryCostTotal = sum(deliveryOutflows.map((outflow) => outflow.amount_cents))
-      const expectedResult = completedItemCost === null ? null : completedSales - completedItemCost - operatingExpenseTotal - deliveryCostTotal
+      const expectedResult = completedItemCost === null || inventoryLossCents === null
+        ? null
+        : completedSales - completedItemCost - operatingExpenseTotal - deliveryCostTotal - cents(inventoryLossCents)
+      const expectedResultAvailable = missingCostLineCount === 0 && returnedOrderCount === 0 && inventoryLossCents !== null
       const summaryMismatch =
         reportSummary.sales.record_count !== loadedOrders.length ||
         reportSummary.sales.active_order_count !== activeOrders.length ||
@@ -526,9 +567,13 @@ export function FinancialReportsPage() {
         BigInt(reportSummary.managerial_result.sales_cents) !== completedSales ||
         reportSummary.managerial_result.missing_cost_line_count !== missingCostLineCount ||
         reportSummary.managerial_result.returned_order_count !== returnedOrderCount ||
-        reportSummary.managerial_result.available !== (missingCostLineCount === 0 && returnedOrderCount === 0) ||
-        (completedItemCost === null ? reportSummary.managerial_result.item_cost_cents !== null || reportSummary.managerial_result.result_cents !== null :
-          BigInt(reportSummary.managerial_result.item_cost_cents ?? '0') !== completedItemCost || BigInt(reportSummary.managerial_result.result_cents ?? '0') !== expectedResult)
+        reportSummary.managerial_result.available !== expectedResultAvailable ||
+        (completedItemCost === null
+          ? reportSummary.managerial_result.item_cost_cents !== null
+          : BigInt(reportSummary.managerial_result.item_cost_cents ?? '0') !== completedItemCost) ||
+        (expectedResult === null
+          ? reportSummary.managerial_result.result_cents !== null
+          : BigInt(reportSummary.managerial_result.result_cents ?? '0') !== expectedResult)
 
       if (reportRequestId.current !== requestId) return
       setSummary(reportSummary)
@@ -562,16 +607,21 @@ export function FinancialReportsPage() {
   const reportMatchesPeriod = Boolean(summary && summary.start_on === startOn && summary.end_on === endOn)
   const reportCanBeUsed = reportMatchesPeriod && !loading && !error && !reconciliationWarning
   const completedBilling = summary ? getCompletedBilling(summary) : null
+  const currentInventoryMissingCostCount = Number(summary?.inventory_finance.inventory_value_missing_cost_products ?? 0)
+  const currentInventoryValue = summary?.inventory_finance.inventory_value_cents === null || !summary || currentInventoryMissingCostCount > 0
+    ? null
+    : summary.inventory_finance.inventory_value_cents
+  const inventoryLossMissingCostCount = Number(summary?.inventory_finance.inventory_loss_missing_cost_count ?? 0)
 
   function exportCsv() {
     if (!summary || !completedBilling) return
     const rows: string[][] = [
       ['Relatório financeiro', `${formatBusinessDate(summary.start_on)} a ${formatBusinessDate(summary.end_on)}`],
-      ['Escopo', 'Este arquivo inclui pedidos, pagamentos recebidos registrados manualmente, parcelas ainda não pagas, gastos pagos, entradas menos gastos registrados e lucro estimado antes de impostos. Lançamentos anulados por erro ficam visíveis na lista, mas são excluídos dos totais. Não representa saldo bancário nem inclui conferência do extrato. Reembolsos e ajustes financeiros não são registrados neste módulo.'],
+      ['Escopo', 'Este arquivo inclui pedidos, pagamentos recebidos registrados manualmente, parcelas ainda não pagas, gastos pagos, entradas menos gastos registrados e lucro estimado antes de impostos. O valor atual do estoque é uma fotografia de hoje, fora do período escolhido. Perdas físicas reduzem o lucro, mas não alteram pagamentos já feitos. Lançamentos anulados por erro ficam visíveis na lista, mas são excluídos dos totais. Não representa saldo bancário.'],
       ['Nota sobre pagamentos recebidos', 'Os pagamentos são registrados manualmente pelo proprietário; o sistema não processa nem verifica pagamentos ou créditos bancários.'],
       ['Nota sobre saídas', 'Compras, despesas e custos de entrega aparecem somente quando pagos e são informados manualmente. Compra de estoque afeta o caixa; o resultado reconhece o custo congelado nos itens vendidos.'],
       ['Como o faturamento líquido é calculado', 'Vendas concluídas após descontos − custo dos produtos vendidos. Os pedidos entram pela data de entrega ou retirada.'],
-      ['Como o resultado estimado é calculado', 'Faturamento líquido − gastos da empresa pagos − pagamentos de entrega.'],
+      ['Como o resultado estimado é calculado', 'Vendas após descontos − custo dos produtos vendidos − perdas reais no estoque − gastos da empresa pagos − pagamentos de entrega. Correções de contagem alteram o valor atual do estoque, não o dinheiro já pago.'],
       ['Datas usadas no cálculo do lucro', 'Pedidos e custo dos produtos: data de entrega concluída ou retirada pelo cliente. Gastos e pagamentos de entrega: data do pagamento informado.'],
       ['Lucro estimado antes de impostos (R$)', summary.managerial_result.result_cents === null ? 'Indisponível; falta o custo de algum produto ou há devolução sem ajuste financeiro.' : csvMoney(summary.managerial_result.result_cents)],
       ['Itens sem custo congelado', String(summary.managerial_result.missing_cost_line_count)],
@@ -582,6 +632,8 @@ export function FinancialReportsPage() {
       ['Descontos nas vendas concluídas (R$)', csvMoney(summary.managerial_result.discount_cents)],
       ['Vendas concluídas após descontos (R$)', csvMoney(summary.managerial_result.sales_cents)],
       ['Custo dos produtos vendidos (R$)', summary.managerial_result.item_cost_cents === null ? 'Indisponível' : csvMoney(summary.managerial_result.item_cost_cents)],
+      ['Perdas reais no estoque no período (R$)', summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : csvMoney(summary.managerial_result.inventory_loss_cents)],
+      ['Valor atual do estoque (R$)', currentInventoryValue === null ? 'Indisponível' : csvMoney(currentInventoryValue)],
       ['Faturamento líquido (R$)', completedBilling.netBillingCents === null ? 'Indisponível' : csvMoney(completedBilling.netBillingCents)],
       ['Pedidos ainda em andamento criados no período', String(summary.sales.active_order_count)],
       ['Pedidos criados no período atualmente cancelados', String(summary.sales.cancelled_order_count)],
@@ -635,7 +687,7 @@ export function FinancialReportsPage() {
 
       <section className="surface-panel record-panel report-period-panel" aria-label="Período do relatório">
         <div className="report-period-controls">
-          <label className="record-field"><span className="field-label">Período</span><select className="text-input" onChange={(event) => setPeriodMode(event.target.value as PeriodMode)} value={periodMode}><option value="today">Hoje</option><option value="month">Este mês até hoje</option><option value="custom">Intervalo personalizado</option></select></label>
+          <label className="record-field"><span className="field-label">Período</span><select className="text-input" onChange={(event) => setPeriodMode(event.target.value as PeriodMode)} value={periodMode}><option value="today">Hoje</option><option value="month">Este mês até hoje</option><option value="year">Este ano até hoje</option><option value="custom">Intervalo personalizado</option></select></label>
           {periodMode === 'custom' && <>
             <label className="record-field"><span className="field-label">De</span><input aria-describedby={rangeError ? 'report-period-error' : undefined} aria-invalid={Boolean(rangeError)} className="text-input" max={customEnd || undefined} onChange={(event) => setCustomStartOverride(event.target.value)} type="date" value={customStart} /></label>
             <label className="record-field"><span className="field-label">Até</span><input aria-describedby={rangeError ? 'report-period-error' : undefined} aria-invalid={Boolean(rangeError)} className="text-input" min={customStart || undefined} onChange={(event) => setCustomEndOverride(event.target.value)} type="date" value={customEnd} /></label>
@@ -661,21 +713,33 @@ export function FinancialReportsPage() {
           <article className="surface-panel report-summary-card"><span>Gastos pagos</span><strong>{formatBRLExact(summary.outflows.total_cents)}</strong><small>{summary.outflows.record_count} gastos registrados</small></article>
         </section>
 
+        <section className="surface-panel record-panel report-section" aria-labelledby="report-inventory-title">
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">POSIÇÃO DE HOJE</p><h2 id="report-inventory-title">Valor dos produtos em estoque</h2></div><span className="neutral-status">Fora do período</span></div>
+          <div className="report-breakdown report-result-breakdown" aria-label="Valor atual do estoque e perdas do período">
+            <div><span>Saldo atual pelo custo médio</span><strong>{currentInventoryValue === null ? 'A conferir' : formatBRLExact(currentInventoryValue)}</strong></div>
+            <div><span>Perdas reais no período</span><strong>{summary.inventory_finance.inventory_loss_cents === null || inventoryLossMissingCostCount > 0 ? 'A conferir' : formatBRLExact(summary.inventory_finance.inventory_loss_cents)}</strong></div>
+          </div>
+          <p className="section-footnote">O saldo atual muda quando você corrige a contagem. Isso não altera compras já pagas nem o caixa histórico; perdas ou avarias reais reduzem o lucro estimado.</p>
+          {currentInventoryMissingCostCount > 0 && <p className="form-message form-message-warning" role="status">Não foi possível valorar o saldo: falta custo cadastrado em {currentInventoryMissingCostCount} produto(s) com estoque.</p>}
+          {inventoryLossMissingCostCount > 0 && <p className="form-message form-message-warning" role="status">O lucro fica indisponível porque {inventoryLossMissingCostCount} perda(s) no período não têm custo registrado.</p>}
+        </section>
+
         <section className="surface-panel report-definition-panel" aria-labelledby="report-result-title">
           <div>
             <p className="eyebrow">LUCRO ESTIMADO · ANTES DE IMPOSTOS</p>
             <h2 id="report-result-title">{summary.managerial_result.available && summary.managerial_result.result_cents !== null ? formatBRLExact(summary.managerial_result.result_cents) : 'Não foi possível calcular o lucro deste período'}</h2>
-            <p className="report-result-formula">Faturamento líquido − gastos pagos − entregas pagas.</p>
+            <p className="report-result-formula">Vendas após descontos − custo dos produtos vendidos − perdas reais − gastos pagos − entregas pagas.</p>
             <div className="report-breakdown report-result-breakdown" aria-label="Valores usados no lucro estimado">
               <div><span>Faturamento bruto</span><strong>{formatBRLExact(completedBilling?.grossCents ?? 0n)}</strong></div>
               <div><span>Descontos</span><strong>− {formatBRLExact(summary.managerial_result.discount_cents)}</strong></div>
               <div><span>Vendas após descontos</span><strong>{formatBRLExact(summary.managerial_result.sales_cents)}</strong></div>
               <div><span>Custo dos produtos</span><strong>{summary.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(summary.managerial_result.item_cost_cents)}</strong></div>
               <div><span>Faturamento líquido</span><strong>{completedBilling?.netBillingCents === null ? 'A conferir' : formatBRLExact(completedBilling?.netBillingCents ?? 0n)}</strong></div>
+              <div><span>Perdas reais no estoque</span><strong>{summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : `− ${formatBRLExact(summary.managerial_result.inventory_loss_cents)}`}</strong></div>
               <div><span>Gastos</span><strong>{formatBRLExact(summary.managerial_result.operating_expense_cents)}</strong></div>
               <div><span>Entregas</span><strong>{formatBRLExact(summary.managerial_result.delivery_cost_cents)}</strong></div>
             </div>
-            {!summary.managerial_result.available && <p className="report-scope-note">{summary.managerial_result.missing_cost_line_count > 0 ? `Falta o custo de ${summary.managerial_result.missing_cost_line_count} produto(s) vendido(s).` : ''}{summary.managerial_result.returned_order_count > 0 ? ` ${summary.managerial_result.returned_order_count} pedido(s) têm produtos devolvidos sem ajuste financeiro.` : ''} O valor fica oculto enquanto não for possível calcular com segurança.</p>}
+            {!summary.managerial_result.available && <p className="report-scope-note">{summary.managerial_result.missing_cost_line_count > 0 ? `Falta o custo de ${summary.managerial_result.missing_cost_line_count} produto(s) vendido(s).` : ''}{summary.managerial_result.returned_order_count > 0 ? ` ${summary.managerial_result.returned_order_count} pedido(s) têm produtos devolvidos sem ajuste financeiro.` : ''}{inventoryLossMissingCostCount > 0 ? ` ${inventoryLossMissingCostCount} perda(s) não têm custo registrado.` : ''} O valor fica oculto enquanto não for possível calcular com segurança.</p>}
             <details className="report-calculation-details">
               <summary>Como calculamos</summary>
               <p>O custo de produtos para revenda entra quando cada produto é vendido. O registro de gastos é opcional; gastos não informados ficam fora do cálculo. Impostos, reembolsos e ajustes não estão incluídos.</p>

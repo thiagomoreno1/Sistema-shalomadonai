@@ -6,7 +6,7 @@ import { businessLocalDateTimeToIso, formatBRLExact, formatBusinessDate } from '
 import { useBusinessToday } from '../lib/useBusinessToday'
 import { supabaseClient } from '../lib/supabase'
 
-type PeriodMode = 'week' | 'month' | 'custom'
+type PeriodMode = 'week' | 'month' | 'year' | 'custom'
 type OrderRow = {
   id: string
   customer_name_snapshot: string
@@ -104,6 +104,7 @@ export function ReportsPage() {
   const { id: businessId } = useBusiness()
   const today = useBusinessToday()
   const firstDayOfMonth = `${today.slice(0, 7)}-01`
+  const firstDayOfYear = `${today.slice(0, 4)}-01-01`
   const [periodMode, setPeriodMode] = useState<PeriodMode>('month')
   const [customStartOverride, setCustomStartOverride] = useState<string | null>(null)
   const [customEndOverride, setCustomEndOverride] = useState<string | null>(null)
@@ -117,8 +118,9 @@ export function ReportsPage() {
   const { startOn, endOn } = useMemo(() => {
     if (periodMode === 'week') return { startOn: mondayOf(today), endOn: today }
     if (periodMode === 'month') return { startOn: firstDayOfMonth, endOn: today }
+    if (periodMode === 'year') return { startOn: firstDayOfYear, endOn: today }
     return { startOn: customStart, endOn: customEnd }
-  }, [customEnd, customStart, firstDayOfMonth, periodMode, today])
+  }, [customEnd, customStart, firstDayOfMonth, firstDayOfYear, periodMode, today])
   const rangeError = periodMode === 'custom'
     ? !customStart || !customEnd ? 'Informe as duas datas do intervalo.' : customEnd < customStart ? 'A data final deve ser igual ou posterior à data inicial.' : null
     : null
@@ -220,7 +222,7 @@ export function ReportsPage() {
 
       <section className="surface-panel record-panel report-period-panel" aria-label="Período do relatório">
         <div className="report-period-controls">
-          <label className="record-field"><span className="field-label">Período</span><select className="text-input" onChange={(event) => setPeriodMode(event.target.value as PeriodMode)} value={periodMode}><option value="week">Esta semana</option><option value="month">Este mês</option><option value="custom">Intervalo personalizado</option></select></label>
+          <label className="record-field"><span className="field-label">Período</span><select className="text-input" onChange={(event) => setPeriodMode(event.target.value as PeriodMode)} value={periodMode}><option value="week">Esta semana</option><option value="month">Este mês</option><option value="year">Este ano</option><option value="custom">Intervalo personalizado</option></select></label>
           {periodMode === 'custom' && <>
             <label className="record-field"><span className="field-label">De</span><input aria-describedby={rangeError ? 'overview-period-error' : undefined} aria-invalid={Boolean(rangeError)} className="text-input" max={customEnd || undefined} onChange={(event) => setCustomStartOverride(event.target.value)} type="date" value={customStart} /></label>
             <label className="record-field"><span className="field-label">Até</span><input aria-describedby={rangeError ? 'overview-period-error' : undefined} aria-invalid={Boolean(rangeError)} className="text-input" min={customStart || undefined} onChange={(event) => setCustomEndOverride(event.target.value)} type="date" value={customEnd} /></label>

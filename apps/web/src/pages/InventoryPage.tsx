@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { businessLocalDateTimeToIso, businessToday, formatBRL } from '../lib/formatters'
+import { businessLocalDateTimeToIso, businessToday, formatBRL, formatBusinessDate } from '../lib/formatters'
 import { isDiscreteInventoryUnit } from '../lib/inventoryUnits'
+import { firstMonthlyDueDate, formatRecurringDay, type RecurringOperationTemplate } from '../lib/recurringOperations'
 import { supabaseClient } from '../lib/supabase'
 
 const PAGE_SIZE = 40
@@ -81,6 +82,21 @@ export function InventoryPage() {
   const [balances, setBalances] = useState<Balance[]>([])
   const [movements, setMovements] = useState<Movement[]>([])
   const [receipts, setReceipts] = useState<Receipt[]>([])
+  const [purchaseSchedules, setPurchaseSchedules] = useState<RecurringOperationTemplate[]>([])
+  const [purchaseScheduleError, setPurchaseScheduleError] = useState<string | null>(null)
+  const [showPurchaseScheduleForm, setShowPurchaseScheduleForm] = useState(false)
+  const [editingPurchaseSchedule, setEditingPurchaseSchedule] = useState<RecurringOperationTemplate | null>(null)
+  const [purchaseScheduleProductId, setPurchaseScheduleProductId] = useState('')
+  const [purchaseScheduleQuantity, setPurchaseScheduleQuantity] = useState('')
+  const [purchaseScheduleUnitCost, setPurchaseScheduleUnitCost] = useState('')
+  const [purchaseScheduleSupplier, setPurchaseScheduleSupplier] = useState('')
+  const [purchaseScheduleDay, setPurchaseScheduleDay] = useState(String(Number(businessToday().slice(8, 10))))
+  const [purchaseScheduleStartsOn, setPurchaseScheduleStartsOn] = useState(businessToday())
+  const [purchaseScheduleSaving, setPurchaseScheduleSaving] = useState(false)
+  const [purchaseScheduleBusyId, setPurchaseScheduleBusyId] = useState<string | null>(null)
+  const [selectedPurchaseScheduleId, setSelectedPurchaseScheduleId] = useState<string | null>(null)
+  const [pendingPurchaseScheduleCompletion, setPendingPurchaseScheduleCompletion] = useState<{ templateId: string; dueOn: string; receiptId: string } | null>(null)
+  const [purchaseScheduleCompletionError, setPurchaseScheduleCompletionError] = useState<string | null>(null)
   const [returnCandidates, setReturnCandidates] = useState<ReturnCandidate[]>([])
   const [returnableItems, setReturnableItems] = useState<ReturnableItem[]>([])
   const [returnItemsLoading, setReturnItemsLoading] = useState(false)
@@ -142,7 +158,7 @@ export function InventoryPage() {
     }
     if (showLoading) setLoading(true)
     try {
-      const [productsResult, balancesResult, movementsResult, receiptsResult, deliveriesResult, pickupEventsResult] = await Promise.all([
+      const [productsResult, balancesResult, movementsResult, receiptsResult, deliveriesResult, pickupEventsResult, schedulesResult] = await Promise.all([
         supabaseClient.from('products').select('id, name, inventory_unit, inventory_tracked, is_combo, is_active, cost_cents')
           .eq('business_id', businessId).order('name', { ascending: true }),
         supabaseClient.from('inventory_balances').select('product_id, product_name, inventory_unit, minimum_stock, quantity_on_hand')
@@ -155,6 +171,8 @@ export function InventoryPage() {
           .eq('business_id', businessId).is('canceled_at', null).in('status', ['attempted', 'rescheduled', 'delivered', 'returned']),
         supabaseClient.from('order_events').select('order_id')
           .eq('business_id', businessId).eq('event_type', 'picked_up'),
+        supabaseClient.from('recurring_operation_templates').select('*')
+          .eq('business_id', businessId).eq('kind', 'inventory_purchase').order('is_active', { ascending: false }).order('next_due_on', { ascending: true }),
       ])
       if (productsResult.error || balancesResult.error || movementsResult.error || receiptsResult.error || deliveriesResult.error || pickupEventsResult.error) {
         setError('Não foi possível carregar os saldos e o histórico. Tente novamente.')
@@ -177,6 +195,13 @@ export function InventoryPage() {
       setMovementTotal(movementsResult.count ?? 0)
       setMovementOffset(movementsResult.data?.length ?? 0)
       setReceipts((receiptsResult.data ?? []) as Receipt[])
+      if (schedulesResult.error) {
+        setPurchaseSchedules([])
+        setPurchaseScheduleError('Os lembretes de compra não puderam ser carregados. O estoque e os recebimentos continuam disponíveis.')
+      } else {
+        setPurchaseSchedules((schedulesResult.data ?? []) as RecurringOperationTemplate[])
+        setPurchaseScheduleError(null)
+      }
       setReturnCandidates((ordersResult.data ?? []).map((order) => ({
         ...order,
         fulfillment_type: deliveryOrderIds.has(order.id) ? 'delivery' as const : 'pickup' as const,
@@ -256,9 +281,169 @@ export function InventoryPage() {
     setReceiptDate(businessToday())
     setReceiptRecordAsPaid(true)
     setReceiptNotes('')
+    setSelectedPurchaseScheduleId(null)
+    setPurchaseScheduleCompletionError(null)
     const uniqueProductIds = [...new Set(productIds ?? [])].filter((id) => trackedProducts.some((product) => product.id === id))
     setReceiptLines(uniqueProductIds.length > 0 ? uniqueProductIds.map((id) => newLine(id, unitCostInput(trackedProducts.find((product) => product.id === id)?.cost_cents))) : [newLine()])
     receiptRequestIdRef.current = newRequestId()
+  }
+
+  function startScheduledReceipt(template: RecurringOperationTemplate) {
+    if (!template.product_id) return
+    startReceipt([template.product_id])
+    setSelectedPurchaseScheduleId(template.id)
+    const quantity = template.quantity === null ? '' : String(template.quantity).replace('.', ',')
+    const productCost = trackedProducts.find((product) => product.id === template.product_id)?.cost_cents
+    setReceiptLines([{
+      key: newRequestId(),
+      productId: template.product_id,
+      quantity,
+      unitCost: unitCostInput(template.expected_unit_cost_cents === null ? productCost : Number(template.expected_unit_cost_cents)),
+    }])
+    setReceiptSupplier(template.counterparty_name ?? '')
+    setReceiptRecordAsPaid(false)
+    setReceiptSuggestionNotice(`Compra programada para ${formatBusinessDate(template.next_due_on)}. Confira os dados e confirme somente quando a mercadoria chegar.`)
+    setShowReplenishmentList(false)
+  }
+
+  async function completePurchaseSchedule(templateId: string, dueOn: string, receiptId: string) {
+    if (!supabaseClient) {
+      setPurchaseScheduleCompletionError('O recebimento foi salvo, mas não foi possível atualizar o lembrete. A conexão voltou? Tente atualizar o lembrete; não registre a compra novamente.')
+      setPendingPurchaseScheduleCompletion({ templateId, dueOn, receiptId })
+      return false
+    }
+    try {
+      const { error: completionError } = await supabaseClient.rpc('complete_recurring_operation_template', {
+        p_business_id: businessId,
+        p_template_id: templateId,
+        p_due_on: dueOn,
+        p_inventory_receipt_id: receiptId,
+        p_financial_outflow_id: null,
+      })
+      if (completionError) throw completionError
+    } catch {
+      setPurchaseScheduleCompletionError('A compra foi recebida, mas o lembrete continua pendente porque não foi possível avançar a data. Tente atualizar o lembrete; não registre a compra novamente.')
+      setPendingPurchaseScheduleCompletion({ templateId, dueOn, receiptId })
+      return false
+    }
+    setPendingPurchaseScheduleCompletion(null)
+    setPurchaseScheduleCompletionError(null)
+    await loadData(false)
+    return true
+  }
+
+  async function retryPurchaseScheduleCompletion() {
+    if (!pendingPurchaseScheduleCompletion || purchaseScheduleBusyId) return
+    setPurchaseScheduleBusyId(pendingPurchaseScheduleCompletion.templateId)
+    try {
+      const completed = await completePurchaseSchedule(
+        pendingPurchaseScheduleCompletion.templateId,
+        pendingPurchaseScheduleCompletion.dueOn,
+        pendingPurchaseScheduleCompletion.receiptId,
+      )
+      if (completed) setNotice('A data do lembrete foi atualizada. O recebimento já estava salvo; nenhum novo movimento foi criado.')
+    } finally {
+      setPurchaseScheduleBusyId(null)
+    }
+  }
+
+  function openPurchaseScheduleForm(template?: RecurringOperationTemplate) {
+    setEditingPurchaseSchedule(template ?? null)
+    setPurchaseScheduleProductId(template?.product_id ?? trackedProducts[0]?.id ?? '')
+    setPurchaseScheduleQuantity(template?.quantity === null || template?.quantity === undefined ? '' : String(template.quantity).replace('.', ','))
+    setPurchaseScheduleUnitCost(template?.expected_unit_cost_cents === null || template?.expected_unit_cost_cents === undefined ? '' : unitCostInput(Number(template.expected_unit_cost_cents)))
+    setPurchaseScheduleSupplier(template?.counterparty_name ?? '')
+    setPurchaseScheduleDay(String(template?.day_of_month ?? Number(businessToday().slice(8, 10))))
+    setPurchaseScheduleStartsOn(template?.starts_on ?? businessToday())
+    setPurchaseScheduleError(null)
+    setShowPurchaseScheduleForm(true)
+  }
+
+  async function savePurchaseSchedule(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!supabaseClient || purchaseScheduleSaving) return
+    const product = trackedProducts.find((item) => item.id === purchaseScheduleProductId)
+    const quantity = product ? parseQuantity(purchaseScheduleQuantity, product.inventory_unit) : null
+    const unitCostCents = purchaseScheduleUnitCost.trim() ? parseUnitCostCents(purchaseScheduleUnitCost) : null
+    const day = Number(purchaseScheduleDay)
+    if (!product || quantity === null || !Number.isInteger(day) || day < 1 || day > 31 || !isCalendarDate(purchaseScheduleStartsOn)) {
+      setPurchaseScheduleError('Informe o produto, a quantidade, o dia do mês (1 a 31) e uma data inicial válida.')
+      return
+    }
+    if (purchaseScheduleUnitCost.trim() && unitCostCents === null) {
+      setPurchaseScheduleError('Confira o custo unitário previsto ou deixe o campo vazio.')
+      return
+    }
+    setPurchaseScheduleSaving(true)
+    setPurchaseScheduleError(null)
+    const dueAnchor = purchaseScheduleStartsOn < businessToday() ? businessToday() : purchaseScheduleStartsOn
+    const nextDueOn = editingPurchaseSchedule
+      && day === editingPurchaseSchedule.day_of_month
+      && purchaseScheduleStartsOn === editingPurchaseSchedule.starts_on
+      ? editingPurchaseSchedule.next_due_on
+      : firstMonthlyDueDate(dueAnchor, day)
+    const templateValues = {
+      name: `Compra · ${product.name}`.slice(0, 120),
+      description: null,
+      category: null,
+      counterparty_name: purchaseScheduleSupplier.trim() || null,
+      product_id: product.id,
+      quantity,
+      expected_unit_cost_cents: unitCostCents,
+      amount_cents: null,
+      day_of_month: day,
+      starts_on: purchaseScheduleStartsOn,
+      next_due_on: nextDueOn,
+      is_active: editingPurchaseSchedule?.is_active ?? true,
+    }
+    const payload = { business_id: businessId, kind: 'inventory_purchase' as const, ...templateValues }
+    try {
+      const result = editingPurchaseSchedule
+        ? await supabaseClient.from('recurring_operation_templates').update(templateValues).eq('business_id', businessId).eq('id', editingPurchaseSchedule.id)
+        : await supabaseClient.from('recurring_operation_templates').insert(payload)
+      if (result.error) {
+        setPurchaseScheduleError('Não foi possível salvar o lembrete. Confira os dados e tente novamente.')
+        return
+      }
+      setShowPurchaseScheduleForm(false)
+      setEditingPurchaseSchedule(null)
+      setNotice(editingPurchaseSchedule ? 'Lembrete de compra atualizado.' : 'Lembrete de compra mensal criado. Ele não altera o estoque sozinho.')
+      await loadData(false)
+    } catch {
+      setPurchaseScheduleError('Não foi possível salvar o lembrete. Confira sua conexão e tente novamente.')
+    } finally {
+      setPurchaseScheduleSaving(false)
+    }
+  }
+
+  async function pausePurchaseSchedule(template: RecurringOperationTemplate) {
+    if (!supabaseClient || purchaseScheduleBusyId) return
+    setPurchaseScheduleBusyId(template.id)
+    setPurchaseScheduleError(null)
+    try {
+      const { error: updateError } = await supabaseClient.from('recurring_operation_templates').update({ is_active: false }).eq('business_id', businessId).eq('id', template.id)
+      if (updateError) throw updateError
+      await loadData(false)
+    } catch {
+      setPurchaseScheduleError('Não foi possível pausar este lembrete. Tente novamente.')
+    } finally {
+      setPurchaseScheduleBusyId(null)
+    }
+  }
+
+  async function resumePurchaseSchedule(template: RecurringOperationTemplate) {
+    if (!supabaseClient || purchaseScheduleBusyId) return
+    setPurchaseScheduleBusyId(template.id)
+    setPurchaseScheduleError(null)
+    try {
+      const { error: updateError } = await supabaseClient.from('recurring_operation_templates').update({ is_active: true }).eq('business_id', businessId).eq('id', template.id)
+      if (updateError) throw updateError
+      await loadData(false)
+    } catch {
+      setPurchaseScheduleError('Não foi possível reativar este lembrete. Tente novamente.')
+    } finally {
+      setPurchaseScheduleBusyId(null)
+    }
   }
 
   async function repeatLastReceiptProducts() {
@@ -536,15 +721,25 @@ export function InventoryPage() {
         setFormError('A resposta do recebimento não chegou completa. Tente novamente sem alterar o formulário.')
         return
       }
+      const linkedSchedule = selectedPurchaseScheduleId
+        ? purchaseSchedules.find((template) => template.id === selectedPurchaseScheduleId)
+        : null
+      const scheduleAdvanced = linkedSchedule
+        ? await completePurchaseSchedule(linkedSchedule.id, linkedSchedule.next_due_on, data)
+        : null
       setShowReceiptForm(false)
       setUncertain(false)
       const receiptHasPaidOutflow = receiptRecordAsPaid && receiptEstimatedTotalCents > 0
-      setNotice(receiptHasPaidOutflow
+      const receiptNotice = receiptHasPaidOutflow
         ? `Estoque atualizado e compra paga de ${formatBRL(receiptEstimatedTotalCents)} lançada automaticamente em Compras de estoque.`
         : receiptRecordAsPaid
           ? 'Estoque atualizado. Como o custo informado foi R$ 0,00, não houve saída financeira.'
-          : 'Estoque atualizado; como a compra ainda não foi paga, ela não entrou nas saídas financeiras.')
+          : 'Estoque atualizado; como a compra ainda não foi paga, ela não entrou nas saídas financeiras.'
+      setNotice(linkedSchedule
+        ? `${receiptNotice} ${scheduleAdvanced ? 'Próxima compra: lembrete atualizado.' : 'O recebimento está salvo; use “Atualizar lembrete” abaixo para avançar a data sem registrar a compra novamente.'}`
+        : receiptNotice)
       setRegisteredReceiptId(!receiptRecordAsPaid && receiptEstimatedTotalCents > 0 ? data : null)
+      setSelectedPurchaseScheduleId(null)
       receiptRequestIdRef.current = newRequestId()
       await loadData(false)
     } catch {
@@ -704,6 +899,7 @@ export function InventoryPage() {
     }
   }
 
+  const duePurchaseSchedules = purchaseSchedules.filter((template) => template.is_active && template.next_due_on <= businessToday())
   const pagedMovements = movements.slice(historyPage * PAGE_SIZE, (historyPage + 1) * PAGE_SIZE)
   const lastHistoryPage = Math.max(0, Math.ceil(movements.length / PAGE_SIZE) - 1)
 
@@ -711,14 +907,44 @@ export function InventoryPage() {
     <div className="page-stack">
       <header className="page-heading">
         <div><p className="eyebrow">OPERAÇÃO · ESTOQUE</p><h1>Estoque</h1><p className="page-description">Quantidade atual de cada produto, compras recebidas e alterações registradas.</p></div>
-        <div className="record-heading-actions"><button className="button button-secondary" disabled={countStarting || repeatingReceipt} onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Movimentar estoque</button><button aria-describedby={!loading && balances.length === 0 ? 'inventory-count-prerequisite' : undefined} className="button button-secondary" disabled={loading || countStarting || repeatingReceipt || balances.length === 0 || balances.length > 500} onClick={startCount} ref={countTriggerRef} type="button"><Icon name="check" /> Contagem física</button><button className="button button-primary" disabled={countStarting || repeatingReceipt} onClick={() => startReceipt()} ref={receiptTriggerRef} type="button"><Icon name="file" /> Receber compra</button></div>
+        <div className="record-heading-actions"><button className="button button-secondary" disabled={countStarting || repeatingReceipt || showReceiptForm || showMovementForm || showCountForm} onClick={() => openPurchaseScheduleForm()} type="button">Agendar compra</button><button className="button button-secondary" disabled={countStarting || repeatingReceipt || showPurchaseScheduleForm || showMovementForm || showCountForm || showReceiptForm} onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Movimentar estoque</button><button aria-describedby={!loading && balances.length === 0 ? 'inventory-count-prerequisite' : undefined} className="button button-secondary" disabled={loading || countStarting || repeatingReceipt || showPurchaseScheduleForm || showCountForm || showMovementForm || showReceiptForm || balances.length === 0 || balances.length > 500} onClick={startCount} ref={countTriggerRef} type="button"><Icon name="check" /> Contagem física</button><button className="button button-primary" disabled={countStarting || repeatingReceipt || showPurchaseScheduleForm || showReceiptForm || showMovementForm || showCountForm} onClick={() => startReceipt()} ref={receiptTriggerRef} type="button"><Icon name="file" /> Receber compra</button></div>
       </header>
 
       {!loading && balances.length === 0 && <p className="section-footnote" id="inventory-count-prerequisite">Para fazer uma contagem, configure o estoque e o saldo inicial de um produto no <Link to="/catalogo">Catálogo</Link>.</p>}
 
       {notice && <div className="form-message form-message-success" role="status"><p>{notice}</p>{registeredReceiptId && <><p className="section-footnote">Quando o pagamento for feito, registre a saída para atualizar o caixa. O custo do produto já ficou salvo para calcular o resultado na venda.</p><Link className="button button-primary" to={`/financeiro/saidas?receiptId=${encodeURIComponent(registeredReceiptId)}`}>Registrar pagamento quando pagar →</Link></>}</div>}
+      {purchaseScheduleCompletionError && <div className="form-message form-message-warning" role="alert"><p>{purchaseScheduleCompletionError}</p><button className="text-button" disabled={Boolean(purchaseScheduleBusyId)} onClick={() => void retryPurchaseScheduleCompletion()} type="button">{purchaseScheduleBusyId ? 'Atualizando…' : 'Atualizar lembrete'}</button></div>}
+      {purchaseScheduleError && <p className="form-message form-message-warning" role="status">{purchaseScheduleError}</p>}
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadData() }} type="button">Tentar novamente</button></div>}
       {!loading && balances.length > 500 && <p className="form-message form-message-warning" role="status">A contagem física está indisponível: há {balances.length} produtos com saldo registrado; o limite é 500.</p>}
+
+      {showPurchaseScheduleForm && <form className="surface-panel record-form" onSubmit={(event) => void savePurchaseSchedule(event)}>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETE OPCIONAL</p><h2>{editingPurchaseSchedule ? 'Editar compra mensal' : 'Agendar compra mensal'}</h2></div><button className="text-button" disabled={purchaseScheduleSaving} onClick={() => { setShowPurchaseScheduleForm(false); setEditingPurchaseSchedule(null) }} type="button">Fechar</button></div>
+        <p className="section-footnote">O lembrete não compra nem recebe mercadoria sozinho. Confirme o recebimento quando os produtos realmente chegarem; assim o estoque e o custo ficam corretos.</p>
+        <div className="record-form-grid">
+          <label className="record-field"><span className="field-label">Produto</span><select className="text-input" disabled={purchaseScheduleSaving || Boolean(editingPurchaseSchedule)} onChange={(event) => setPurchaseScheduleProductId(event.target.value)} required value={purchaseScheduleProductId}><option value="">Selecione um produto</option>{trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
+          <label className="record-field"><span className="field-label">Quantidade prevista</span><input className="text-input" disabled={purchaseScheduleSaving} inputMode={isDiscreteInventoryUnit(trackedProducts.find((product) => product.id === purchaseScheduleProductId)?.inventory_unit) ? 'numeric' : 'decimal'} onChange={(event) => setPurchaseScheduleQuantity(event.target.value)} placeholder="Ex.: 10" required value={purchaseScheduleQuantity} /></label>
+          <label className="record-field"><span className="field-label">Custo por unidade previsto · R$ <span className="field-optional">opcional</span></span><input className="text-input" disabled={purchaseScheduleSaving} inputMode="decimal" onChange={(event) => setPurchaseScheduleUnitCost(event.target.value)} placeholder="Ex.: 5,00" value={purchaseScheduleUnitCost} /></label>
+          <label className="record-field"><span className="field-label">Fornecedor <span className="field-optional">opcional</span></span><input className="text-input" disabled={purchaseScheduleSaving} maxLength={160} onChange={(event) => setPurchaseScheduleSupplier(event.target.value)} value={purchaseScheduleSupplier} /></label>
+          <label className="record-field"><span className="field-label">Dia do mês</span><input className="text-input" disabled={purchaseScheduleSaving} inputMode="numeric" max="31" min="1" onChange={(event) => setPurchaseScheduleDay(event.target.value)} required type="number" value={purchaseScheduleDay} /><small className="field-optional">{purchaseScheduleDay ? formatRecurringDay(Number(purchaseScheduleDay)) : 'Escolha de 1 a 31'}; em meses curtos, usa o último dia.</small></label>
+          <label className="record-field"><span className="field-label">Começar em</span><input className="text-input" disabled={purchaseScheduleSaving} onChange={(event) => setPurchaseScheduleStartsOn(event.target.value)} required type="date" value={purchaseScheduleStartsOn} /></label>
+        </div>
+        {purchaseScheduleError && <p className="form-message form-message-error" role="alert">{purchaseScheduleError}</p>}
+        <div className="record-form-actions"><button className="button button-primary" disabled={purchaseScheduleSaving} type="submit">{purchaseScheduleSaving ? 'Salvando…' : editingPurchaseSchedule ? 'Salvar alterações' : 'Salvar lembrete'}</button><button className="text-button" disabled={purchaseScheduleSaving} onClick={() => { setShowPurchaseScheduleForm(false); setEditingPurchaseSchedule(null) }} type="button">Cancelar</button></div>
+      </form>}
+
+      {purchaseSchedules.length > 0 && <details className="surface-panel dashboard-trend-details" open={duePurchaseSchedules.length > 0}>
+        <summary>Compras programadas <span>{duePurchaseSchedules.length ? duePurchaseSchedules.length + ' para confirmar' : purchaseSchedules.filter((template) => template.is_active).length + ' ativas'}{purchaseSchedules.some((template) => !template.is_active) ? ` · ${purchaseSchedules.filter((template) => !template.is_active).length} pausadas` : ''}</span></summary>
+        <div className="inventory-history-content"><p className="section-footnote">O lembrete fica pendente até você registrar o recebimento real.</p>
+          <ul className="inventory-balance-list">{purchaseSchedules.map((template) => {
+            const product = products.find((item) => item.id === template.product_id)
+            const unit = product?.inventory_unit ?? 'un.'
+            const due = template.is_active && template.next_due_on <= businessToday()
+            const expectedCost = template.expected_unit_cost_cents === null ? '' : ' · custo previsto ' + formatBRL(Number(template.expected_unit_cost_cents)) + '/un.'
+            return <li key={template.id}><span className="inventory-balance-copy"><strong>{template.name}{!template.is_active && ' · Pausada'}</strong><small>{formatRecurringDay(template.day_of_month)} · próxima: {formatBusinessDate(template.next_due_on)} · {formatQuantity(Number(template.quantity ?? 0))} {unit}{expectedCost}{template.counterparty_name ? ' · ' + template.counterparty_name : ''}</small></span><span className="record-form-actions">{template.is_active ? <><button className="button button-secondary" disabled={Boolean(purchaseScheduleBusyId)} onClick={() => startScheduledReceipt(template)} type="button">{due ? 'Registrar recebimento' : 'Receber compra'}</button><button className="text-button" disabled={Boolean(purchaseScheduleBusyId)} onClick={() => openPurchaseScheduleForm(template)} type="button">Editar</button><button className="text-button" disabled={Boolean(purchaseScheduleBusyId)} onClick={() => void pausePurchaseSchedule(template)} type="button">{purchaseScheduleBusyId === template.id ? 'Pausando…' : 'Pausar'}</button></> : <button className="text-button" disabled={Boolean(purchaseScheduleBusyId)} onClick={() => void resumePurchaseSchedule(template)} type="button">{purchaseScheduleBusyId === template.id ? 'Reativando…' : 'Reativar'}</button>}</span></li>
+          })}</ul>
+        </div>
+      </details>}
 
       {showCountForm && <form className="surface-panel record-form" onSubmit={(event) => void handleCountSubmit(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">CONFERÊNCIA FÍSICA</p><h2 ref={countHeadingRef} tabIndex={-1}>Contagem de estoque</h2></div><button className="text-button" disabled={saving || uncertain || countStarting} onClick={() => setShowCountForm(false)} type="button">Fechar</button></div>
@@ -759,7 +985,7 @@ export function InventoryPage() {
       </section>}
 
       {showReceiptForm && <form className="surface-panel record-form" onSubmit={(event) => void handleReceiptSubmit(event)}>
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA FÍSICA</p><h2 ref={receiptHeadingRef} tabIndex={-1}>Registrar compra recebida</h2></div><button className="text-button" disabled={receiptFormDisabled} onClick={() => setShowReceiptForm(false)} type="button">Fechar</button></div>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA FÍSICA</p><h2 ref={receiptHeadingRef} tabIndex={-1}>{selectedPurchaseScheduleId ? 'Confirmar compra programada' : 'Registrar compra recebida'}</h2></div><button className="text-button" disabled={receiptFormDisabled} onClick={() => { setShowReceiptForm(false); setSelectedPurchaseScheduleId(null) }} type="button">Fechar</button></div>
         <p className="section-footnote inventory-form-hint">Informe quantidade e custo por unidade. Se a compra já foi paga, o sistema lança a saída junto com a entrada de estoque.</p>
         {trackedProducts.length === 0 ? <p className="inline-state">Edite um produto no <Link to="/catalogo">Catálogo</Link> e informe sua unidade e quantidade física para registrar compras recebidas.</p> : <>
           {receipts[0] && <button className="text-button" disabled={saving || uncertain || repeatingReceipt || receiptHasProductLines} onClick={() => void repeatLastReceiptProducts()} type="button">{repeatingReceipt ? 'Carregando produtos…' : 'Repetir produtos da última compra'}</button>}
@@ -768,7 +994,7 @@ export function InventoryPage() {
             {receiptLines.map((line, index) => {
               const selected = trackedProducts.find((product) => product.id === line.productId)
               return <div className="inventory-line-row" key={line.key}>
-                <label className="record-field"><span className="field-label">Produto {index + 1}</span><select className="text-input" disabled={receiptFormDisabled} onChange={(event) => setReceiptLines((current) => current.map((row) => {
+                <label className="record-field"><span className="field-label">Produto {index + 1}</span><select className="text-input" disabled={receiptFormDisabled || Boolean(selectedPurchaseScheduleId)} onChange={(event) => setReceiptLines((current) => current.map((row) => {
                   if (row.key !== line.key) return row
                   const product = trackedProducts.find((item) => item.id === event.target.value)
                   return { ...row, productId: event.target.value, unitCost: unitCostInput(product?.cost_cents) }
@@ -779,7 +1005,7 @@ export function InventoryPage() {
               </div>
             })}
           </div>
-          <button className="button button-secondary inventory-add-line" disabled={receiptFormDisabled} onClick={() => setReceiptLines((current) => [...current, newLine()])} type="button"><Icon name="plus" /> Adicionar produto</button>
+          <button className="button button-secondary inventory-add-line" disabled={receiptFormDisabled || Boolean(selectedPurchaseScheduleId)} onClick={() => setReceiptLines((current) => [...current, newLine()])} type="button"><Icon name="plus" /> Adicionar produto</button>
           <div className="record-form-grid inventory-receipt-date-row">
             <label className="record-field"><span className="field-label">Recebido em</span><input className="text-input" disabled={receiptFormDisabled} max={businessToday()} onChange={(event) => setReceiptDate(event.target.value)} required type="date" value={receiptDate} /><small className="field-optional">Padrão: hoje. Mude somente se recebeu em outro dia.</small></label>
           </div>
@@ -804,7 +1030,7 @@ export function InventoryPage() {
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">MOVIMENTAÇÃO MANUAL</p><h2 ref={movementHeadingRef} tabIndex={-1}>Ajustar estoque</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowMovementForm(false)} type="button">Fechar</button></div>
         <p className="section-footnote inventory-form-hint">Corrija uma contagem, registre uma perda ou adicione um retorno já conferido.</p>
         <div className="record-form-grid">
-          <label className="record-field"><span className="field-label">O que aconteceu? <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { setMovementKind(event.target.value as MovementKind); setMovementOrderId(''); setMovementProductId(''); setReturnableItems([]); setFormError(null) }} value={movementKind}><option value="adjustment">Corrigir quantidade</option><option value="loss">Registrar perda ou avaria</option><option value="return">Registrar retorno conferido</option></select></label>
+          <label className="record-field"><span className="field-label">O que aconteceu? <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { setMovementKind(event.target.value as MovementKind); setMovementOrderId(''); setMovementProductId(''); setReturnableItems([]); setFormError(null) }} value={movementKind}><option value="adjustment">Corrigir quantidade</option><option value="loss">Registrar perda ou avaria</option><option value="return">Registrar retorno conferido</option></select>{movementKind === 'adjustment' ? <small className="field-optional">Corrige um saldo lançado errado: atualiza o valor do estoque, sem registrar despesa de perda.</small> : movementKind === 'loss' ? <small className="field-optional">Registra mercadoria realmente perdida ou avariada: reduz o estoque e entra como perda no lucro estimado. O pagamento da compra original permanece igual.</small> : null}</label>
           {movementKind === 'return' && <label className="record-field"><span className="field-label">Pedido associado <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => { const orderId = event.target.value; setMovementOrderId(orderId); setMovementProductId(''); setReturnableItems([]); if (orderId) void loadReturnableItems(orderId) }} required value={movementOrderId}><option value="">Selecione um pedido enviado</option>{returnCandidates.map((order) => <option key={order.id} value={order.id}>{order.customer_name_snapshot} · {order.fulfillment_type === 'pickup' ? 'Retirada' : 'Entrega'} · {order.id.slice(0, 8)}</option>)}</select></label>}
           <label className="record-field"><span className="field-label">Produto <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain || (movementKind === 'return' && (returnItemsLoading || !movementOrderId))} onChange={(event) => setMovementProductId(event.target.value)} required value={movementProductId}><option value="">{movementKind === 'return' ? returnItemsLoading ? 'Conferindo itens do pedido…' : 'Selecione um item enviado' : 'Selecione um produto com estoque'}</option>{movementKind === 'return' ? returnableItems.map((item) => <option key={item.product_id} value={item.product_id}>{item.product_name} · ainda enviado {formatQuantity(item.remaining_quantity)} {item.inventory_unit}</option>) : trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
           <label className="record-field"><span className="field-label">Quantidade{movementProductId && selectedMovementUnit ? ' · ' + selectedMovementUnit : ''} <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || uncertain} inputMode={isDiscreteInventoryUnit(selectedMovementUnit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setMovementQuantity(event.target.value)} placeholder="0" required value={movementQuantity} /></label>
