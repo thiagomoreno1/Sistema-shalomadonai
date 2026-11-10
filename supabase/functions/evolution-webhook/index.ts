@@ -37,7 +37,29 @@ async function withWebhookStage<T>(event: string, stage: string, operation: () =
 
 function eventRows(value: unknown, collectionKey: string): unknown[] {
   if (Array.isArray(value)) return value
-  if (isRecord(value) && Array.isArray(value[collectionKey])) return value[collectionKey] as unknown[]
+  if (isRecord(value)) {
+    const collection = value[collectionKey]
+    if (Array.isArray(collection)) return collection
+    if (isRecord(collection)) {
+      const entries = Object.entries(collection)
+      const hasIdentity = [collection.remoteJid, collection.remote_jid, collection.groupJid, collection.group_jid,
+        collection.jid, collection.id, collection.from, collection.packet, collection.key]
+        .some((item) => item !== undefined && item !== null)
+      if (hasIdentity || !entries.length || !entries.every(([, item]) => isRecord(item))) return [collection]
+      return entries.map(([key, item]) => ({ ...item, id: item.id ?? item.jid ?? key }))
+    }
+    const singularKey = collectionKey.endsWith('s') ? collectionKey.slice(0, -1) : collectionKey
+    for (const key of ['data', 'result', 'payload', 'records', 'items', singularKey]) {
+      const nested = value[key]
+      if (isRecord(nested) || Array.isArray(nested)) {
+        return eventRows(nested, collectionKey)
+      }
+    }
+    const entries = Object.entries(value)
+    const isJidKeyedMap = entries.length > 0 && entries.every(([key, item]) => isRecord(item)
+      && /@(g\.us|lid|s\.whatsapp\.net|c\.us)$/i.test(key))
+    if (isJidKeyedMap) return entries.map(([key, item]) => ({ ...item, id: item.id ?? item.jid ?? key }))
+  }
   return [value]
 }
 
@@ -95,6 +117,12 @@ function isGroupJid(value: string | null): boolean {
 function isDirectWhatsAppJid(value: unknown): value is string {
   return typeof value === 'string'
     && /^[a-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid)$/i.test(value)
+}
+
+function canonicalLidJid(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const match = value.trim().toLowerCase().match(/^([a-z0-9._-]{1,128})(?::[0-9]{1,5})?@lid$/)
+  return match ? `${match[1]}@lid` : null
 }
 
 function canonicalPhoneJid(value: unknown): string | null {
@@ -158,7 +186,7 @@ function contactDirectoryRowsFromProvider(
   const phoneJid = directJids.find((jid) => jid.endsWith('@s.whatsapp.net')) ?? null
   const lidJid = directJids.find((jid) => jid.endsWith('@lid')) ?? null
   const alternate = lidJid && phoneJid ? (directJids.includes(lidJid) ? phoneJid : lidJid) : null
-  const name = isGroup ? evolutionContactName(row, true) : evolutionContactName(row, false)
+  const name = evolutionContactName(row, isGroup)
   const phone = phoneFromJid(phoneJid)
   return directJids.map((remoteJid) => ({
     business_id: businessId,
@@ -251,7 +279,7 @@ async function registerConversationJidAliases(
 
 function contactIdentityPair(values: unknown[]): { lidJid: string; phoneJid: string } | null {
   const jids = [...new Set(values.filter(isDirectWhatsAppJid).map((value) => value.toLowerCase()))]
-  const lids = [...new Set(jids.filter((value) => value.endsWith('@lid')))]
+  const lids = [...new Set(jids.map(canonicalLidJid).filter((value): value is string => Boolean(value)))]
   const phones = [...new Set(values.map(phoneJidFromProviderValue).filter((value): value is string => Boolean(value)))]
   return lids.length === 1 && phones.length === 1 ? { lidJid: lids[0], phoneJid: phones[0] } : null
 }
@@ -303,21 +331,24 @@ async function saveContactIdentityMapping(
 }
 
 async function mappedPhoneIdentity(admin: AdminClient, businessId: string, instanceName: string, lidJid: string) {
+  const canonicalLid = canonicalLidJid(lidJid)
+  if (!canonicalLid) return null
   const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
     .select('phone_jid, contact_name, identity_conflict')
-    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', lidJid.toLowerCase())
+    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', canonicalLid)
     .maybeSingle()
   if (error) throw new Error('contact_identity_lookup_failed')
   const phoneJid = stringValue(data?.phone_jid, 256)
   if (data?.identity_conflict === true || !phoneJid || !phoneJid.endsWith('@s.whatsapp.net') || !phoneFromJid(phoneJid)) return null
-  return { lidJid: lidJid.toLowerCase(), phoneJid, contactName: stringValue(data?.contact_name, 160) }
+  return { lidJid: canonicalLid, phoneJid, contactName: stringValue(data?.contact_name, 160) }
 }
 
 async function isConflictedContactLid(admin: AdminClient, businessId: string, instanceName: string, jid: string): Promise<boolean> {
-  if (!jid.toLowerCase().endsWith('@lid')) return false
+  const canonicalLid = canonicalLidJid(jid)
+  if (!canonicalLid) return false
   const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
     .select('identity_conflict')
-    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', jid.toLowerCase())
+    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', canonicalLid)
     .maybeSingle()
   if (error) throw new Error('contact_identity_lookup_failed')
   return data?.identity_conflict === true
@@ -438,10 +469,26 @@ async function findConversationByJidOrAlias(
 }
 
 function evolutionContactName(row: JsonRecord, isGroup: boolean): string | null {
-  const candidates = isGroup
-    ? [row.subject, row.groupSubject, row.group_subject, row.groupName, row.group_name]
-    : [row.name, row.contactName, row.shortName, row.short_name, row.displayName, row.display_name,
-      row.notify, row.notifyName, row.pushName, row.pushname, row.verifiedName]
+  if (isGroup) {
+    const queue: JsonRecord[] = [row]
+    const visited = new Set<JsonRecord>()
+    while (queue.length && visited.size < 24) {
+      const current = queue.shift()!
+      if (visited.has(current)) continue
+      visited.add(current)
+      const subject = displayableContactName(current.subject ?? current.groupSubject ?? current.group_subject
+        ?? current.groupName ?? current.group_name)
+      if (subject) return subject
+      for (const key of ['data', 'group', 'groupInfo', 'groupMetadata', 'metadata', 'result', 'attrs']) {
+        const nested = current[key]
+        if (isRecord(nested)) queue.push(nested)
+        else if (Array.isArray(nested)) queue.push(...nested.filter(isRecord))
+      }
+    }
+    return null
+  }
+  const candidates = [row.name, row.contactName, row.shortName, row.short_name, row.displayName, row.display_name,
+    row.notify, row.notifyName, row.pushName, row.pushname, row.verifiedName]
   for (const candidate of candidates) {
     const name = displayableContactName(candidate)
     if (name) return name
@@ -771,7 +818,7 @@ async function processMessageEvent(
   )
   await persistWhatsAppContactDirectory(admin, contactDirectoryRowsFromProvider(
     businessId, instanceName,
-    { remoteJid: payload.remote_jid, remoteJidAlt: payload.remote_jid_alt, phone: payload.contact_phone },
+    { remoteJid: payload.remote_jid, remoteJidAlt: payload.remote_jid_alt, phone: payload.contact_phone, name: payload.contact_name },
     isGroupJid(String(payload.remote_jid ?? '')),
   ))
   if (mappedIdentity) await backfillCallIdentityPhones(admin, businessId, instanceName, [mappedIdentity])
@@ -872,9 +919,11 @@ async function processCallEvent(admin: AdminClient, businessId: string, instance
     && ['offer', 'terminate', 'reject', 'accept', 'ringing'].includes(stringValue(child.tag, 32)?.toLowerCase() ?? ''))
     ?? children[0]
   const childAttrs = callChild && isRecord(callChild.attrs) ? callChild.attrs : {}
-  const callerJid = stringValue(packetAttrs.from ?? callData.from ?? callData.remoteJid, 256)
-  const callerJidAlt = stringValue(childAttrs.caller_pn ?? childAttrs.callerPn
+  const rawCallerJid = stringValue(packetAttrs.from ?? callData.from ?? callData.remoteJid, 256)
+  const callerJid = canonicalLidJid(rawCallerJid) ?? rawCallerJid
+  const rawCallerJidAlt = stringValue(childAttrs.caller_pn ?? childAttrs.callerPn
     ?? packetAttrs.caller_pn ?? callData.remoteJidAlt ?? callData.fromAlt, 256)
+  const callerJidAlt = canonicalLidJid(rawCallerJidAlt) ?? rawCallerJidAlt
   const callIdentityValues = [
     callerJid, callerJidAlt,
     childAttrs.caller_pn, childAttrs.callerPn, childAttrs.phoneNumberJid, childAttrs.phone_number_jid,
@@ -896,7 +945,7 @@ async function processCallEvent(admin: AdminClient, businessId: string, instance
     ? await mappedPhoneIdentity(admin, businessId, instanceName, callerLid)
     : null)
   if (mappedIdentity) await backfillCallIdentityPhones(admin, businessId, instanceName, [mappedIdentity])
-  const identityLid = explicitIdentity?.lidJid ?? (mappedIdentity && typeof callerLid === 'string' ? callerLid.toLowerCase() : null)
+  const identityLid = explicitIdentity?.lidJid ?? mappedIdentity?.lidJid ?? canonicalLidJid(callerLid)
   const identityPhoneJid = explicitIdentity?.phoneJid ?? mappedIdentity?.phoneJid
     ?? (typeof callerLid === 'string' && typeof directPhoneJid === 'string' ? directPhoneJid.toLowerCase() : null)
   const identityLinked = identityLid && identityPhoneJid
@@ -976,8 +1025,7 @@ async function processChatOrContactEvent(
     const isContactEvent = event.startsWith('CONTACTS_')
     const isChatEvent = event.startsWith('CHATS_') || isGroupEvent
     const isGroup = isGroupEvent || isGroupJid(jid)
-    const name = isGroup ? evolutionContactName(row, true)
-      : isContactEvent ? evolutionContactName(row, false) : null
+    const name = evolutionContactName(row, isGroup)
     directoryWrites.push(...contactDirectoryRowsFromProvider(businessId, instanceName, row, isGroup))
     const hasProviderSavedName = Boolean(name)
     const identity = isGroup ? null : await saveContactIdentityMapping(admin, businessId, instanceName, [

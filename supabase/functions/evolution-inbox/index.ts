@@ -90,12 +90,20 @@ function jidNameKeys(value: unknown): string[] {
   const normalized = value.trim().toLowerCase()
   const legacyPhoneJid = normalized.match(/^([0-9]{8,15})(?::[0-9]{1,5})?@(c[.]us|whatsapp[.]net)$/)
   if (legacyPhoneJid) return [...new Set([normalized, ...phoneDirectoryKeys(legacyPhoneJid[1])])]
+  const lidJid = normalized.match(/^([a-z0-9._-]{1,128})(?::[0-9]{1,5})?@lid$/)
+  if (lidJid) return [...new Set([normalized, `${lidJid[1]}@lid`])]
   if (/^[a-z0-9._:-]{1,128}@(s\.whatsapp\.net|lid)$/i.test(normalized)) {
     const phone = phoneFromWhatsAppJid(normalized)
     return phone ? [...new Set([normalized, ...phoneDirectoryKeys(phone)])] : [normalized]
   }
   if (normalized.includes('@')) return []
   return phoneDirectoryKeys(normalized)
+}
+
+function canonicalLidJid(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const match = value.trim().toLowerCase().match(/^([a-z0-9._-]{1,128})(?::[0-9]{1,5})?@lid$/)
+  return match ? `${match[1]}@lid` : null
 }
 
 function messageDeliveryStatus(value: unknown): string | null {
@@ -190,8 +198,8 @@ function contactIdentityAnalysis(contacts: JsonRecord[]): { pairs: JsonRecord[];
       contact.lidJid, contact.lid_jid,
     ].filter((value): value is string => typeof value === 'string')
     if (identifiers.some((value) => value.trim().toLowerCase().endsWith('@g.us'))) continue
-    const lidJids = [...new Set(identifiers.map((value) => value.trim().toLowerCase())
-      .filter((value) => /^[a-z0-9._:-]{1,128}@lid$/i.test(value)))]
+    const lidJids = [...new Set(identifiers.map(canonicalLidJid)
+      .filter((value): value is string => Boolean(value)))]
     const phoneValues = [contact.phoneNumber, contact.phone_number, contact.phone, contact.number, contact.pn]
     const phoneJids = [...new Set([
       ...phoneJidsFromContact(identifiers),
@@ -298,10 +306,12 @@ async function verifiedProviderAlternateJid(
 }
 
 async function mappedContactPhoneJid(admin: any, businessId: string, instanceName: string, lidJid: string): Promise<string | null> {
+  const canonicalLid = canonicalLidJid(lidJid)
+  if (!canonicalLid) return null
   const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
     .select('phone_jid')
     .eq('business_id', businessId).eq('instance_name', instanceName)
-    .eq('lid_jid', lidJid.toLowerCase()).eq('identity_conflict', false)
+    .eq('lid_jid', canonicalLid).eq('identity_conflict', false)
     .maybeSingle()
   if (error) throw new RequestError(500, 'contact_identity_lookup_failed')
   const phoneJid = text(data?.phone_jid, 256)
@@ -309,10 +319,11 @@ async function mappedContactPhoneJid(admin: any, businessId: string, instanceNam
 }
 
 async function isConflictedContactLid(admin: any, businessId: string, instanceName: string, jid: string): Promise<boolean> {
-  if (!jid.toLowerCase().endsWith('@lid')) return false
+  const canonicalLid = canonicalLidJid(jid)
+  if (!canonicalLid) return false
   const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
     .select('identity_conflict')
-    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', jid.toLowerCase())
+    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', canonicalLid)
     .maybeSingle()
   if (error) throw new RequestError(500, 'contact_identity_lookup_failed')
   return data?.identity_conflict === true
@@ -422,8 +433,7 @@ function directoryRowsFromProvider(contacts: JsonRecord[], businessId: string, i
     if (!directJids.length) continue
     const phoneJid = directJids.find((jid) => jid.endsWith('@s.whatsapp.net')) ?? null
     const lidJid = directJids.find((jid) => jid.endsWith('@lid')) ?? null
-    const name = isGroup ? displayableContactName(contact.subject ?? contact.groupSubject ?? contact.group_subject
-      ?? contact.groupName ?? contact.group_name, null) : savedContactName(contact)
+    const name = isGroup ? groupMetadataFromEvolution(contact).subject : savedContactName(contact)
     const phone = !isGroup && phoneJid ? phoneFromWhatsAppJid(phoneJid) : null
     for (const remoteJid of directJids) {
       if (!name && !phone) continue
@@ -586,6 +596,16 @@ async function loadSavedContactDirectory(
       await persistContactIdentityPairs(admin, businessId, config.instanceName, freshProviderContacts)
       await persistContactDirectoryRows(admin,
         directoryRowsFromProvider(freshProviderContacts, businessId, config.instanceName), businessId, config.instanceName)
+      console.info('Evolution contact directory sync', {
+        provider_rows: freshProviderContacts.length,
+        named_rows: freshProviderContacts.filter((row) => Boolean(savedContactName(row))).length,
+        phone_rows: freshProviderContacts.filter((row) => Boolean(
+          phoneJidFromContactValue(row.contact_phone ?? row.phone ?? row.phoneNumber ?? row.phone_number ?? row.number ?? row.pn)
+          ?? phoneJidFromContactValue(row.remoteJid ?? row.remote_jid ?? row.id ?? row.wuid ?? row.jid),
+        )).length,
+        lid_rows: freshProviderContacts.filter((row) => [row.remoteJid, row.remote_jid, row.id, row.wuid, row.jid]
+          .some((value) => typeof value === 'string' && value.toLowerCase().endsWith('@lid'))).length,
+      })
     }
     const providerDirectory = contactDirectoryIndex(allContacts)
     const persistedDirectory = admin && businessId
@@ -964,13 +984,14 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
     if (!identityLinked) jidAlt = null
     const directoryName = group ? null : savedNameForJids(namesByJid, jid, jidAlt)
     const savedName = group
-      ? evolutionName(chat, true) ?? groupMetadataByJid.get(jid)?.subject ?? groupDirectory.get(jid.toLowerCase())?.subject ?? null
+      ? groupMetadataFromEvolution(chat).subject ?? groupMetadataByJid.get(jid)?.subject ?? groupDirectory.get(jid.toLowerCase())?.subject ?? null
       : directoryName ?? evolutionName(chat, false)
         ?? (lastMessage?.direction === 'incoming' ? text(lastMessage.contact_name, 160) : null)
     const name = savedName
+    const directoryPhone = group ? null : displayPhone(savedPhoneForJids(namesByJid, jid, jidAlt))
     const phone = group ? null : identityLinked
-      ? phoneFromWhatsAppJid(jidAlt ?? '') ?? phoneFromWhatsAppJid(jid)
-      : phoneFromWhatsAppJid(jid)
+      ? phoneFromWhatsAppJid(jidAlt ?? '') ?? phoneFromWhatsAppJid(jid) ?? directoryPhone
+      : phoneFromWhatsAppJid(jid) ?? directoryPhone
     const activity = providerTimestamp(chat.lastMessageRecvTimestamp ?? chat.conversationTimestamp ?? chat.updatedAt)
     const hasReportedUnreadCount = (typeof chat.unreadCount === 'number' && Number.isInteger(chat.unreadCount))
       || (typeof chat.unreadMessages === 'number' && Number.isInteger(chat.unreadMessages))
@@ -1111,6 +1132,7 @@ function conversationResponse(
   const canReply = Boolean(remoteJid && !remoteJid.startsWith('unknown-call:')
     && (!remoteJid.includes('@lid') || (remoteJidAlt && phoneFromWhatsAppJid(remoteJidAlt))))
   const phone = isGroup ? null : displayPhone(row.contact_phone)
+    ?? displayPhone(savedPhoneForJids(savedContactNames ?? new Map(), remoteJid, remoteJidAlt))
     ?? phoneFromWhatsAppJid(remoteJidAlt ?? '')
     ?? phoneFromWhatsAppJid(remoteJid ?? '')
   const fallbackName = stableConversationLabel(row, isGroup)
@@ -1293,9 +1315,38 @@ function recordsFromEvolution(value: unknown, keys: string[]): JsonRecord[] {
   return []
 }
 
+function groupRecordsFromEvolution(value: unknown): JsonRecord[] {
+  const rows = recordsFromEvolution(value, ['groups', 'records', 'data', 'result'])
+  if (rows.length) return rows
+
+  const queue: JsonRecord[] = isRecord(value) ? [value] : []
+  const visited = new Set<JsonRecord>()
+  const groups: JsonRecord[] = []
+  while (queue.length && visited.size < 24) {
+    const row = queue.shift()!
+    if (visited.has(row)) continue
+    visited.add(row)
+    const jid = text(row.id ?? row.groupJid ?? row.group_jid ?? row.remoteJid ?? row.remote_jid ?? row.jid, 256)
+    if (jid && isGroupJid(jid)) {
+      groups.push(row)
+      continue
+    }
+    for (const [key, nested] of Object.entries(row)) {
+      if (isGroupJid(key) && isRecord(nested)) {
+        groups.push({ ...nested, id: nested.id ?? key })
+      } else if (['groups', 'records', 'data', 'result', 'items'].includes(key.toLowerCase())) {
+        if (isRecord(nested)) queue.push(nested)
+        else if (Array.isArray(nested)) queue.push(...nested.filter(isRecord))
+      }
+    }
+  }
+  return groups
+}
+
 function evolutionName(row: JsonRecord, group: boolean): string | null {
+  if (group) return groupMetadataFromEvolution(row).subject
   const candidates = group
-    ? [row.subject, row.groupSubject, row.group_subject]
+    ? []
     : [row.name, row.contactName, row.shortName, row.short_name, row.displayName, row.display_name,
       row.notify, row.notifyName, row.pushName, row.pushname, row.verifiedName]
   for (const candidate of candidates) {
@@ -1320,11 +1371,11 @@ function savedContactName(row: JsonRecord): string | null {
 type GroupMetadata = { subject: string | null; pictureUrl: string | null }
 
 function groupMetadataFromEvolution(value: unknown): GroupMetadata {
-  const queue: JsonRecord[] = isRecord(value) ? [value] : []
+  const queue: JsonRecord[] = Array.isArray(value) ? value.filter(isRecord) : isRecord(value) ? [value] : []
   const visited = new Set<JsonRecord>()
   let subject: string | null = null
   let pictureUrl: string | null = null
-  const nestedKeys = ['data', 'group', 'groupInfo', 'groupMetadata', 'metadata', 'result']
+  const nestedKeys = ['data', 'group', 'groupInfo', 'groupMetadata', 'metadata', 'result', 'attrs']
   while (queue.length && visited.size < 24) {
     const row = queue.shift()!
     if (visited.has(row)) continue
@@ -1337,6 +1388,7 @@ function groupMetadataFromEvolution(value: unknown): GroupMetadata {
       : isRecord(pictureValue) ? text(pictureValue.url ?? pictureValue.pictureUrl, 4096) : null
     for (const key of nestedKeys) {
       if (isRecord(row[key])) queue.push(row[key] as JsonRecord)
+      else if (Array.isArray(row[key])) queue.push(...(row[key] as unknown[]).filter(isRecord))
     }
   }
   return { subject, pictureUrl }
@@ -1355,7 +1407,7 @@ async function loadGroupDirectory(config: EvolutionConfig, admin?: any, business
       const response = await evolutionRequest(config,
         `/group/fetchAllGroups/${encodeURIComponent(config.instanceName)}?getParticipants=false`,
         { method: 'GET', signal: AbortSignal.timeout(8_000) })
-      const groups = recordsFromEvolution(response, ['groups', 'records', 'data'])
+      const groups = groupRecordsFromEvolution(response)
       providerFetchedFresh = true
       for (const group of groups) {
         const jid = text(group.id ?? group.groupJid ?? group.group_jid ?? group.remoteJid
@@ -1363,10 +1415,24 @@ async function loadGroupDirectory(config: EvolutionConfig, admin?: any, business
         if (!jid || !isGroupJid(jid)) continue
         directory.set(jid.toLowerCase(), groupMetadataFromEvolution(group))
       }
+      const directoryRows = directoryRowsFromProvider(groups, businessId ?? config.businessId, config.instanceName)
       if (admin && businessId && groups.length) {
-        await persistContactDirectoryRows(admin, directoryRowsFromProvider(groups, businessId, config.instanceName), businessId, config.instanceName)
+        await persistContactDirectoryRows(admin, directoryRows, businessId, config.instanceName)
       }
-    } catch {
+      console.info('Evolution group directory sync', {
+        response_kind: Array.isArray(response) ? 'array' : isRecord(response) ? 'object' : typeof response,
+        top_level_fields: isRecord(response) ? Object.keys(response).filter((key) => /^[a-zA-Z_]{1,32}$/.test(key)).slice(0, 16) : [],
+        provider_rows: groups.length,
+        rows_with_group_jid: groups.filter((group) => [group.id, group.groupJid, group.group_jid, group.remoteJid, group.remote_jid, group.jid]
+          .some((value) => typeof value === 'string' && isGroupJid(value))).length,
+        rows_with_subject: groups.filter((group) => Boolean(evolutionName(group, true))).length,
+        directory_rows: directoryRows.length,
+      })
+    } catch (error) {
+      console.warn('Evolution group directory sync failed', {
+        reason: error instanceof RequestError ? error.code : 'provider_request_failed',
+        ...(error instanceof RequestError && error.upstreamStatus !== undefined ? { upstream_status: error.upstreamStatus } : {}),
+      })
       // Persisted webhook subjects still provide a useful fallback.
     }
   }
@@ -1422,6 +1488,12 @@ async function loadGroupMetadata(
       `/group/findGroupInfoByJid/${encodeURIComponent(config.instanceName)}?groupJid=${encodeURIComponent(remoteJid)}`,
       { method: 'GET', signal: AbortSignal.timeout(4_000) })
     const fetched = groupMetadataFromEvolution(response)
+    console.info('Evolution group metadata lookup', {
+      subject_available: Boolean(fetched.subject),
+      picture_available: Boolean(fetched.pictureUrl),
+      response_kind: Array.isArray(response) ? 'array' : isRecord(response) ? 'object' : typeof response,
+      top_level_fields: isRecord(response) ? Object.keys(response).filter((key) => /^[a-zA-Z_]{1,32}$/.test(key)).slice(0, 16) : [],
+    })
     const metadata = {
       subject: fetched.subject ?? current.subject,
       pictureUrl: fetched.pictureUrl ?? current.pictureUrl,
@@ -1439,7 +1511,11 @@ async function loadGroupMetadata(
       }], businessId, config.instanceName)
     }
     return metadata
-  } catch {
+  } catch (error) {
+    console.warn('Evolution group metadata lookup failed', {
+      reason: error instanceof RequestError ? error.code : 'provider_request_failed',
+      ...(error instanceof RequestError && error.upstreamStatus !== undefined ? { upstream_status: error.upstreamStatus } : {}),
+    })
     // A missing group subject/photo must not prevent the inbox from loading.
     recentGroupMetadata.set(cacheKey, { at: Date.now(), ...current })
     return current
@@ -2206,8 +2282,9 @@ export default {
       if (action === 'configure_webhook') {
         if (!canManageBusiness) return json({ error: 'forbidden' }, 403)
         if (!config.instanceName) return json({ error: 'whatsapp_connection_not_started' }, 409)
+        let webhook: { accepted: boolean; verified: boolean }
         try {
-          const webhook = await setEvolutionWebhook(config)
+          webhook = await setEvolutionWebhook(config)
         } catch (error) {
           logWebhookSetupFailure('configure_webhook', error)
           throw error
