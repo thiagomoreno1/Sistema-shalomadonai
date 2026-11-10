@@ -61,6 +61,16 @@ function formatAmount(cents: string | number) {
   return formatBRLExact(String(cents))
 }
 
+function businessDateFromTimestamp(value: string) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value)).map((part) => [part.type, part.value]))
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
 function estimateInventoryReceiptCents(lines: InventoryReceiptCostLine[]) {
   if (lines.length === 0) return null
   let total = 0n
@@ -1141,7 +1151,7 @@ export function FinancialOutflowsPage() {
                     {outflow.receipts.map((receipt) => <p key={receipt.id}>{receipt.supplier_name || 'Recebimento de estoque'}{receipt.purchase_reference ? ` · Ref. ${receipt.purchase_reference}` : ''} · {formatBusinessDate(receipt.received_on)}</p>)}
                     {!outflow.order_id && outflow.receipts.length === 0 && '—'}
                   </td>
-                  <td>{outflow.void_event ? <><strong>Anulado por erro</strong><small className="section-footnote">{formatBusinessDate(outflow.void_event.created_at)} · {outflow.void_event.reason}</small></> : <button className="text-button" disabled={voiding} onClick={(event) => openVoidForm(outflow, event.currentTarget)} type="button">Anular por erro</button>}</td>
+                  <td>{outflow.void_event ? <><strong>Anulado por erro</strong><small className="section-footnote">{formatBusinessDate(businessDateFromTimestamp(outflow.void_event.created_at))} · {outflow.void_event.reason}</small></> : <button className="text-button" disabled={voiding} onClick={(event) => openVoidForm(outflow, event.currentTarget)} type="button">Anular por erro</button>}</td>
                 </tr>
               ))}</tbody>
             </table>
