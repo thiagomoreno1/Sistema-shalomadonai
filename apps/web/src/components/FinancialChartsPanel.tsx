@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { DashboardTrends, type DashboardTrendDay, type DashboardTrendPeriod } from './DashboardTrends'
 import { DashboardProductRevenue } from './DashboardProductRevenue'
 import { formatBusinessDate } from '../lib/formatters'
@@ -93,7 +93,7 @@ function demoDays(startOn: string, dayCount: number): DashboardTrendDay[] {
 export function FinancialChartsPanel() {
   const { id: businessId, role } = useBusiness()
   const today = useBusinessToday()
-  const demoPreview = role === 'owner' && isDemoPreviewEnabled()
+  const demoPreview = canManageBusiness(role) && isDemoPreviewEnabled()
   const [period, setPeriod] = useState<DashboardTrendPeriod>('last_7')
   const { startOn, dayCount, label } = getDateRange(today, period)
   const scopeKey = `${businessId}:${role}:${startOn}:${today}`

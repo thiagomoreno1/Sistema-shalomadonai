@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { FinancialChartsPanel } from '../components/FinancialChartsPanel'
 import { FinanceNavigation } from '../components/FinanceNavigation'
 import { businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'

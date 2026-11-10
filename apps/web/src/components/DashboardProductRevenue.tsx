@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
 import { createDemoProductRevenueSummary, formatQuantityMilli, loadDashboardProductRevenue, type DashboardProductRevenueSummary } from '../lib/dashboardProductRevenue'
 import { isDemoPreviewEnabled } from '../lib/demoPreview'
@@ -12,7 +12,7 @@ function dayCountBetween(startOn: string, endOn: string) {
 
 export function DashboardProductRevenue({ startOn, endOn }: { startOn: string; endOn: string }) {
   const { id: businessId, role } = useBusiness()
-  const demoPreview = role === 'owner' && isDemoPreviewEnabled()
+  const demoPreview = canManageBusiness(role) && isDemoPreviewEnabled()
   const scopeKey = `${businessId}:${startOn}:${endOn}:${demoPreview}`
   const requestId = useRef(0)
   const [state, setState] = useState<{ scopeKey: string; loading: boolean; error: boolean; summary: DashboardProductRevenueSummary | null }>({ scopeKey: '', loading: true, error: false, summary: null })

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
-import { useBusiness } from '../business/BusinessContext'
+import { businessMemberRoleLabel, canManageBusiness, type BusinessMemberRole, useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { ProfileSettingsPanel } from '../components/ProfileSettingsPanel'
 import { ACCENT_COLORS, useTheme } from '../theme/ThemeProvider'
@@ -17,7 +17,7 @@ type AccessRequest = {
 type BusinessMember = {
   member_user_id: string
   member_email: string | null
-  member_role: 'owner' | 'staff'
+  member_role: BusinessMemberRole
   member_created_at: string
 }
 
@@ -51,7 +51,7 @@ export function SettingsPage() {
   }, [membersMessage])
 
   const loadAccessRequests = useCallback(async () => {
-    if (!supabaseClient || business.role !== 'owner') return
+    if (!supabaseClient || !canManageBusiness(business.role)) return
     const { data, error } = await supabaseClient
       .from('business_access_requests')
       .select('id, user_id, email, created_at')
@@ -66,7 +66,7 @@ export function SettingsPage() {
   }, [business.id, business.role])
 
   const loadMembers = useCallback(async () => {
-    if (!supabaseClient || business.role !== 'owner') {
+    if (!supabaseClient || !canManageBusiness(business.role)) {
       return
     }
     const { data, error } = await supabaseClient.rpc('list_business_members', { p_business_id: business.id })
@@ -83,7 +83,7 @@ export function SettingsPage() {
   }, [business.id, business.role])
 
   useEffect(() => {
-    if (!supabaseClient || business.role !== 'owner') return
+    if (!supabaseClient || !canManageBusiness(business.role)) return
     let active = true
     supabaseClient
       .from('business_access_requests')
@@ -100,7 +100,7 @@ export function SettingsPage() {
   }, [business.id, business.role])
 
   useEffect(() => {
-    if (!supabaseClient || business.role !== 'owner') return
+    if (!supabaseClient || !canManageBusiness(business.role)) return
     let active = true
     supabaseClient.rpc('list_business_members', { p_business_id: business.id }).then(({ data, error }) => {
       if (!active) return
@@ -250,7 +250,7 @@ export function SettingsPage() {
         <dl className="settings-detail-list">
           <div><dt>Empresa</dt><dd>{business.name}</dd></div>
           <div><dt>E-mail</dt><dd>{session?.user.email ?? 'Conta autenticada'}</dd></div>
-          <div><dt>Perfil</dt><dd>{business.role === 'owner' ? 'Proprietário' : 'Equipe'}</dd></div>
+          <div><dt>Perfil</dt><dd>{businessMemberRoleLabel(business.role)}</dd></div>
           <div><dt>Moeda</dt><dd>Real brasileiro (BRL)</dd></div>
           <div><dt>Fuso horário</dt><dd>America/Sao_Paulo</dd></div>
         </dl>
@@ -262,9 +262,9 @@ export function SettingsPage() {
             <p className="eyebrow">ACESSO À EMPRESA</p>
             <h2 id="access-requests-title">Pedidos de acesso</h2>
           </div>
-          {business.role === 'owner' && <span className="neutral-status">{requestsLoading ? 'Carregando…' : `${accessRequests.length} pendentes`}</span>}
+          {canManageBusiness(business.role) && <span className="neutral-status">{requestsLoading ? 'Carregando…' : `${accessRequests.length} pendentes`}</span>}
         </div>
-        {business.role === 'owner' ? (
+        {canManageBusiness(business.role) ? (
           <>
             <p className="settings-appearance-description">Novas contas só acessam os dados da empresa depois que você aprovar o pedido.</p>
             {requestError && accessRequests.length > 0 && <p className="form-message form-message-error" role="alert">{requestError}</p>}
@@ -298,11 +298,11 @@ export function SettingsPage() {
             <p className="section-footnote">Como a confirmação por e-mail está desligada, confirme a identidade da pessoa por outro canal antes de aprovar.</p>
           </>
         ) : (
-          <p className="settings-team-empty">A aprovação de novos acessos é feita pela pessoa proprietária da empresa.</p>
+          <p className="settings-team-empty">A aprovação de novos acessos é feita pela gestão da empresa.</p>
         )}
       </section>
 
-      {business.role === 'owner' && <section className="surface-panel settings-panel" aria-labelledby="team-members-title">
+      {canManageBusiness(business.role) && <section className="surface-panel settings-panel" aria-labelledby="team-members-title">
         <div className="section-heading">
           <div>
             <p className="eyebrow">EQUIPE AUTORIZADA</p>
@@ -310,7 +310,7 @@ export function SettingsPage() {
           </div>
           <span className="neutral-status">{membersLoading ? 'Carregando…' : memberManagementPending ? 'Atualização pendente' : `${members.length} pessoas`}</span>
         </div>
-        <p className="settings-appearance-description">O proprietário mantém o acesso de gestão. Você pode remover o acesso de integrantes da equipe quando necessário.</p>
+        <p className="settings-appearance-description">O proprietário e a gestão mantêm acesso administrativo. Você pode remover o acesso de integrantes da equipe quando necessário.</p>
         {memberManagementPending && <p className="settings-team-empty" role="status">A configuração do banco para gerenciar a equipe ainda está pendente. A lista completa e a remoção de acessos ficarão disponíveis quando a migration de gestão da equipe for aplicada.</p>}
         {membersError && <div className="settings-team-feedback"><p className="form-message form-message-error" role="alert">{membersError}</p><button className="button button-secondary" disabled={membersLoading} onClick={retryMembers} type="button">Tentar novamente</button></div>}
         {membersMessage && <p className="form-message form-message-success settings-team-success" ref={membersMessageRef} role="status" tabIndex={-1}>{membersMessage}</p>}
@@ -324,9 +324,9 @@ export function SettingsPage() {
               return <li key={member.member_user_id}>
                 <div className="settings-access-request-main">
                   <strong>{memberEmail}</strong>
-                  <small>{member.member_role === 'owner' ? 'Proprietário' : 'Equipe'} · Acesso desde {new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium' }).format(new Date(member.member_created_at))}</small>
+                  <small>{businessMemberRoleLabel(member.member_role)} · Acesso desde {new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium' }).format(new Date(member.member_created_at))}</small>
                 </div>
-                {member.member_role === 'owner' ? <span className="neutral-status">Acesso principal</span> : memberManagementPending ? (
+                {member.member_role !== 'staff' ? <span className="neutral-status">{member.member_role === 'owner' ? 'Proprietário da empresa' : 'Gestão da operação'}</span> : memberManagementPending ? (
                   <span className="settings-team-member-note">Remoção disponível após atualizar o banco.</span>
                 ) : member.member_email ? (
                   <div className="settings-team-member-actions">

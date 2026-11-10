@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { CustomerSearchSelect } from '../components/CustomerSearchSelect'
 import { formatBRL, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
@@ -431,7 +431,7 @@ export function NewOrderPage() {
     setOrderCopyWarning(null)
     setLegacyCompositionReviewConfirmed(false)
     try {
-      const deliveryWorkersRequest = role === 'owner'
+      const deliveryWorkersRequest = canManageBusiness(role)
         ? supabaseClient.from('delivery_workers').select('id, name, user_id').eq('business_id', businessId).eq('member_type', 'delivery_driver').eq('is_active', true).not('user_id', 'is', null).order('name', { ascending: true })
         : Promise.resolve({ data: [] as DeliveryWorkerChoice[], error: null })
       const [customersResult, productsResult, stockProductsResult, customComboOrderSupport, deliveryWorkersResult] = await Promise.all([

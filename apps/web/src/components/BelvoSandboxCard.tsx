@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { supabaseClient } from '../lib/supabase'
 
 const BELVO_SANDBOX_GUIDE = 'https://developers.belvo.com/pt-br/developer_resources/resources-sandbox'
@@ -188,7 +188,7 @@ export function BelvoSandboxCard() {
     setCallbackMessage(null)
     setCallbackMessageIsWarning(false)
     try {
-      if (role !== 'owner') throw new Error('Somente uma pessoa responsável pela empresa pode iniciar este teste.')
+      if (!canManageBusiness(role)) throw new Error('Somente a gestão da empresa pode iniciar este teste.')
       if (!supabaseClient) throw new Error('A conexão segura com o Supabase não está disponível.')
       const cleanName = fullName.trim()
       const cleanCpf = cpf.replace(/\D/g, '')
@@ -248,7 +248,7 @@ export function BelvoSandboxCard() {
         <button className="button button-secondary" disabled={statusLoading} onClick={() => void refreshStatus()} type="button">Atualizar configuração</button>
       </div>}
 
-      {!statusLoading && !statusError && ready && role === 'owner' && <form className="belvo-sandbox-form" onSubmit={(event) => void startSandbox(event)}>
+      {!statusLoading && !statusError && ready && canManageBusiness(role) && <form className="belvo-sandbox-form" onSubmit={(event) => void startSandbox(event)}>
         <h3>Iniciar teste de consentimento</h3>
         <p>Os dados fictícios são enviados uma única vez ao servidor e à Belvo para criar o token temporário do widget. Eles não são salvos pelo Shalom.</p>
         <div className="record-form-grid">
@@ -260,7 +260,7 @@ export function BelvoSandboxCard() {
         <button className="button button-primary" disabled={submitting} type="submit">{submitting ? 'Preparando ambiente…' : 'Abrir teste seguro da Belvo'}</button>
       </form>}
 
-      {!statusLoading && !statusError && ready && role !== 'owner' && <p className="belvo-sandbox-status">Apenas a pessoa responsável pela empresa pode iniciar um fluxo de consentimento de teste.</p>}
+      {!statusLoading && !statusError && ready && !canManageBusiness(role) && <p className="belvo-sandbox-status">Apenas a gestão da empresa pode iniciar um fluxo de consentimento de teste.</p>}
 
       {callbackMessage && <p className={`form-message ${callbackMessageIsWarning ? 'form-message-warning' : 'form-message-success'}`} role="status">{callbackMessage}</p>}
       {callbackError && <p className="form-message form-message-error" role="alert">{callbackError}</p>}
@@ -269,7 +269,7 @@ export function BelvoSandboxCard() {
         <div><dt>Instituição de teste</dt><dd>{verifiedLink.institution ?? 'Confirmada pela Belvo'}</dd></div>
         <div><dt>Estado informado pela Belvo</dt><dd>{verifiedLink.status ?? 'Vínculo confirmado'}</dd></div>
       </dl>}
-      {verifiedLink && role === 'owner' && <div className="belvo-sandbox-retry">
+      {verifiedLink && canManageBusiness(role) && <div className="belvo-sandbox-retry">
         <button className="button button-secondary" disabled={deletingLink} onClick={() => void deleteVerifiedLink()} type="button">{deletingLink ? 'Excluindo vínculo…' : 'Excluir vínculo de teste'}</button>
         <small>A exclusão é permanente na Belvo Sandbox e apaga os dados associados a este vínculo fictício.</small>
       </div>}

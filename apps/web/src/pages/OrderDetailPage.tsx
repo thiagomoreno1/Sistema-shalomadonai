@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { businessLocalDateTimeToIso, businessToday, formatBRL, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
@@ -252,7 +252,7 @@ export function OrderDetailPage() {
 
   const receivedCents = payments.reduce((sum, payment) => sum + payment.amount_cents, 0)
   const outstandingCents = order?.status === 'open' ? Math.max(0, (order?.total_cents ?? 0) - receivedCents) : 0
-  const deleteEligible = role === 'owner'
+  const deleteEligible = canManageBusiness(role)
     && payments.length === 0
     && !pickupEvent
     && (!delivery || delivery.status === 'awaiting_separation' || delivery.status === 'ready')

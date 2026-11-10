@@ -102,7 +102,7 @@ Deno.serve(async (request: Request) => {
     .eq('user_id', actor.id)
     .maybeSingle()
   if (membershipError) return json({ error: 'access_check_failed' }, 500)
-  if (membership?.role !== 'owner') return json({ error: 'forbidden' }, 403)
+  if (!membership || !['owner', 'manager'].includes(membership.role)) return json({ error: 'forbidden' }, 403)
 
   const { data: worker, error: workerError } = await userClient
     .from('delivery_workers')
