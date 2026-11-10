@@ -479,8 +479,7 @@ export function FinancialReportsPage() {
       }
       const baseSummary = summaryResult.data as Omit<Summary, 'inventory_finance'>
       const inventoryFinance = inventoryFinanceResult.data[0] as Summary['inventory_finance']
-      const inventoryLossMissingCostCount = Number(inventoryFinance.inventory_loss_missing_cost_count)
-      const inventoryLossCents = inventoryFinance.inventory_loss_cents === null || inventoryLossMissingCostCount > 0
+      const inventoryLossCents = inventoryFinance.inventory_loss_cents === null
         ? null
         : String(inventoryFinance.inventory_loss_cents)
 
@@ -607,23 +606,21 @@ export function FinancialReportsPage() {
   const reportMatchesPeriod = Boolean(summary && summary.start_on === startOn && summary.end_on === endOn)
   const reportCanBeUsed = reportMatchesPeriod && !loading && !error && !reconciliationWarning
   const completedBilling = summary ? getCompletedBilling(summary) : null
-  const currentInventoryMissingCostCount = Number(summary?.inventory_finance.inventory_value_missing_cost_products ?? 0)
-  const currentInventoryValue = summary?.inventory_finance.inventory_value_cents === null || !summary || currentInventoryMissingCostCount > 0
-    ? null
-    : summary.inventory_finance.inventory_value_cents
   const inventoryLossMissingCostCount = Number(summary?.inventory_finance.inventory_loss_missing_cost_count ?? 0)
+  const profitEstimateIsPartial = Boolean(summary?.managerial_result.available && summary.managerial_result.result_cents !== null && inventoryLossMissingCostCount > 0)
 
   function exportCsv() {
     if (!summary || !completedBilling) return
     const rows: string[][] = [
       ['Relatório financeiro', `${formatBusinessDate(summary.start_on)} a ${formatBusinessDate(summary.end_on)}`],
-      ['Escopo', 'Este arquivo inclui pedidos, pagamentos recebidos registrados manualmente, parcelas ainda não pagas, gastos pagos, entradas menos gastos registrados e lucro estimado antes de impostos. O valor atual do estoque é uma fotografia de hoje, fora do período escolhido. Perdas físicas reduzem o lucro, mas não alteram pagamentos já feitos. Lançamentos anulados por erro ficam visíveis na lista, mas são excluídos dos totais. Não representa saldo bancário.'],
+      ['Escopo', 'Este arquivo inclui pedidos, pagamentos recebidos registrados manualmente, parcelas ainda não pagas, gastos pagos, entradas menos gastos registrados e lucro estimado antes de impostos. Perdas físicas reduzem o lucro, mas não alteram pagamentos já feitos. Lançamentos anulados por erro ficam visíveis na lista, mas são excluídos dos totais. Não representa saldo bancário.'],
       ['Nota sobre pagamentos recebidos', 'Os pagamentos são registrados manualmente pelo proprietário; o sistema não processa nem verifica pagamentos ou créditos bancários.'],
       ['Nota sobre saídas', 'Compras, despesas e custos de entrega aparecem somente quando pagos e são informados manualmente. Compra de estoque afeta o caixa; o resultado reconhece o custo congelado nos itens vendidos.'],
       ['Como o faturamento líquido é calculado', 'Vendas concluídas após descontos − custo dos produtos vendidos. Os pedidos entram pela data de entrega ou retirada.'],
       ['Como o resultado estimado é calculado', 'Vendas após descontos − custo dos produtos vendidos − perdas reais no estoque − gastos da empresa pagos − pagamentos de entrega. Correções de contagem alteram o valor atual do estoque, não o dinheiro já pago.'],
       ['Datas usadas no cálculo do lucro', 'Pedidos e custo dos produtos: data de entrega concluída ou retirada pelo cliente. Gastos e pagamentos de entrega: data do pagamento informado.'],
       ['Lucro estimado antes de impostos (R$)', summary.managerial_result.result_cents === null ? 'Indisponível; falta o custo de algum produto ou há devolução sem ajuste financeiro.' : csvMoney(summary.managerial_result.result_cents)],
+      ['Situação da estimativa de lucro', profitEstimateIsPartial ? `Parcial; exclui ${inventoryLossMissingCostCount} perda(s) sem custo registrado.` : summary.managerial_result.result_cents === null ? 'Indisponível; faltam custos de produtos vendidos ou há devolução sem ajuste.' : 'Completa, com os custos registrados.'],
       ['Itens sem custo congelado', String(summary.managerial_result.missing_cost_line_count)],
       ['Pedidos concluídos com devolução registrada', String(summary.managerial_result.returned_order_count)],
       ['Pagamentos recebidos menos gastos pagos (R$)', csvMoney(summary.cash_movement.net_recorded_cents)],
@@ -632,8 +629,8 @@ export function FinancialReportsPage() {
       ['Descontos nas vendas concluídas (R$)', csvMoney(summary.managerial_result.discount_cents)],
       ['Vendas concluídas após descontos (R$)', csvMoney(summary.managerial_result.sales_cents)],
       ['Custo dos produtos vendidos (R$)', summary.managerial_result.item_cost_cents === null ? 'Indisponível' : csvMoney(summary.managerial_result.item_cost_cents)],
-      ['Perdas reais no estoque no período (R$)', summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : csvMoney(summary.managerial_result.inventory_loss_cents)],
-      ['Valor atual do estoque (R$)', currentInventoryValue === null ? 'Indisponível' : csvMoney(currentInventoryValue)],
+      [inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido no período (R$)' : 'Perdas reais no estoque no período (R$)', summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : csvMoney(summary.managerial_result.inventory_loss_cents)],
+      ['Perdas sem custo excluídas do lucro', String(inventoryLossMissingCostCount)],
       ['Faturamento líquido (R$)', completedBilling.netBillingCents === null ? 'Indisponível' : csvMoney(completedBilling.netBillingCents)],
       ['Pedidos ainda em andamento criados no período', String(summary.sales.active_order_count)],
       ['Pedidos criados no período atualmente cancelados', String(summary.sales.cancelled_order_count)],
@@ -713,21 +710,11 @@ export function FinancialReportsPage() {
           <article className="surface-panel report-summary-card"><span>Gastos pagos</span><strong>{formatBRLExact(summary.outflows.total_cents)}</strong><small>{summary.outflows.record_count} gastos registrados</small></article>
         </section>
 
-        <section className="surface-panel record-panel report-section" aria-labelledby="report-inventory-title">
-          <div className="section-heading section-heading-compact"><div><p className="eyebrow">POSIÇÃO DE HOJE</p><h2 id="report-inventory-title">Valor dos produtos em estoque</h2></div><span className="neutral-status">Fora do período</span></div>
-          <div className="report-breakdown report-result-breakdown" aria-label="Valor atual do estoque e perdas do período">
-            <div><span>Saldo atual pelo custo médio</span><strong>{currentInventoryValue === null ? 'A conferir' : formatBRLExact(currentInventoryValue)}</strong></div>
-            <div><span>Perdas reais no período</span><strong>{summary.inventory_finance.inventory_loss_cents === null || inventoryLossMissingCostCount > 0 ? 'A conferir' : formatBRLExact(summary.inventory_finance.inventory_loss_cents)}</strong></div>
-          </div>
-          <p className="section-footnote">O saldo atual muda quando você corrige a contagem. Isso não altera compras já pagas nem o caixa histórico; perdas ou avarias reais reduzem o lucro estimado.</p>
-          {currentInventoryMissingCostCount > 0 && <p className="form-message form-message-warning" role="status">Não foi possível valorar o saldo: falta custo cadastrado em {currentInventoryMissingCostCount} produto(s) com estoque.</p>}
-          {inventoryLossMissingCostCount > 0 && <p className="form-message form-message-warning" role="status">O lucro fica indisponível porque {inventoryLossMissingCostCount} perda(s) no período não têm custo registrado.</p>}
-        </section>
-
         <section className="surface-panel report-definition-panel" aria-labelledby="report-result-title">
           <div>
             <p className="eyebrow">LUCRO ESTIMADO · ANTES DE IMPOSTOS</p>
             <h2 id="report-result-title">{summary.managerial_result.available && summary.managerial_result.result_cents !== null ? formatBRLExact(summary.managerial_result.result_cents) : 'Não foi possível calcular o lucro deste período'}</h2>
+            {profitEstimateIsPartial && <p className="report-scope-note" role="status">Estimativa parcial: exclui {inventoryLossMissingCostCount} perda(s) antiga(s) sem custo registrado. As perdas com custo conhecido continuam incluídas.</p>}
             <p className="report-result-formula">Vendas após descontos − custo dos produtos vendidos − perdas reais − gastos pagos − entregas pagas.</p>
             <div className="report-breakdown report-result-breakdown" aria-label="Valores usados no lucro estimado">
               <div><span>Faturamento bruto</span><strong>{formatBRLExact(completedBilling?.grossCents ?? 0n)}</strong></div>
@@ -735,11 +722,11 @@ export function FinancialReportsPage() {
               <div><span>Vendas após descontos</span><strong>{formatBRLExact(summary.managerial_result.sales_cents)}</strong></div>
               <div><span>Custo dos produtos</span><strong>{summary.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(summary.managerial_result.item_cost_cents)}</strong></div>
               <div><span>Faturamento líquido</span><strong>{completedBilling?.netBillingCents === null ? 'A conferir' : formatBRLExact(completedBilling?.netBillingCents ?? 0n)}</strong></div>
-              <div><span>Perdas reais no estoque</span><strong>{summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : `− ${formatBRLExact(summary.managerial_result.inventory_loss_cents)}`}</strong></div>
+              <div><span>{inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido' : 'Perdas reais no estoque'}</span><strong>{summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : `− ${formatBRLExact(summary.managerial_result.inventory_loss_cents)}`}</strong></div>
               <div><span>Gastos</span><strong>{formatBRLExact(summary.managerial_result.operating_expense_cents)}</strong></div>
               <div><span>Entregas</span><strong>{formatBRLExact(summary.managerial_result.delivery_cost_cents)}</strong></div>
             </div>
-            {!summary.managerial_result.available && <p className="report-scope-note">{summary.managerial_result.missing_cost_line_count > 0 ? `Falta o custo de ${summary.managerial_result.missing_cost_line_count} produto(s) vendido(s).` : ''}{summary.managerial_result.returned_order_count > 0 ? ` ${summary.managerial_result.returned_order_count} pedido(s) têm produtos devolvidos sem ajuste financeiro.` : ''}{inventoryLossMissingCostCount > 0 ? ` ${inventoryLossMissingCostCount} perda(s) não têm custo registrado.` : ''} O valor fica oculto enquanto não for possível calcular com segurança.</p>}
+            {!summary.managerial_result.available && <p className="report-scope-note">{summary.managerial_result.missing_cost_line_count > 0 ? `Falta o custo de ${summary.managerial_result.missing_cost_line_count} produto(s) vendido(s).` : ''}{summary.managerial_result.returned_order_count > 0 ? ` ${summary.managerial_result.returned_order_count} pedido(s) têm produtos devolvidos sem ajuste financeiro.` : ''}{inventoryLossMissingCostCount > 0 ? ` ${inventoryLossMissingCostCount} perda(s) também não têm custo registrado e ficarão fora da estimativa.` : ''} O lucro fica oculto até que os custos dos itens vendidos e os ajustes de devolução estejam disponíveis.</p>}
             <details className="report-calculation-details">
               <summary>Como calculamos</summary>
               <p>O custo de produtos para revenda entra quando cada produto é vendido. O registro de gastos é opcional; gastos não informados ficam fora do cálculo. Impostos, reembolsos e ajustes não estão incluídos.</p>

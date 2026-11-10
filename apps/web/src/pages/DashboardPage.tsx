@@ -542,15 +542,11 @@ export function DashboardPage() {
   const productCostCents = financialSummary?.item_cost_cents === null || !financialSummary ? null : BigInt(financialSummary.item_cost_cents)
   const grossProfitCents = financialSummary?.available && productCostCents !== null && netBillingCents !== null ? netBillingCents - productCostCents : null
   const inventoryFinance = currentFinancialSummary.data?.inventory_finance
-  const inventoryValueMissingCostCount = Number(inventoryFinance?.inventory_value_missing_cost_products ?? 0)
   const inventoryLossMissingCostCount = Number(inventoryFinance?.inventory_loss_missing_cost_count ?? 0)
-  const inventoryValueCents = inventoryFinance?.inventory_value_cents === null || !inventoryFinance || inventoryValueMissingCostCount > 0
-    ? null
-    : BigInt(inventoryFinance.inventory_value_cents)
-  const inventoryLossCents = inventoryFinance?.inventory_loss_cents === null || !inventoryFinance || inventoryLossMissingCostCount > 0
+  const inventoryLossCents = inventoryFinance?.inventory_loss_cents === null || !inventoryFinance
     ? null
     : BigInt(inventoryFinance.inventory_loss_cents)
-  const estimatedProfitCents = financialSummary?.available && financialSummary.result_cents !== null && inventoryLossCents !== null && inventoryLossMissingCostCount === 0
+  const estimatedProfitCents = financialSummary?.available && financialSummary.result_cents !== null && inventoryLossCents !== null
     ? BigInt(financialSummary.result_cents) - inventoryLossCents
     : null
   const totalPriorityActionCount = priorities
@@ -801,8 +797,7 @@ export function DashboardPage() {
               <article className="indicator-card"><p>Faturamento líquido</p><strong>{netBillingCents === null ? '—' : formatBRLExact(netBillingCents)}</strong><span>Vendas após a redução no preço dos pedidos</span></article>
               <article className="indicator-card"><p>Custo dos produtos vendidos</p><strong>{productCostCents === null ? 'Indisponível' : formatBRLExact(productCostCents)}</strong><span>Custo cadastrado dos itens entregues ou retirados</span></article>
               <article className="indicator-card"><p>Compras para estoque</p><strong>{formatBRLExact(currentFinancialSummary.data.outflows.purchase_cents ?? '0')}</strong><span>Valor pago por mercadorias recebidas neste período</span></article>
-              <article className="indicator-card"><p>Valor atual em estoque</p><strong>{inventoryValueCents === null ? 'Indisponível' : formatBRLExact(inventoryValueCents)}</strong><span>Saldo disponível × custo médio atual</span></article>
-              <article className="indicator-card"><p>Lucro estimado</p><strong>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</strong><span>Após custos vendidos, perdas, despesas e entregas</span></article>
+              <article className="indicator-card"><p>Lucro estimado{inventoryLossMissingCostCount > 0 && estimatedProfitCents !== null ? ' · parcial' : ''}</p><strong>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</strong><span>Após custos vendidos, perdas, despesas e entregas</span></article>
             </div>
             <details className="surface-panel dashboard-result-breakdown">
               <summary>Ver faturamento e despesas</summary>
@@ -813,7 +808,7 @@ export function DashboardPage() {
                 <div className="is-total"><dt>Faturamento líquido</dt><dd>{netBillingCents === null ? 'Indisponível' : formatBRLExact(netBillingCents)}</dd></div>
                 <div><dt>Custo dos produtos vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
                 <div className="is-total"><dt>Lucro bruto</dt><dd>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</dd></div>
-                <div><dt>Perdas reais no estoque</dt><dd>{inventoryLossCents === null ? 'Indisponível' : `− ${formatBRLExact(inventoryLossCents)}`}</dd></div>
+                <div><dt>{inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido' : 'Perdas reais no estoque'}</dt><dd>{inventoryLossCents === null ? 'Indisponível' : `− ${formatBRLExact(inventoryLossCents)}`}</dd></div>
                 <div><dt>Despesas da empresa, incluindo salários</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
                 <div><dt>Despesas com entregas</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
                 <div className="is-total"><dt>Lucro estimado antes de impostos</dt><dd>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</dd></div>
@@ -822,9 +817,8 @@ export function DashboardPage() {
                 <div><strong>Compras de estoque pagas</strong><span>Saída de caixa · fora do cálculo do lucro até os itens serem vendidos</span></div>
                 <strong>{formatBRLExact(currentFinancialSummary.data.outflows.purchase_cents ?? '0')}</strong>
               </div>
-              <p className="dashboard-result-note">Bruto = produtos + taxa de entrega cobrada do cliente. Líquido = bruto − valor reduzido no preço dos pedidos. A compra paga permanece no caixa; o valor atual em estoque muda com as contagens. Lucro estimado = líquido − custo dos itens vendidos − perdas reais − despesas pagas − entregas pagas. Uma correção de saldo não é registrada como perda.</p>
-              {inventoryValueMissingCostCount > 0 && <p className="dashboard-result-note">Não foi possível valorar o estoque atual: falta custo em {inventoryValueMissingCostCount} produto(s) com saldo.</p>}
-              {inventoryLossMissingCostCount > 0 && <p className="dashboard-result-note">Não foi possível calcular o lucro porque {inventoryLossMissingCostCount} perda(s) antiga(s) não têm custo registrado.</p>}
+              <p className="dashboard-result-note">Bruto = produtos + taxa de entrega cobrada do cliente. Líquido = bruto − valor reduzido no preço dos pedidos. A compra paga permanece no caixa. Lucro estimado = líquido − custo dos itens vendidos − perdas reais − despesas pagas − entregas pagas. Uma correção de saldo não é registrada como perda.</p>
+              {inventoryLossMissingCostCount > 0 && <p className="dashboard-result-note" role="status">{estimatedProfitCents !== null ? 'Estimativa parcial' : 'Custo não registrado'}: {inventoryLossMissingCostCount} perda(s) antiga(s) do estoque foram excluídas do lucro porque não têm custo conhecido. As perdas com custo registrado continuam incluídas.</p>}
               {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">{currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `Falta informar o custo de ${currentFinancialSummary.data.managerial_result.missing_cost_line_count} produto(s). ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) têm devolução sem ajuste.` : ''}</p>}
             </details>
           </>}
