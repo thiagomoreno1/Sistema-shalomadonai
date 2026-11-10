@@ -42,11 +42,12 @@ function eventRows(value: unknown, collectionKey: string): unknown[] {
     if (Array.isArray(collection)) return collection
     if (isRecord(collection)) {
       const entries = Object.entries(collection)
+      const recordEntries = entries.filter((entry): entry is [string, JsonRecord] => isRecord(entry[1]))
       const hasIdentity = [collection.remoteJid, collection.remote_jid, collection.groupJid, collection.group_jid,
         collection.jid, collection.id, collection.from, collection.packet, collection.key]
         .some((item) => item !== undefined && item !== null)
-      if (hasIdentity || !entries.length || !entries.every(([, item]) => isRecord(item))) return [collection]
-      return entries.map(([key, item]) => ({ ...item, id: item.id ?? item.jid ?? key }))
+      if (hasIdentity || !entries.length || recordEntries.length !== entries.length) return [collection]
+      return recordEntries.map(([key, item]) => ({ ...item, id: item.id ?? item.jid ?? key }))
     }
     const singularKey = collectionKey.endsWith('s') ? collectionKey.slice(0, -1) : collectionKey
     for (const key of ['data', 'result', 'payload', 'records', 'items', singularKey]) {
@@ -56,9 +57,11 @@ function eventRows(value: unknown, collectionKey: string): unknown[] {
       }
     }
     const entries = Object.entries(value)
-    const isJidKeyedMap = entries.length > 0 && entries.every(([key, item]) => isRecord(item)
-      && /@(g\.us|lid|s\.whatsapp\.net|c\.us)$/i.test(key))
-    if (isJidKeyedMap) return entries.map(([key, item]) => ({ ...item, id: item.id ?? item.jid ?? key }))
+    const jidEntries = entries.filter((entry): entry is [string, JsonRecord] => isRecord(entry[1])
+      && /@(g\.us|lid|s\.whatsapp\.net|c\.us)$/i.test(entry[0]))
+    if (entries.length > 0 && jidEntries.length === entries.length) {
+      return jidEntries.map(([key, item]) => ({ ...item, id: item.id ?? item.jid ?? key }))
+    }
   }
   return [value]
 }

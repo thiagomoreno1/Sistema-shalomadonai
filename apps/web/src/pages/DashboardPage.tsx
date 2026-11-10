@@ -685,13 +685,13 @@ export function DashboardPage() {
         </Link>
         <Link className="dashboard-summary-link is-overdue" to="/equipe">
           <span className="dashboard-summary-icon"><Icon name="coin" /></span>
-          <span className="dashboard-summary-copy"><strong>Salários atrasados</strong><small>Equipe · {priorities ? formatBRLExact(priorities.payroll.overdue_amount_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
+          <span className="dashboard-summary-copy"><strong>Salários atrasados</strong><small>Equipe · {priorities ? formatBRLExact(priorities.payroll.overdue_amount_cents) : prioritiesLoading ? 'Carregando…' : '—'}</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.payroll.overdue_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
         <Link className="dashboard-summary-link is-due-today" to="/financeiro">
           <span className="dashboard-summary-icon"><Icon name="clock" /></span>
-          <span className="dashboard-summary-copy"><strong>Parcelas dos clientes</strong><small>Valores que vencem hoje · {priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando…' : 'Indisponível'}</small></span>
+          <span className="dashboard-summary-copy"><strong>Parcelas dos clientes</strong><small>Valores que vencem hoje · {priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando…' : '—'}</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.receivables.due_today_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
@@ -832,31 +832,30 @@ export function DashboardPage() {
           {!currentFinancialSummary.loading && currentFinancialSummary.error && <div className="dashboard-panel-state" role="alert"><p>Não foi possível carregar os indicadores financeiros.</p><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
           {!currentFinancialSummary.loading && !currentFinancialSummary.error && currentFinancialSummary.data && <>
             <div className="indicator-grid dashboard-financial-indicators">
-              <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossBillingCents === null ? '—' : formatBRLExact(grossBillingCents)}</strong><span>Produtos e entrega cobrados, antes da redução no preço</span></article>
-              <article className="indicator-card"><p>Faturamento líquido</p><strong>{netBillingCents === null ? '—' : formatBRLExact(netBillingCents)}</strong><span>Vendas após a redução no preço dos pedidos</span></article>
-              <article className="indicator-card"><p>{missingCostLineCount > 0 ? 'Custo conhecido dos produtos vendidos' : 'Custo dos produtos vendidos'}</p><strong>{productCostCents === null ? 'Indisponível' : formatBRLExact(productCostCents)}</strong><span>Itens entregues ou retirados no período</span></article>
-              <article className="indicator-card"><p>Compras para estoque</p><strong>{formatBRLExact(currentFinancialSummary.data.inventory_purchase_count.adjusted_purchase_cents)}</strong><span>Recebimentos ajustados por perdas e correções do estoque; vendas não reduzem este valor.</span>{Number(currentFinancialSummary.data.inventory_purchase_count.missing_cost_movement_count) > 0 && <span role="status">Estimativa parcial: {Number(currentFinancialSummary.data.inventory_purchase_count.missing_cost_movement_count)} movimento(s) sem custo registrado.</span>}</article>
-              <article className="indicator-card"><p>Lucro estimado{profitEstimateIsPartial ? ' · parcial' : ''}</p><strong>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</strong><span role={profitEstimateIsPartial ? 'status' : undefined}>{profitEstimateIsPartial ? `Parcial: ${profitEstimatePartialNotes.join('; ')}.` : 'Após custos conhecidos, perdas, despesas e entregas'}</span></article>
+              <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossBillingCents === null ? '—' : formatBRLExact(grossBillingCents)}</strong></article>
+              <article className="indicator-card"><p>Faturamento líquido</p><strong>{netBillingCents === null ? '—' : formatBRLExact(netBillingCents)}</strong></article>
+              <article className="indicator-card"><p>{missingCostLineCount > 0 ? 'Custo conhecido dos produtos vendidos' : 'Custo dos produtos vendidos'}</p><strong>{productCostCents === null ? '—' : formatBRLExact(productCostCents)}</strong></article>
+              <article className="indicator-card"><p>Compras para estoque · acumulado</p><strong>{formatBRLExact(currentFinancialSummary.data.inventory_purchase_count.adjusted_purchase_cents)}</strong><span>Até o fim do período</span>{Number(currentFinancialSummary.data.inventory_purchase_count.missing_cost_movement_count) > 0 && <span role="status">Parcial: {Number(currentFinancialSummary.data.inventory_purchase_count.missing_cost_movement_count)} movimento(s) sem custo.</span>}</article>
+              <article className="indicator-card"><p>Lucro estimado{profitEstimateIsPartial ? ' · parcial' : ''}</p><strong>{estimatedProfitCents === null ? '—' : formatBRLExact(estimatedProfitCents)}</strong>{profitEstimateIsPartial && <span role="status">Parcial: {profitEstimatePartialNotes.join('; ')}.</span>}</article>
             </div>
             <details className="surface-panel dashboard-result-breakdown">
               <summary>Ver faturamento e despesas</summary>
-              <div className="dashboard-result-breakdown-heading"><h3>Composição do período</h3><span>Vendas entregues ou retiradas; despesas pagas</span></div>
+              <div className="dashboard-result-breakdown-heading"><h3>Composição financeira</h3></div>
               <dl>
-                <div><dt>Faturamento bruto</dt><dd>{grossBillingCents === null ? 'Indisponível' : formatBRLExact(grossBillingCents)}</dd></div>
-                <div><dt>Redução no preço dos pedidos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
-                <div className="is-total"><dt>Faturamento líquido</dt><dd>{netBillingCents === null ? 'Indisponível' : formatBRLExact(netBillingCents)}</dd></div>
-                <div><dt>{missingCostLineCount > 0 ? 'Custo conhecido dos produtos vendidos' : 'Custo dos produtos vendidos'}</dt><dd>{productCostCents === null ? 'Indisponível' : `− ${formatBRLExact(productCostCents)}`}</dd></div>
-                <div className="is-total"><dt>Lucro bruto{profitEstimateIsPartial ? ' parcial' : ''}</dt><dd>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</dd></div>
-                <div><dt>{inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido' : 'Perdas reais no estoque'}</dt><dd>{inventoryLossCents === null ? 'Indisponível' : `− ${formatBRLExact(inventoryLossCents)}`}</dd></div>
-                <div><dt>Despesas da empresa, incluindo salários</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
-                <div><dt>Despesas com entregas</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
-                <div className="is-total"><dt>Lucro estimado antes de impostos{profitEstimateIsPartial ? ' · parcial' : ''}</dt><dd>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</dd></div>
+                <div><dt>Faturamento bruto</dt><dd>{grossBillingCents === null ? '—' : formatBRLExact(grossBillingCents)}</dd></div>
+                <div><dt>Descontos nos pedidos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
+                <div className="is-total"><dt>Faturamento líquido</dt><dd>{netBillingCents === null ? '—' : formatBRLExact(netBillingCents)}</dd></div>
+                <div><dt>{missingCostLineCount > 0 ? 'Custo conhecido dos produtos vendidos' : 'Custo dos produtos vendidos'}</dt><dd>{productCostCents === null ? '—' : `− ${formatBRLExact(productCostCents)}`}</dd></div>
+                <div className="is-total"><dt>Lucro bruto{profitEstimateIsPartial ? ' parcial' : ''}</dt><dd>{grossProfitCents === null ? '—' : formatBRLExact(grossProfitCents)}</dd></div>
+                <div><dt>{inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido' : 'Perdas registradas'}</dt><dd>{inventoryLossCents === null ? '—' : `− ${formatBRLExact(inventoryLossCents)}`}</dd></div>
+                <div><dt>Despesas da empresa</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
+                <div><dt>Despesas de entrega</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
+                <div className="is-total"><dt>Lucro estimado{profitEstimateIsPartial ? ' · parcial' : ''}</dt><dd>{estimatedProfitCents === null ? '—' : formatBRLExact(estimatedProfitCents)}</dd></div>
               </dl>
               <div className="dashboard-purchase-cash-outflow">
-                <div><strong>Compras de estoque pagas</strong><span>Saída de caixa · fora do cálculo do lucro até os itens serem vendidos</span></div>
+                <div><strong>Compras pagas em dinheiro</strong></div>
                 <strong>{formatBRLExact(currentFinancialSummary.data.outflows.purchase_cents ?? '0')}</strong>
               </div>
-              <p className="dashboard-result-note">Bruto = produtos + taxa de entrega cobrada do cliente. Líquido = bruto − valor reduzido no preço dos pedidos. A compra paga permanece no caixa. Lucro estimado = líquido − custo dos itens vendidos − perdas reais − despesas pagas − entregas pagas. Uma correção de saldo não é registrada como perda.</p>
               {profitEstimateIsPartial && <p className="dashboard-result-note" role="status">Estimativa parcial: {profitEstimatePartialNotes.join('; ')}.</p>}
             </details>
           </>}

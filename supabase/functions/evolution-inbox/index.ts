@@ -11,6 +11,7 @@ const CONTACT_NAME_MAX_PAGES = 20
 // response does not hide conversations that arrive during history sync.
 const LEGACY_SYNC_COOLDOWN_MS = 15_000
 const CONTACT_NAMES_COOLDOWN_MS = 60_000
+const CONTACT_DIRECTORY_REFRESH_MS = 60_000
 const CONTACT_IDENTITY_RECONCILE_COOLDOWN_MS = 30_000
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 const MAX_PROFILE_PICTURE_BYTES = 2 * 1024 * 1024
@@ -38,13 +39,14 @@ type ContactProfile = { name: string | null; pictureUrl: string | null; phone?: 
 type ContactDirectory = Map<string, ContactProfile>
 const recentContactNames = new Map<string, {
   at: number
+  persistedAt?: number
   directory: ContactDirectory
   contacts: JsonRecord[]
   identitiesPersisted: boolean
 }>()
 const recentGroupMetadata = new Map<string, { at: number; subject: string | null; pictureUrl: string | null }>()
 const recentGroupMetadataLookups = new Map<string, number>()
-const recentGroupDirectory = new Map<string, { at: number; directory: Map<string, GroupMetadata> }>()
+const recentGroupDirectory = new Map<string, { at: number; persistedAt?: number; directory: Map<string, GroupMetadata> }>()
 const recentWebhookReconciliation = new Map<string, { at: number; result: WebhookReconciliation }>()
 
 type JsonRecord = Record<string, unknown>
@@ -482,7 +484,30 @@ async function persistContactDirectoryRows(admin: any, rows: JsonRecord[], busin
   return rows.length
 }
 
-async function loadPersistedContactDirectory(admin: any, businessId: string, instanceName: string): Promise<ContactDirectory> {
+async function loadPersistedContactDirectory(
+  admin: any,
+  businessId: string,
+  instanceName: string,
+  remoteJids?: string[],
+): Promise<ContactDirectory> {
+  if (remoteJids) {
+    const uniqueJids = [...new Set(remoteJids.map((jid) => jid.toLowerCase()).filter(Boolean))]
+    const records: JsonRecord[] = []
+    for (let start = 0; start < uniqueJids.length; start += 100) {
+      const { data, error } = await admin.from('whatsapp_contact_directory')
+        .select('remote_jid, remote_jid_alt, contact_name, contact_phone')
+        .eq('business_id', businessId).eq('instance_name', instanceName)
+        .in('remote_jid', uniqueJids.slice(start, start + 100))
+      if (error) throw new RequestError(500, 'contact_directory_lookup_failed')
+      records.push(...(data ?? []))
+    }
+    return contactDirectoryIndex(records.map((row) => ({
+      ...row,
+      name: row.contact_name,
+      contact_phone: row.contact_phone,
+    })))
+  }
+
   const records: JsonRecord[] = []
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await admin.from('whatsapp_contact_directory')
@@ -565,9 +590,15 @@ async function loadSavedContactDirectory(
           ? result.data.contacts
           : isRecord(result) ? result : {}
       const advertisedPages = Number(contactPageInfo.pages ?? contactPageInfo.totalPages)
-      const pageLimit = Number.isFinite(advertisedPages) && advertisedPages > 0
-        ? Math.min(CONTACT_NAME_MAX_PAGES, Math.floor(advertisedPages))
-        : firstPage.length >= CONTACT_DIRECTORY_PAGE_SIZE ? CONTACT_NAME_MAX_PAGES : 1
+      // `syncLegacyChats` supplies the first contact page on every cold list
+      // call. Do not fan that into up to 20 more provider requests while the
+      // local directory cache is already warm; the current page remains merged
+      // below, and a complete import still occurs on a cold/expired cache.
+      const pageLimit = cacheFresh && cached
+        ? 1
+        : Number.isFinite(advertisedPages) && advertisedPages > 0
+          ? Math.min(CONTACT_NAME_MAX_PAGES, Math.floor(advertisedPages))
+          : firstPage.length >= CONTACT_DIRECTORY_PAGE_SIZE ? CONTACT_NAME_MAX_PAGES : 1
       const contactPages = [firstPage]
       for (let startPage = 2; startPage <= pageLimit; startPage += 8) {
         const pageNumbers = Array.from({ length: Math.min(8, pageLimit - startPage + 1) }, (_, index) => startPage + index)
@@ -608,15 +639,31 @@ async function loadSavedContactDirectory(
       })
     }
     const providerDirectory = contactDirectoryIndex(allContacts)
-    const persistedDirectory = admin && businessId
-      ? await loadPersistedContactDirectory(admin, businessId, config.instanceName)
-      : new Map<string, ContactProfile>()
+    // The persisted directory is normally large but stable for this instance.
+    // Re-reading every 1,000-row page on every inbox poll turns a warm cache
+    // into an N-page database scan. A fresh provider page is still merged and
+    // persisted above; webhook updates are picked up on the next cache refresh.
+    let persistedDirectory = new Map<string, ContactProfile>()
+    let persistedAt = cached?.persistedAt ?? 0
+    if (admin && businessId) {
+      if (!cached || !persistedAt || Date.now() - persistedAt >= CONTACT_DIRECTORY_REFRESH_MS) {
+        persistedDirectory = await loadPersistedContactDirectory(admin, businessId, config.instanceName)
+        persistedAt = Date.now()
+      } else if (freshContacts.length) {
+        // Refresh only the JIDs returned in the provider's first page. The
+        // remaining persisted rows are already represented in the warm cache.
+        const refreshedJids = directoryRowsFromProvider(freshContacts, businessId, config.instanceName)
+          .map((row) => String(row.remote_jid))
+        persistedDirectory = await loadPersistedContactDirectory(admin, businessId, config.instanceName, refreshedJids)
+      }
+    }
     const cachedDirectory = cached?.directory ?? new Map()
     // The persisted instance directory includes current webhook changes and
     // provider rows just written above, so it must beat process-local cache.
     const directory = mergeContactDirectories(persistedDirectory, providerDirectory, cachedDirectory)
     recentContactNames.set(cacheKey, {
       at: providerFetchedFresh ? Date.now() : cached?.at ?? Date.now(),
+      persistedAt,
       directory, contacts: allContacts, identitiesPersisted: Boolean(admin && businessId),
     })
     return directory
@@ -1436,7 +1483,8 @@ async function loadGroupDirectory(config: EvolutionConfig, admin?: any, business
       // Persisted webhook subjects still provide a useful fallback.
     }
   }
-  if (admin && businessId) {
+  let persistedAt = cached?.persistedAt ?? 0
+  if (admin && businessId && (!persistedAt || Date.now() - persistedAt >= CONTACT_DIRECTORY_REFRESH_MS)) {
     const { data, error } = await admin.from('whatsapp_contact_directory')
       .select('remote_jid, group_subject')
       .eq('business_id', businessId).eq('instance_name', config.instanceName)
@@ -1452,9 +1500,11 @@ async function loadGroupDirectory(config: EvolutionConfig, admin?: any, business
         pictureUrl: current?.pictureUrl ?? null,
       })
     }
+    persistedAt = Date.now()
   }
   recentGroupDirectory.set(cacheKey, {
     at: providerFetchedFresh || !cacheFresh ? Date.now() : cached?.at ?? Date.now(),
+    persistedAt,
     directory,
   })
   return directory
@@ -1856,8 +1906,10 @@ function callStateLabel(value: unknown): string {
 }
 
 function base64Bytes(value: string): Uint8Array {
-  const encoded = value.includes(',') ? value.slice(value.indexOf(',') + 1) : value
-  const binary = atob(encoded)
+  const encoded = (value.includes(',') ? value.slice(value.indexOf(',') + 1) : value)
+    .replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/')
+  const padded = encoded + '='.repeat((4 - encoded.length % 4) % 4)
+  const binary = atob(padded)
   const bytes = new Uint8Array(binary.length)
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
   return bytes
@@ -1972,25 +2024,67 @@ async function profilePictureResponse(config: EvolutionConfig, conversation: Jso
   return profilePictureImageResponse(pictureUrl)
 }
 
+function mediaPayloadFromEvolution(value: unknown): JsonRecord | null {
+  const queue: unknown[] = [value]
+  const visited = new Set<JsonRecord>()
+  while (queue.length && visited.size < 32) {
+    const current = queue.shift()
+    if (Array.isArray(current)) {
+      queue.push(...current.slice(0, 16))
+      continue
+    }
+    if (typeof current === 'string') {
+      const candidate = current.trim()
+      if (candidate.length <= MAX_MEDIA_BYTES * 2
+        && (/^data:[^,]{1,160};base64,/i.test(candidate) || /^[A-Za-z0-9+/_=-]+$/.test(candidate))) {
+        return { base64: candidate }
+      }
+      continue
+    }
+    if (!isRecord(current) || visited.has(current)) continue
+    visited.add(current)
+    if (text(current.base64, MAX_MEDIA_BYTES * 2)) return current
+    for (const key of ['data', 'result', 'media', 'message', 'response', 'payload']) {
+      if (current[key] !== undefined && current[key] !== null) queue.push(current[key])
+    }
+  }
+  return null
+}
+
 async function profilePictureImageResponse(pictureUrl: string): Promise<Response> {
-  let imageUrl: URL
-  try { imageUrl = new URL(pictureUrl) } catch { throw new RequestError(502, 'profile_picture_unavailable') }
-  const allowedHost = imageUrl.hostname.toLowerCase().endsWith('.whatsapp.net')
-    || imageUrl.hostname.toLowerCase().endsWith('.fbcdn.net')
-  if (imageUrl.protocol !== 'https:' || !allowedHost || imageUrl.username || imageUrl.password || imageUrl.port) {
-    throw new RequestError(502, 'profile_picture_unavailable')
+  const parseAllowedImageUrl = (value: string | URL): URL => {
+    let url: URL
+    try { url = value instanceof URL ? value : new URL(value) } catch { throw new RequestError(502, 'profile_picture_unavailable') }
+    const host = url.hostname.toLowerCase()
+    const allowedHost = host === 'whatsapp.net' || host.endsWith('.whatsapp.net')
+      || host === 'fbcdn.net' || host.endsWith('.fbcdn.net')
+      || host === 'lookaside.fbsbx.com' || host.endsWith('.lookaside.fbsbx.com')
+    if (url.protocol !== 'https:' || !allowedHost || url.username || url.password || url.port) {
+      throw new RequestError(502, 'profile_picture_unavailable')
+    }
+    return url
   }
 
-  let imageResponse: Response
+  let imageUrl = parseAllowedImageUrl(pictureUrl)
+  let imageResponse: Response | null = null
   try {
-    imageResponse = await fetch(imageUrl, {
-      headers: { Accept: 'image/jpeg,image/png,image/webp' },
-      redirect: 'error',
-      signal: AbortSignal.timeout(8_000),
-    })
-  } catch {
+    for (let redirectCount = 0; redirectCount <= 2; redirectCount += 1) {
+      imageResponse = await fetch(imageUrl, {
+        headers: { Accept: 'image/jpeg,image/png,image/webp' },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(8_000),
+      })
+      if (![301, 302, 303, 307, 308].includes(imageResponse.status)) break
+      const location = imageResponse.headers.get('Location')
+      await imageResponse.body?.cancel().catch(() => undefined)
+      if (!location || redirectCount === 2) throw new RequestError(404, 'profile_picture_unavailable')
+      imageUrl = parseAllowedImageUrl(new URL(location, imageUrl))
+    }
+  } catch (error) {
+    if (error instanceof RequestError) throw error
     throw new RequestError(404, 'profile_picture_unavailable')
   }
+  if (!imageResponse) throw new RequestError(404, 'profile_picture_unavailable')
   if (!imageResponse.ok) {
     await imageResponse.body?.cancel().catch(() => undefined)
     throw new RequestError(404, 'profile_picture_unavailable')
@@ -2055,13 +2149,35 @@ async function mediaResponse(admin: any, config: EvolutionConfig, businessId: st
         body: JSON.stringify({ message: { key }, convertToMp4: message.message_kind === 'video' }),
         signal: AbortSignal.timeout(30_000),
       }, 36 * 1024 * 1024)
-      const resultRecord = isRecord(result) ? result : {}
-      const payload = isRecord(resultRecord.data) ? resultRecord.data : resultRecord
-      if (text(payload.base64, MAX_MEDIA_BYTES * 2)) {
+      const payload = mediaPayloadFromEvolution(result)
+      if (payload && text(payload.base64, MAX_MEDIA_BYTES * 2)) {
         mediaPayload = payload
         break
       }
       mediaRequestError = new RequestError(502, 'media_unavailable')
+    } catch (error) {
+      if (!(error instanceof RequestError) || error.code !== 'evolution_request_failed'
+        || ![400, 404, 422].includes(error.upstreamStatus ?? 0)) throw error
+      mediaRequestError = error
+    }
+  }
+  if (!mediaPayload) {
+    // Some Evolution/Baileys releases resolve media by provider message ID
+    // alone and reject the expanded LID/PN key assembled from older rows.
+    // The Evolution endpoint documents this minimal key shape; try it once
+    // before returning an unavailable-media error.
+    try {
+      const result = await evolutionRequest(config, `/chat/getBase64FromMediaMessage/${encodeURIComponent(config.instanceName)}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          message: { key: { id: message.provider_message_id } },
+          convertToMp4: message.message_kind === 'video',
+        }),
+        signal: AbortSignal.timeout(30_000),
+      }, 36 * 1024 * 1024)
+      const payload = mediaPayloadFromEvolution(result)
+      if (payload) mediaPayload = payload
+      else mediaRequestError = new RequestError(502, 'media_unavailable')
     } catch (error) {
       if (!(error instanceof RequestError) || error.code !== 'evolution_request_failed'
         || ![400, 404, 422].includes(error.upstreamStatus ?? 0)) throw error
@@ -2074,7 +2190,8 @@ async function mediaResponse(admin: any, config: EvolutionConfig, businessId: st
   if (!base64) throw new RequestError(502, 'media_unavailable')
   const bytes = base64Bytes(base64)
   if (!bytes.length || bytes.byteLength > MAX_MEDIA_BYTES) throw new RequestError(413, 'media_too_large')
-  const sourceMimeType = text(payload.mimetype ?? payload.mimeType ?? metadata.mime_type, 160) ?? 'application/octet-stream'
+  const dataUriMimeType = /^data:([^;,]{1,160});base64,/i.exec(base64)?.[1] ?? null
+  const sourceMimeType = text(payload.mimetype ?? payload.mimeType ?? metadata.mime_type ?? dataUriMimeType, 160) ?? 'application/octet-stream'
   const mimeType = sourceMimeType.split(';', 1)[0].trim().toLowerCase()
   const disposition = ['image', 'audio', 'video', 'sticker'].includes(message.message_kind) ? 'inline' : 'attachment'
   const safeMimeType = /^(?:image\/(?:jpeg|png|webp|gif)|audio\/(?:ogg|mpeg|mp4|wav|webm|aac|3gpp)|video\/(?:mp4|webm|3gpp)|application\/pdf)$/i.test(mimeType)
@@ -2424,12 +2541,25 @@ export default {
         if (page < 1 || page > 1000) return json({ error: 'invalid_page' }, 400)
         const query = body.query === undefined ? '' : (text(body.query, 120) ?? '')
         if (body.query !== undefined && body.query !== '' && !query) return json({ error: 'invalid_query' }, 400)
-        const webhookHealth = await reconcileEvolutionWebhook(config)
         const providerChatPage = Math.ceil((page * PAGE_SIZE) / LEGACY_CHAT_PAGE_SIZE)
-        const historySync = await syncLegacyChats(admin, config, businessId, providerChatPage)
+        // These Evolution requests are independent. Running them together
+        // removes the webhook check's network wait from the inbox's critical
+        // path without changing either result or the DB sync order below.
+        const [webhookHealth, historySync] = await Promise.all([
+          reconcileEvolutionWebhook(config),
+          syncLegacyChats(admin, config, businessId, providerChatPage),
+        ])
         let selection = admin.from('whatsapp_conversations')
-          .select('id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, display_name_override, contact_classification, hidden_from_inbox, status, unread_count, last_activity_at', { count: 'exact' })
+          .select(`id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, display_name_override, contact_classification, hidden_from_inbox, status, unread_count, last_activity_at,
+            latest_message:whatsapp_messages!whatsapp_messages_connection_conversation_fkey(
+              id, provider_message_id, conversation_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at
+            )`, { count: 'exact' })
           .eq('business_id', businessId).eq('instance_name', config.instanceName)
+          .neq('latest_message.message_kind', 'reaction')
+          .is('latest_message.deleted_at', null)
+          .order('provider_timestamp', { referencedTable: 'latest_message', ascending: false })
+          .order('id', { referencedTable: 'latest_message', ascending: false })
+          .limit(1, { referencedTable: 'latest_message' })
         if (segment === 'customers') selection = selection.eq('hidden_from_inbox', false).eq('contact_classification', 'customer')
         else if (segment === 'conversations') selection = selection.eq('hidden_from_inbox', false).neq('contact_classification', 'customer')
         else selection = selection.eq('hidden_from_inbox', true)
@@ -2444,33 +2574,11 @@ export default {
           .order('id', { ascending: true })
           .range(offset, offset + PAGE_SIZE - 1)
         if (error) throw new RequestError(500, 'conversation_list_failed')
-        const ids = (rows ?? []).map((row: JsonRecord) => row.id)
-        let lastMessages: JsonRecord[] = []
-        if (ids.length) {
-          for (let index = 0; index < ids.length; index += 8) {
-            const batch = await Promise.all(ids.slice(index, index + 8).map(async (id) => {
-              const { data: message, error: messageError } = await admin.from('whatsapp_messages')
-                .select('id, provider_message_id, conversation_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
-                .eq('business_id', businessId)
-                .eq('instance_name', config.instanceName)
-                .eq('conversation_id', id)
-                .neq('message_kind', 'reaction')
-                .is('deleted_at', null)
-                .order('provider_timestamp', { ascending: false })
-                .order('id', { ascending: false })
-                .limit(1)
-                .maybeSingle()
-              if (messageError) throw new RequestError(500, 'message_list_failed')
-              return message
-            }))
-            for (const message of batch) {
-              if (message !== null) lastMessages.push(message)
-            }
-          }
-        }
         const latestByConversation = new Map<string, JsonRecord>()
-        for (const message of lastMessages) {
-          if (message.message_kind !== 'reaction' && !latestByConversation.has(String(message.conversation_id))) {
+        for (const row of rows ?? []) {
+          const embedded = row.latest_message
+          const message = Array.isArray(embedded) ? embedded[0] : embedded
+          if (isRecord(message) && message.message_kind !== 'reaction' && !message.deleted_at) {
             latestByConversation.set(String(message.conversation_id), message)
           }
         }
