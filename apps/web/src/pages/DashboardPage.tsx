@@ -51,6 +51,15 @@ type RecentOrder = {
 type DashboardFinancialSummary = {
   receipts: { amount_cents: string }
   outflows: { purchase_cents: string }
+  known_product_cost_summary: {
+    known_item_cost_cents: string
+    missing_cost_line_count: number | string
+    returned_order_count: number | string
+  }
+  inventory_purchase_count: {
+    adjusted_purchase_cents: string
+    missing_cost_movement_count: number | string
+  }
   inventory_finance: {
     inventory_value_cents: string | null
     inventory_value_missing_cost_products: number | string
@@ -202,6 +211,15 @@ function createDemoFinancialSummary(days: DashboardTrendDay[]): DashboardFinanci
   return {
     receipts: { amount_cents: days.reduce((total, day) => total + day.receipts_cents, 0n).toString() },
     outflows: { purchase_cents: inventoryPurchases.toString() },
+    known_product_cost_summary: {
+      known_item_cost_cents: itemCost.toString(),
+      missing_cost_line_count: 0,
+      returned_order_count: 0,
+    },
+    inventory_purchase_count: {
+      adjusted_purchase_cents: inventoryPurchases.toString(),
+      missing_cost_movement_count: 0,
+    },
     inventory_finance: {
       inventory_value_cents: '428500',
       inventory_value_missing_cost_products: 0,
@@ -410,7 +428,7 @@ export function DashboardPage() {
         return
       }
       if (!supabaseClient) throw new Error('Authentication service unavailable.')
-      const [reportResult, inventoryResult] = await Promise.all([
+      const [reportResult, inventoryResult, inventoryPurchaseCountResult, knownProductCostResult] = await Promise.all([
         supabaseClient.rpc('get_financial_report_summary', {
           p_business_id: businessId,
           p_start_on: trendStartOn,
@@ -421,12 +439,24 @@ export function DashboardPage() {
           p_start_on: trendStartOn,
           p_end_on: today,
         }),
+        supabaseClient.rpc('get_inventory_purchase_count_summary', {
+          p_business_id: businessId,
+          p_start_on: trendStartOn,
+          p_end_on: today,
+        }),
+        supabaseClient.rpc('get_dashboard_known_product_cost_summary', {
+          p_business_id: businessId,
+          p_start_on: trendStartOn,
+          p_end_on: today,
+        }),
       ])
-      if (reportResult.error || !reportResult.data || inventoryResult.error || !inventoryResult.data?.[0]) {
-        throw reportResult.error ?? inventoryResult.error ?? new Error('Inventory finance summary was empty.')
+      if (reportResult.error || !reportResult.data || inventoryResult.error || !inventoryResult.data?.[0] || inventoryPurchaseCountResult.error || !inventoryPurchaseCountResult.data?.[0] || knownProductCostResult.error || !knownProductCostResult.data?.[0]) {
+        throw reportResult.error ?? inventoryResult.error ?? inventoryPurchaseCountResult.error ?? knownProductCostResult.error ?? new Error('Financial summary was empty.')
       }
       const summary = {
-        ...(reportResult.data as Omit<DashboardFinancialSummary, 'inventory_finance'>),
+        ...(reportResult.data as Omit<DashboardFinancialSummary, 'inventory_finance' | 'inventory_purchase_count' | 'known_product_cost_summary'>),
+        known_product_cost_summary: knownProductCostResult.data[0] as DashboardFinancialSummary['known_product_cost_summary'],
+        inventory_purchase_count: inventoryPurchaseCountResult.data[0] as DashboardFinancialSummary['inventory_purchase_count'],
         inventory_finance: inventoryResult.data[0] as DashboardFinancialSummary['inventory_finance'],
       }
       if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: summary })
@@ -539,16 +569,25 @@ export function DashboardPage() {
     ? BigInt(financialSummary.product_subtotal_cents) + BigInt(financialSummary.customer_delivery_fee_cents)
     : null
   const netBillingCents = financialSummary ? BigInt(financialSummary.sales_cents) : null
-  const productCostCents = financialSummary?.item_cost_cents === null || !financialSummary ? null : BigInt(financialSummary.item_cost_cents)
-  const grossProfitCents = financialSummary?.available && productCostCents !== null && netBillingCents !== null ? netBillingCents - productCostCents : null
+  const knownProductCost = currentFinancialSummary.data?.known_product_cost_summary
+  const missingCostLineCount = Number(knownProductCost?.missing_cost_line_count ?? 0)
+  const returnedOrderCount = Number(knownProductCost?.returned_order_count ?? 0)
+  const productCostCents = knownProductCost ? BigInt(knownProductCost.known_item_cost_cents) : null
+  const grossProfitCents = productCostCents !== null && netBillingCents !== null ? netBillingCents - productCostCents : null
   const inventoryFinance = currentFinancialSummary.data?.inventory_finance
   const inventoryLossMissingCostCount = Number(inventoryFinance?.inventory_loss_missing_cost_count ?? 0)
   const inventoryLossCents = inventoryFinance?.inventory_loss_cents === null || !inventoryFinance
     ? null
     : BigInt(inventoryFinance.inventory_loss_cents)
-  const estimatedProfitCents = financialSummary?.available && financialSummary.result_cents !== null && inventoryLossCents !== null
-    ? BigInt(financialSummary.result_cents) - inventoryLossCents
+  const estimatedProfitCents = financialSummary && productCostCents !== null && inventoryLossCents !== null
+    ? BigInt(financialSummary.sales_cents) - productCostCents - BigInt(financialSummary.operating_expense_cents) - BigInt(financialSummary.delivery_cost_cents) - inventoryLossCents
     : null
+  const profitEstimatePartialNotes = [
+    missingCostLineCount > 0 ? `faltam os custos de ${missingCostLineCount} item(ns) vendido(s)` : null,
+    returnedOrderCount > 0 ? `${returnedOrderCount} pedido(s) devolvido(s) sem ajuste podem alterar o valor` : null,
+    inventoryLossMissingCostCount > 0 ? `${inventoryLossMissingCostCount} perda(s) sem custo conhecido foram excluídas` : null,
+  ].filter((note): note is string => note !== null)
+  const profitEstimateIsPartial = estimatedProfitCents !== null && profitEstimatePartialNotes.length > 0
   const totalPriorityActionCount = priorities
     ? priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.payroll.overdue_count + priorities.payroll.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count
     : null
@@ -795,9 +834,9 @@ export function DashboardPage() {
             <div className="indicator-grid dashboard-financial-indicators">
               <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossBillingCents === null ? '—' : formatBRLExact(grossBillingCents)}</strong><span>Produtos e entrega cobrados, antes da redução no preço</span></article>
               <article className="indicator-card"><p>Faturamento líquido</p><strong>{netBillingCents === null ? '—' : formatBRLExact(netBillingCents)}</strong><span>Vendas após a redução no preço dos pedidos</span></article>
-              <article className="indicator-card"><p>Custo dos produtos vendidos</p><strong>{productCostCents === null ? 'Indisponível' : formatBRLExact(productCostCents)}</strong><span>Custo cadastrado dos itens entregues ou retirados</span></article>
-              <article className="indicator-card"><p>Compras para estoque</p><strong>{formatBRLExact(currentFinancialSummary.data.outflows.purchase_cents ?? '0')}</strong><span>Valor pago por mercadorias recebidas neste período</span></article>
-              <article className="indicator-card"><p>Lucro estimado{inventoryLossMissingCostCount > 0 && estimatedProfitCents !== null ? ' · parcial' : ''}</p><strong>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</strong><span>Após custos vendidos, perdas, despesas e entregas</span></article>
+              <article className="indicator-card"><p>{missingCostLineCount > 0 ? 'Custo conhecido dos produtos vendidos' : 'Custo dos produtos vendidos'}</p><strong>{productCostCents === null ? 'Indisponível' : formatBRLExact(productCostCents)}</strong><span>Itens entregues ou retirados no período</span></article>
+              <article className="indicator-card"><p>Compras para estoque</p><strong>{formatBRLExact(currentFinancialSummary.data.inventory_purchase_count.adjusted_purchase_cents)}</strong><span>Recebimentos ajustados por perdas e correções do estoque; vendas não reduzem este valor.</span>{Number(currentFinancialSummary.data.inventory_purchase_count.missing_cost_movement_count) > 0 && <span role="status">Estimativa parcial: {Number(currentFinancialSummary.data.inventory_purchase_count.missing_cost_movement_count)} movimento(s) sem custo registrado.</span>}</article>
+              <article className="indicator-card"><p>Lucro estimado{profitEstimateIsPartial ? ' · parcial' : ''}</p><strong>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</strong><span role={profitEstimateIsPartial ? 'status' : undefined}>{profitEstimateIsPartial ? `Parcial: ${profitEstimatePartialNotes.join('; ')}.` : 'Após custos conhecidos, perdas, despesas e entregas'}</span></article>
             </div>
             <details className="surface-panel dashboard-result-breakdown">
               <summary>Ver faturamento e despesas</summary>
@@ -806,20 +845,19 @@ export function DashboardPage() {
                 <div><dt>Faturamento bruto</dt><dd>{grossBillingCents === null ? 'Indisponível' : formatBRLExact(grossBillingCents)}</dd></div>
                 <div><dt>Redução no preço dos pedidos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
                 <div className="is-total"><dt>Faturamento líquido</dt><dd>{netBillingCents === null ? 'Indisponível' : formatBRLExact(netBillingCents)}</dd></div>
-                <div><dt>Custo dos produtos vendidos</dt><dd>{currentFinancialSummary.data.managerial_result.item_cost_cents === null ? 'Indisponível' : `− ${formatBRLExact(currentFinancialSummary.data.managerial_result.item_cost_cents)}`}</dd></div>
-                <div className="is-total"><dt>Lucro bruto</dt><dd>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</dd></div>
+                <div><dt>{missingCostLineCount > 0 ? 'Custo conhecido dos produtos vendidos' : 'Custo dos produtos vendidos'}</dt><dd>{productCostCents === null ? 'Indisponível' : `− ${formatBRLExact(productCostCents)}`}</dd></div>
+                <div className="is-total"><dt>Lucro bruto{profitEstimateIsPartial ? ' parcial' : ''}</dt><dd>{grossProfitCents === null ? 'Indisponível' : formatBRLExact(grossProfitCents)}</dd></div>
                 <div><dt>{inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido' : 'Perdas reais no estoque'}</dt><dd>{inventoryLossCents === null ? 'Indisponível' : `− ${formatBRLExact(inventoryLossCents)}`}</dd></div>
                 <div><dt>Despesas da empresa, incluindo salários</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
                 <div><dt>Despesas com entregas</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
-                <div className="is-total"><dt>Lucro estimado antes de impostos</dt><dd>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</dd></div>
+                <div className="is-total"><dt>Lucro estimado antes de impostos{profitEstimateIsPartial ? ' · parcial' : ''}</dt><dd>{estimatedProfitCents === null ? 'Indisponível' : formatBRLExact(estimatedProfitCents)}</dd></div>
               </dl>
               <div className="dashboard-purchase-cash-outflow">
                 <div><strong>Compras de estoque pagas</strong><span>Saída de caixa · fora do cálculo do lucro até os itens serem vendidos</span></div>
                 <strong>{formatBRLExact(currentFinancialSummary.data.outflows.purchase_cents ?? '0')}</strong>
               </div>
               <p className="dashboard-result-note">Bruto = produtos + taxa de entrega cobrada do cliente. Líquido = bruto − valor reduzido no preço dos pedidos. A compra paga permanece no caixa. Lucro estimado = líquido − custo dos itens vendidos − perdas reais − despesas pagas − entregas pagas. Uma correção de saldo não é registrada como perda.</p>
-              {inventoryLossMissingCostCount > 0 && <p className="dashboard-result-note" role="status">{estimatedProfitCents !== null ? 'Estimativa parcial' : 'Custo não registrado'}: {inventoryLossMissingCostCount} perda(s) antiga(s) do estoque foram excluídas do lucro porque não têm custo conhecido. As perdas com custo registrado continuam incluídas.</p>}
-              {!currentFinancialSummary.data.managerial_result.available && <p className="dashboard-result-note">{currentFinancialSummary.data.managerial_result.missing_cost_line_count > 0 ? `Falta informar o custo de ${currentFinancialSummary.data.managerial_result.missing_cost_line_count} produto(s). ` : ''}{currentFinancialSummary.data.managerial_result.returned_order_count > 0 ? `${currentFinancialSummary.data.managerial_result.returned_order_count} pedido(s) têm devolução sem ajuste.` : ''}</p>}
+              {profitEstimateIsPartial && <p className="dashboard-result-note" role="status">Estimativa parcial: {profitEstimatePartialNotes.join('; ')}.</p>}
             </details>
           </>}
         </section>
