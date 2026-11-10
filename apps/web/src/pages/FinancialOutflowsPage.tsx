@@ -130,7 +130,6 @@ export function FinancialOutflowsPage() {
   const [editingExpenseSchedule, setEditingExpenseSchedule] = useState<RecurringOperationTemplate | null>(null)
   const [expenseScheduleDescription, setExpenseScheduleDescription] = useState('')
   const [expenseScheduleCategory, setExpenseScheduleCategory] = useState('')
-  const [expenseScheduleCounterparty, setExpenseScheduleCounterparty] = useState('')
   const [expenseScheduleAmount, setExpenseScheduleAmount] = useState('')
   const [expenseScheduleDay, setExpenseScheduleDay] = useState(String(Number(today.slice(8, 10))))
   const [expenseScheduleStartsOn, setExpenseScheduleStartsOn] = useState(today)
@@ -596,7 +595,6 @@ export function FinancialOutflowsPage() {
     setEditingExpenseSchedule(template ?? null)
     setExpenseScheduleDescription(template?.description ?? template?.name ?? '')
     setExpenseScheduleCategory(template?.category ?? '')
-    setExpenseScheduleCounterparty(template?.counterparty_name ?? '')
     setExpenseScheduleAmount(template?.amount_cents === null || template?.amount_cents === undefined ? '' : centsToBrazilianInput(BigInt(template.amount_cents)))
     setExpenseScheduleDay(String(template?.day_of_month ?? Number(today.slice(8, 10))))
     setExpenseScheduleStartsOn(template?.starts_on ?? today)
@@ -609,10 +607,9 @@ export function FinancialOutflowsPage() {
     if (!supabaseClient || expenseScheduleSaving) return
     const name = expenseScheduleDescription.trim()
     const categoryValue = expenseScheduleCategory.trim()
-    const counterpartyValue = expenseScheduleCounterparty.trim()
     const amountCents = parseBrazilianCurrency(expenseScheduleAmount)
     const day = Number(expenseScheduleDay)
-    if (!name || name.length > 200 || categoryValue.length > 120 || counterpartyValue.length > 160
+    if (!name || name.length > 200 || categoryValue.length > 120
       || amountCents === null || !Number.isSafeInteger(amountCents) || amountCents <= 0
       || !Number.isInteger(day) || day < 1 || day > 31
       || !isCalendarDate(expenseScheduleStartsOn)) {
@@ -631,7 +628,6 @@ export function FinancialOutflowsPage() {
       name,
       description: name,
       category: categoryValue || null,
-      counterparty_name: counterpartyValue || null,
       product_id: null,
       quantity: null,
       expected_unit_cost_cents: null,
@@ -644,7 +640,7 @@ export function FinancialOutflowsPage() {
     try {
       const result = editingExpenseSchedule
         ? await supabaseClient.from('recurring_operation_templates').update(templateValues).eq('business_id', businessId).eq('id', editingExpenseSchedule.id)
-        : await supabaseClient.from('recurring_operation_templates').insert({ business_id: businessId, kind: 'operating_expense' as const, ...templateValues })
+        : await supabaseClient.from('recurring_operation_templates').insert({ business_id: businessId, kind: 'operating_expense' as const, counterparty_name: null, ...templateValues })
       if (result.error) throw result.error
       setShowExpenseScheduleForm(false)
       setEditingExpenseSchedule(null)
@@ -696,7 +692,6 @@ export function FinancialOutflowsPage() {
     setOutflowType('operating_expense')
     setDescription(template.description ?? template.name)
     setCategory(template.category ?? '')
-    setCounterpartyName(template.counterparty_name ?? '')
     setAmount(template.amount_cents === null ? '' : centsToBrazilianInput(BigInt(template.amount_cents)))
     setPaidOnOverride(null)
     setSelectedExpenseScheduleId(template.id)
@@ -979,7 +974,6 @@ export function FinancialOutflowsPage() {
           <label className="record-field"><span className="field-label">Despesa</span><input className="text-input" disabled={expenseScheduleSaving} maxLength={200} onChange={(event) => setExpenseScheduleDescription(event.target.value)} placeholder="Ex.: Conta de luz" required value={expenseScheduleDescription} /></label>
           <label className="record-field"><span className="field-label">Valor previsto · R$</span><input className="text-input" disabled={expenseScheduleSaving} inputMode="decimal" onChange={(event) => setExpenseScheduleAmount(event.target.value)} placeholder="Ex.: 180,00" required value={expenseScheduleAmount} /></label>
           <label className="record-field"><span className="field-label">Categoria <span className="field-optional">opcional</span></span><input className="text-input" disabled={expenseScheduleSaving} maxLength={120} onChange={(event) => setExpenseScheduleCategory(event.target.value)} value={expenseScheduleCategory} /></label>
-          <label className="record-field"><span className="field-label">Favorecido <span className="field-optional">opcional</span></span><input className="text-input" disabled={expenseScheduleSaving} maxLength={160} onChange={(event) => setExpenseScheduleCounterparty(event.target.value)} value={expenseScheduleCounterparty} /></label>
           <label className="record-field"><span className="field-label">Dia do mês</span><input className="text-input" disabled={expenseScheduleSaving} inputMode="numeric" max="31" min="1" onChange={(event) => setExpenseScheduleDay(event.target.value)} required type="number" value={expenseScheduleDay} /><small className="field-optional">{expenseScheduleDay ? formatRecurringDay(Number(expenseScheduleDay)) : 'Escolha de 1 a 31'}; em meses curtos, usa o último dia.</small></label>
           <label className="record-field"><span className="field-label">Começar em</span><input className="text-input" disabled={expenseScheduleSaving} onChange={(event) => setExpenseScheduleStartsOn(event.target.value)} required type="date" value={expenseScheduleStartsOn} /></label>
         </div>
@@ -993,7 +987,7 @@ export function FinancialOutflowsPage() {
           <ul className="inventory-balance-list">{expenseSchedules.map((template) => {
             const due = template.is_active && template.next_due_on <= today
             const amountText = template.amount_cents === null ? '' : formatBRLExact(String(template.amount_cents))
-            return <li key={template.id}><span className="inventory-balance-copy"><strong>{template.name}{!template.is_active && ' · Pausada'}</strong><small>{formatRecurringDay(template.day_of_month)} · próxima: {formatBusinessDate(template.next_due_on)} · previsto {amountText}{template.category ? ' · ' + template.category : ''}{template.counterparty_name ? ' · ' + template.counterparty_name : ''}</small></span><span className="record-form-actions">{template.is_active ? <><button className="button button-secondary" disabled={Boolean(expenseScheduleBusyId)} onClick={() => startScheduledExpense(template)} type="button">{due ? 'Registrar como pago' : 'Registrar pagamento'}</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => openExpenseScheduleForm(template)} type="button">Editar</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void pauseExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Pausando…' : 'Pausar'}</button></> : <button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void resumeExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Reativando…' : 'Reativar'}</button>}</span></li>
+            return <li key={template.id}><span className="inventory-balance-copy"><strong>{template.name}{!template.is_active && ' · Pausada'}</strong><small>{formatRecurringDay(template.day_of_month)} · próxima: {formatBusinessDate(template.next_due_on)} · previsto {amountText}{template.category ? ' · ' + template.category : ''}</small></span><span className="record-form-actions">{template.is_active ? <><button className="button button-secondary" disabled={Boolean(expenseScheduleBusyId)} onClick={() => startScheduledExpense(template)} type="button">{due ? 'Registrar como pago' : 'Registrar pagamento'}</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => openExpenseScheduleForm(template)} type="button">Editar</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void pauseExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Pausando…' : 'Pausar'}</button></> : <button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void resumeExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Reativando…' : 'Reativar'}</button>}</span></li>
           })}</ul>
         </div>
       </details>}

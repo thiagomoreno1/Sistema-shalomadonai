@@ -266,6 +266,25 @@ async function invokeInbox<T>(body: Record<string, unknown>) {
   return data as T
 }
 
+const MAX_PARALLEL_MEDIA_REQUESTS = 3
+let activeMediaRequests = 0
+const mediaRequestQueue: Array<() => void> = []
+
+async function withMediaRequestSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (activeMediaRequests >= MAX_PARALLEL_MEDIA_REQUESTS) {
+    await new Promise<void>((resolve) => mediaRequestQueue.push(resolve))
+  } else {
+    activeMediaRequests += 1
+  }
+  try {
+    return await work()
+  } finally {
+    const next = mediaRequestQueue.shift()
+    if (next) next()
+    else activeMediaRequests = Math.max(0, activeMediaRequests - 1)
+  }
+}
+
 class InboxRequestError extends Error {
   readonly code: string
   readonly status?: number
@@ -408,6 +427,32 @@ const SAFE_INLINE_ATTACHMENT_TYPES = new Set([
   'video/mp4', 'video/webm', 'video/3gpp',
 ])
 
+const ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+  aac: 'audio/aac', mp3: 'audio/mpeg', m4a: 'audio/mp4', ogg: 'audio/ogg', opus: 'audio/ogg',
+  wav: 'audio/wav', '3gp': 'audio/3gpp', mp4: 'video/mp4',
+}
+
+function inlineAttachmentMimeType(attachment: Attachment, declaredType: string): string {
+  const normalizedDeclaredType = declaredType.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+  if (SAFE_INLINE_ATTACHMENT_TYPES.has(normalizedDeclaredType)) return normalizedDeclaredType
+
+  const extension = attachment.extension?.trim().replace(/^\./, '').toLowerCase() ?? ''
+  const extensionType = ATTACHMENT_MIME_BY_EXTENSION[extension]
+  if (attachment.file_type === 'image' || attachment.file_type === 'sticker') {
+    return extensionType?.startsWith('image/') ? extensionType : attachment.file_type === 'sticker' ? 'image/webp' : 'image/jpeg'
+  }
+  if (attachment.file_type === 'audio') {
+    if (extensionType?.startsWith('audio/')) return extensionType
+    if (extension === 'mp4' || extension === 'm4a') return 'audio/mp4'
+    return extension === 'webm' ? 'audio/webm' : 'audio/ogg'
+  }
+  if (attachment.file_type === 'video') {
+    return extensionType?.startsWith('video/') ? extensionType : extension === 'webm' ? 'video/webm' : 'video/mp4'
+  }
+  return 'application/octet-stream'
+}
+
 function attachmentSizeLabel(bytes: number | null) {
   if (!bytes || bytes < 1) return ''
   const size = bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -505,20 +550,21 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
   }, [attachment.file_type, file, sticker])
 
   async function loadAttachment() {
-    if (!supabaseClient || loading || file || tooLarge) return
+    const client = supabaseClient
+    if (!client || loading || file || tooLarge) return
     focusAfterRequest.current = !autoLoading.current
     setLoading(true)
     setError(false)
     try {
-      const { data, error: requestError, response } = await supabaseClient.functions.invoke<Blob>('evolution-inbox', {
+      const { data, error: requestError, response } = await withMediaRequestSlot(() => client.functions.invoke<Blob>('evolution-inbox', {
         body: {
           action: 'attachment', business_id: businessId, conversationId, messageId, attachmentId: attachment.id,
         },
-      })
+      }))
       if (requestError) throw requestError
       if (!(data instanceof Blob) || data.size < 1 || data.size > 25 * 1024 * 1024) throw new Error('invalid_attachment')
       const declaredType = response?.headers.get('X-Original-Content-Type')?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
-      const mimeType = SAFE_INLINE_ATTACHMENT_TYPES.has(declaredType) ? declaredType : 'application/octet-stream'
+      const mimeType = inlineAttachmentMimeType(attachment, declaredType)
       const safeBlob = new Blob([data], { type: mimeType })
       const url = URL.createObjectURL(safeBlob)
       if (!mounted.current) {
@@ -743,6 +789,7 @@ export function WhatsAppInboxPage() {
     const requestScope = conversationScopeKey(status, search, segment, generation)
     if (requestScope !== activeListScope.current) return
     const requestId = ++listRequest.current
+    setListRefreshing(false)
     setListLoading(true)
     setListError(null)
     try {
@@ -765,48 +812,57 @@ export function WhatsAppInboxPage() {
     }
   }, [businessId, configured, connectionState, inboxGeneration, search, segment, status])
 
-  const refreshLoadedConversations = useCallback(async () => {
+  const refreshLoadedConversations = useCallback(async (
+    options: { force?: boolean; refreshSelectedConversation?: boolean } = { force: true, refreshSelectedConversation: true },
+  ) => {
     if (!configured || !isWhatsAppConnected(connectionState)) return
     const generation = inboxGenerationRef.current
     const requestScope = conversationScopeKey(status, search, segment, generation)
     if (requestScope !== activeListScope.current) return
+    if (loadedListScope !== requestScope && options.force !== true) return
     if (refreshScopeInFlight.current?.scope === requestScope) return
     const requestId = ++listRequest.current
     refreshScopeInFlight.current = { scope: requestScope, requestId }
-    setListLoading(true)
     setListRefreshing(true)
     setListError(null)
+    const selectedConversationId = options.refreshSelectedConversation === false ? null : selectedId
+    const selectedDetailRequestId = detailRequest.current
     try {
-      const combined: Conversation[] = []
-      let currentPage = 1
-      let morePages = false
-      const finalPage = Math.max(1, listPage)
-      while (currentPage <= finalPage) {
-        const result = await invokeInbox<ConversationListResponse>({
-          action: 'list', business_id: businessId, status, segment, page: currentPage, query: search || undefined,
-        })
-        if (requestId !== listRequest.current || generation !== inboxGenerationRef.current || requestScope !== activeListScope.current) return
-        const pageRows = result.conversations ?? []
-        combined.push(...pageRows)
-        morePages = result.meta?.has_more ?? pageRows.length >= 25
-        setHistorySyncNotice(result.meta?.history_sync?.notice ?? null)
-        if (currentPage >= finalPage || !morePages) break
-        currentPage += 1
-      }
+      const selectedDetailPromise = selectedConversationId
+        ? invokeInbox<{ conversation?: Conversation }>({
+          action: 'conversation', business_id: businessId, conversationId: selectedConversationId,
+        }).catch(() => null)
+        : Promise.resolve(null)
+      const [result, selectedDetail] = await Promise.all([
+        invokeInbox<ConversationListResponse>({
+          action: 'list', business_id: businessId, status, segment, page: 1, query: search || undefined,
+        }),
+        selectedDetailPromise,
+      ])
       if (requestId !== listRequest.current || generation !== inboxGenerationRef.current || requestScope !== activeListScope.current) return
-      const refreshedConversations = uniqueConversations(combined)
-      setConversations(refreshedConversations)
-      setLoadedListScope(requestScope)
-      setListPage(currentPage)
-      setHasMore(morePages)
-      if (selectedId && refreshedConversations.some((conversation) => conversation.id === selectedId)) {
-        const result = await invokeInbox<{ conversation?: Conversation }>({
-          action: 'conversation', business_id: businessId, conversationId: selectedId,
+      const pageRows = result.conversations ?? []
+      const refreshedHasMore = result.meta?.has_more ?? pageRows.length >= 25
+      setHistorySyncNotice(result.meta?.history_sync?.notice ?? null)
+      const pageIds = new Set(pageRows.map((conversation) => conversation.id))
+      setConversations((current) => {
+        const retainedRows = current.filter((conversation) => {
+          if (pageIds.has(conversation.id)) return false
+          if (status !== 'all' && conversation.status !== status) return false
+          if (segment === 'hidden') return conversation.hidden_from_inbox
+          if (conversation.hidden_from_inbox) return false
+          return segment === 'customers'
+            ? conversation.contact_classification === 'customer'
+            : conversation.contact_classification !== 'customer'
         })
-        if (requestId !== listRequest.current || generation !== inboxGenerationRef.current || requestScope !== activeListScope.current) return
-        setSelectedConversation(result.conversation ?? null)
-      } else {
-        setSelectedConversation(null)
+        return uniqueConversations([...pageRows, ...retainedRows])
+      })
+      setLoadedListScope(requestScope)
+      setHasMore(refreshedHasMore)
+      if (selectedConversationId
+        && selectedId === selectedConversationId
+        && detailRequest.current === selectedDetailRequestId
+        && selectedDetail?.conversation) {
+        setSelectedConversation(selectedDetail.conversation)
       }
     } catch {
       if (requestId === listRequest.current && generation === inboxGenerationRef.current && requestScope === activeListScope.current) {
@@ -815,11 +871,10 @@ export function WhatsAppInboxPage() {
     } finally {
       if (refreshScopeInFlight.current?.requestId === requestId) refreshScopeInFlight.current = null
       if (requestId === listRequest.current && generation === inboxGenerationRef.current) {
-        setListLoading(false)
         setListRefreshing(false)
       }
     }
-  }, [businessId, configured, connectionState, inboxGeneration, listPage, search, segment, selectedId, status])
+  }, [businessId, configured, connectionState, inboxGeneration, loadedListScope, search, segment, selectedId, status])
 
   useEffect(() => {
     let active = true
@@ -899,8 +954,18 @@ export function WhatsAppInboxPage() {
 
   useEffect(() => {
     if (!configured || !isWhatsAppConnected(connectionState)) return
-    void loadConversations()
-    void loadBusinessContext()
+    let active = true
+    let contextTimer: number | null = null
+    void loadConversations().then(() => {
+      if (!active) return
+      contextTimer = window.setTimeout(() => {
+        if (active) void loadBusinessContext()
+      }, 800)
+    })
+    return () => {
+      active = false
+      if (contextTimer !== null) window.clearTimeout(contextTimer)
+    }
   }, [configured, connectionState, inboxGeneration, loadBusinessContext, loadConversations])
   useEffect(() => { setView(searchParams.get('view') === 'calls' ? 'calls' : 'conversations') }, [searchParams])
   const loadCalls = useCallback(async () => {
@@ -929,11 +994,12 @@ export function WhatsAppInboxPage() {
   useEffect(() => {
     if (!configured || !isWhatsAppConnected(connectionState)) return
     const interval = window.setInterval(() => {
-      void refreshLoadedConversations()
-      void loadBusinessContext()
+      if (document.visibilityState === 'visible') {
+        void refreshLoadedConversations({ force: false, refreshSelectedConversation: true })
+      }
     }, 30_000)
     return () => window.clearInterval(interval)
-  }, [configured, connectionState, loadBusinessContext, refreshLoadedConversations])
+  }, [configured, connectionState, refreshLoadedConversations])
 
   useEffect(() => {
     if (detailLoading || selectedConversation?.id !== selectedId) return

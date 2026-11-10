@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { ReportsNavigation } from '../components/ReportsNavigation'
 import { businessLocalDateTimeToIso, formatBRLExact, formatBusinessDate } from '../lib/formatters'
+import { downloadReportPdf, type ReportPdfLine } from '../lib/exportReportPdf'
 import { useBusinessToday } from '../lib/useBusinessToday'
 import { supabaseClient } from '../lib/supabase'
 
@@ -173,22 +174,7 @@ function reportDate(value: string) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(value))
 }
 
-function csvCell(value: string) {
-  let index = 0
-  while (index < value.length) {
-    const code = value.charCodeAt(index)
-    const character = value[index] ?? ''
-    if (code <= 32 || code === 0xfeff || /\s/u.test(character)) index += 1
-    else break
-  }
-  const firstSignificantCharacter = value[index] ?? ''
-  const hasFormulaPrefix = ['=', '+', '-', '@'].includes(firstSignificantCharacter)
-  const startsWithControlCharacter = value.length > 0 && value.charCodeAt(0) <= 31
-  const safe = hasFormulaPrefix || startsWithControlCharacter ? `'${value}` : value
-  return `"${safe.replaceAll('"', '""')}"`
-}
-
-function csvMoney(value: string | bigint) {
+function reportMoney(value: string | bigint) {
   const amount = BigInt(value)
   const sign = amount < 0n ? '-' : ''
   const absolute = amount < 0n ? -amount : amount
@@ -609,7 +595,7 @@ export function FinancialReportsPage() {
   const inventoryLossMissingCostCount = Number(summary?.inventory_finance.inventory_loss_missing_cost_count ?? 0)
   const profitEstimateIsPartial = Boolean(summary?.managerial_result.available && summary.managerial_result.result_cents !== null && inventoryLossMissingCostCount > 0)
 
-  function exportCsv() {
+  function exportPdf() {
     if (!summary || !completedBilling) return
     const rows: string[][] = [
       ['Relatório financeiro', `${formatBusinessDate(summary.start_on)} a ${formatBusinessDate(summary.end_on)}`],
@@ -619,51 +605,63 @@ export function FinancialReportsPage() {
       ['Como o faturamento líquido é calculado', 'Vendas concluídas após descontos − custo dos produtos vendidos. Os pedidos entram pela data de entrega ou retirada.'],
       ['Como o resultado estimado é calculado', 'Vendas após descontos − custo dos produtos vendidos − perdas reais no estoque − gastos da empresa pagos − pagamentos de entrega. Correções de contagem alteram o valor atual do estoque, não o dinheiro já pago.'],
       ['Datas usadas no cálculo do lucro', 'Pedidos e custo dos produtos: data de entrega concluída ou retirada pelo cliente. Gastos e pagamentos de entrega: data do pagamento informado.'],
-      ['Lucro estimado antes de impostos (R$)', summary.managerial_result.result_cents === null ? 'Indisponível; falta o custo de algum produto ou há devolução sem ajuste financeiro.' : csvMoney(summary.managerial_result.result_cents)],
+      ['Lucro estimado antes de impostos (R$)', summary.managerial_result.result_cents === null ? 'Indisponível; falta o custo de algum produto ou há devolução sem ajuste financeiro.' : reportMoney(summary.managerial_result.result_cents)],
       ['Situação da estimativa de lucro', profitEstimateIsPartial ? `Parcial; exclui ${inventoryLossMissingCostCount} perda(s) sem custo registrado.` : summary.managerial_result.result_cents === null ? 'Indisponível; faltam custos de produtos vendidos ou há devolução sem ajuste.' : 'Completa, com os custos registrados.'],
       ['Itens sem custo congelado', String(summary.managerial_result.missing_cost_line_count)],
       ['Pedidos concluídos com devolução registrada', String(summary.managerial_result.returned_order_count)],
-      ['Pagamentos recebidos menos gastos pagos (R$)', csvMoney(summary.cash_movement.net_recorded_cents)],
+      ['Pagamentos recebidos menos gastos pagos (R$)', reportMoney(summary.cash_movement.net_recorded_cents)],
       ['Pedidos concluídos (entrega ou retirada)', String(summary.managerial_result.completed_order_count)],
-      ['Faturamento bruto das vendas concluídas (R$)', csvMoney(completedBilling.grossCents)],
-      ['Descontos nas vendas concluídas (R$)', csvMoney(summary.managerial_result.discount_cents)],
-      ['Vendas concluídas após descontos (R$)', csvMoney(summary.managerial_result.sales_cents)],
-      ['Custo dos produtos vendidos (R$)', summary.managerial_result.item_cost_cents === null ? 'Indisponível' : csvMoney(summary.managerial_result.item_cost_cents)],
-      [inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido no período (R$)' : 'Perdas reais no estoque no período (R$)', summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : csvMoney(summary.managerial_result.inventory_loss_cents)],
+      ['Faturamento bruto das vendas concluídas (R$)', reportMoney(completedBilling.grossCents)],
+      ['Descontos nas vendas concluídas (R$)', reportMoney(summary.managerial_result.discount_cents)],
+      ['Vendas concluídas após descontos (R$)', reportMoney(summary.managerial_result.sales_cents)],
+      ['Custo dos produtos vendidos (R$)', summary.managerial_result.item_cost_cents === null ? 'Indisponível' : reportMoney(summary.managerial_result.item_cost_cents)],
+      [inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido no período (R$)' : 'Perdas reais no estoque no período (R$)', summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : reportMoney(summary.managerial_result.inventory_loss_cents)],
       ['Perdas sem custo excluídas do lucro', String(inventoryLossMissingCostCount)],
-      ['Faturamento líquido (R$)', completedBilling.netBillingCents === null ? 'Indisponível' : csvMoney(completedBilling.netBillingCents)],
+      ['Faturamento líquido (R$)', completedBilling.netBillingCents === null ? 'Indisponível' : reportMoney(completedBilling.netBillingCents)],
       ['Pedidos ainda em andamento criados no período', String(summary.sales.active_order_count)],
       ['Pedidos criados no período atualmente cancelados', String(summary.sales.cancelled_order_count)],
-      ['Total originalmente registrado nesses pedidos atualmente cancelados (R$)', csvMoney(summary.sales.cancelled_total_cents)],
-      ['Pagamentos recebidos no período (R$)', csvMoney(summary.receipts.amount_cents)],
-      [`Saldos em vencimentos do período, apurados em ${formatBusinessDate(summary.as_of_on)} (R$)`, csvMoney(summary.receivables.open_balance_cents)],
-      [`Parte vencida desse saldo em ${formatBusinessDate(summary.as_of_on)} (R$)`, csvMoney(summary.receivables.overdue_balance_cents)],
-      ['Compras de produtos para revenda no período (R$)', csvMoney(summary.outflows.purchase_cents)],
-      ['Gastos da empresa pagos no período (R$)', csvMoney(summary.outflows.operating_expense_cents)],
-      ['Pagamentos de entrega no período (R$)', csvMoney(summary.outflows.delivery_cost_cents)],
+      ['Total originalmente registrado nesses pedidos atualmente cancelados (R$)', reportMoney(summary.sales.cancelled_total_cents)],
+      ['Pagamentos recebidos no período (R$)', reportMoney(summary.receipts.amount_cents)],
+      [`Saldos em vencimentos do período, apurados em ${formatBusinessDate(summary.as_of_on)} (R$)`, reportMoney(summary.receivables.open_balance_cents)],
+      [`Parte vencida desse saldo em ${formatBusinessDate(summary.as_of_on)} (R$)`, reportMoney(summary.receivables.overdue_balance_cents)],
+      ['Compras de produtos para revenda no período (R$)', reportMoney(summary.outflows.purchase_cents)],
+      ['Gastos da empresa pagos no período (R$)', reportMoney(summary.outflows.operating_expense_cents)],
+      ['Pagamentos de entrega no período (R$)', reportMoney(summary.outflows.delivery_cost_cents)],
       [],
       ['Pedidos entregues ou retirados', 'Data de conclusão', 'Pedido', 'Cliente', 'Valor da venda após descontos (R$)', 'Custo dos produtos no pedido (R$)', 'Produtos sem custo registrado', 'Devoluções registradas'],
-      ...completedOrders.map((order) => [order.id, reportDate(order.completed_at), order.id, order.customer_name_snapshot, csvMoney(String(order.total_cents)), order.item_cost_cents === null ? 'Indisponível' : csvMoney(order.item_cost_cents), String(order.missing_cost_line_count), String(order.return_movement_count)]),
+      ...completedOrders.map((order) => [order.id, reportDate(order.completed_at), order.id, order.customer_name_snapshot, reportMoney(String(order.total_cents)), order.item_cost_cents === null ? 'Indisponível' : reportMoney(order.item_cost_cents), String(order.missing_cost_line_count), String(order.return_movement_count)]),
       [],
       ['Pedidos', 'Data do pedido', 'Cliente', 'Produtos (R$)', 'Taxa cobrada (R$)', 'Desconto (R$)', 'Total original (R$)', 'Situação'],
-      ...orders.map((order) => [order.id, reportDate(order.created_at), order.customer_name_snapshot, csvMoney(String(order.subtotal_cents)), csvMoney(String(order.delivery_fee_cents)), csvMoney(String(order.discount_cents)), csvMoney(String(order.total_cents)), statusLabel(order)]),
+      ...orders.map((order) => [order.id, reportDate(order.created_at), order.customer_name_snapshot, reportMoney(String(order.subtotal_cents)), reportMoney(String(order.delivery_fee_cents)), reportMoney(String(order.discount_cents)), reportMoney(String(order.total_cents)), statusLabel(order)]),
       [],
       ['Pagamentos recebidos', 'Data do pagamento', 'Cliente', 'Forma de pagamento', 'Valor (R$)'],
-      ...payments.map((payment) => [payment.order_id, reportDate(payment.received_at), payment.customer_name, payment.payment_method ?? '', csvMoney(String(payment.amount_cents))]),
+      ...payments.map((payment) => [payment.order_id, reportDate(payment.received_at), payment.customer_name, payment.payment_method ?? '', reportMoney(String(payment.amount_cents))]),
       [],
       ['Gastos pagos', 'Data paga', 'Tipo', 'Descrição', 'Categoria', 'Pago a', 'Pedido relacionado', 'Valor (R$)', 'Situação', 'Motivo da anulação'],
-      ...outflows.map((outflow) => [outflow.id, formatBusinessDate(outflow.paid_on), outflowTypeLabel(outflow.outflow_type), outflow.description, outflow.category ?? '', outflow.counterparty_name ?? '', outflow.order_id ?? '', csvMoney(String(outflow.amount_cents)), outflow.void_event ? 'Anulado por erro; excluído dos totais' : 'Ativo', outflow.void_event?.reason ?? '']),
+      ...outflows.map((outflow) => [outflow.id, formatBusinessDate(outflow.paid_on), outflowTypeLabel(outflow.outflow_type), outflow.description, outflow.category ?? '', outflow.counterparty_name ?? '', outflow.order_id ?? '', reportMoney(String(outflow.amount_cents)), outflow.void_event ? 'Anulado por erro; excluído dos totais' : 'Ativo', outflow.void_event?.reason ?? '']),
       [],
       ['Pagamentos que ainda faltam receber', 'Data limite', 'Cliente', 'Parcela', 'Valor original (R$)', 'Falta receber hoje (R$)', 'Situação'],
-      ...receivables.map((item) => [item.order_id, formatBusinessDate(item.due_on), item.customer_name, String(item.installment_number), csvMoney(String(item.amount_cents)), csvMoney(item.balance_cents), item.due_on < (summary.as_of_on ?? today) ? 'Atrasado' : 'Ainda não pago']),
+      ...receivables.map((item) => [item.order_id, formatBusinessDate(item.due_on), item.customer_name, String(item.installment_number), reportMoney(String(item.amount_cents)), reportMoney(item.balance_cents), item.due_on < (summary.as_of_on ?? today) ? 'Atrasado' : 'Ainda não pago']),
     ]
-    const content = `\uFEFF${rows.map((row) => row.map(csvCell).join(';')).join('\r\n')}`
-    const url = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8' }))
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `relatorio-financeiro-${summary.start_on}-${summary.end_on}.csv`
-    anchor.click()
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    const sections = new Set([
+      'Pedidos entregues ou retirados',
+      'Pedidos',
+      'Pagamentos recebidos',
+      'Gastos pagos',
+      'Pagamentos que ainda faltam receber',
+    ])
+    const lines: ReportPdfLine[] = rows.map((row) => {
+      if (row.length === 0) return { style: 'spacer' }
+      if (sections.has(row[0])) return { text: row.join(' · '), style: 'section' }
+      if (row.length === 1) return { text: row[0] }
+      return { text: `${row[0]}: ${row.slice(1).join(' · ')}` }
+    })
+    downloadReportPdf({
+      title: 'Relatório financeiro',
+      subtitle: `${formatBusinessDate(summary.start_on)} a ${formatBusinessDate(summary.end_on)} · apurado em ${formatBusinessDate(summary.as_of_on)}`,
+      filename: `relatorio-financeiro-${summary.start_on}-${summary.end_on}.pdf`,
+      lines,
+    })
   }
 
   return (
@@ -676,8 +674,7 @@ export function FinancialReportsPage() {
           <p className="page-description">Faturamento, pagamentos e gastos registrados no período.</p>
         </div>
         <div className="record-heading-actions report-actions">
-          <button className="button button-secondary" disabled={!reportCanBeUsed} onClick={exportCsv} type="button">Exportar CSV</button>
-          <button className="button button-secondary" disabled={!reportCanBeUsed} onClick={() => window.print()} type="button">Imprimir</button>
+          <button className="button button-secondary" disabled={!reportCanBeUsed} onClick={exportPdf} type="button">Exportar PDF</button>
         </div>
       </header>
       <p className="report-print-range">Período: {reportMatchesPeriod && summary ? `${formatBusinessDate(summary.start_on)} a ${formatBusinessDate(summary.end_on)}` : startOn && endOn ? `${formatBusinessDate(startOn)} a ${formatBusinessDate(endOn)}` : 'Datas pendentes'} · Valores que faltam receber apurados em {formatBusinessDate(summary?.as_of_on ?? today)}</p>

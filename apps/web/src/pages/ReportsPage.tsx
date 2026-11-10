@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { ReportsNavigation } from '../components/ReportsNavigation'
 import { businessLocalDateTimeToIso, formatBRLExact, formatBusinessDate } from '../lib/formatters'
+import { downloadReportPdf } from '../lib/exportReportPdf'
 import { useBusinessToday } from '../lib/useBusinessToday'
 import { supabaseClient } from '../lib/supabase'
 
@@ -207,6 +208,35 @@ export function ReportsPage() {
     return counts
   }, {}) ?? {}
 
+  function exportPdf() {
+    if (!overview || !startOn || !endOn) return
+    const lines = [
+      { text: 'Resumo operacional', style: 'section' as const },
+      ...totals.map((item) => ({ text: `${item.label}: ${item.value} · ${item.note}` })),
+      { text: '', style: 'spacer' as const },
+      { text: 'Situação das entregas', style: 'section' as const },
+      ...(overview.deliveries.length
+        ? Object.entries(deliveryCounts).map(([status, count]) => ({ text: `${deliveryStatusLabel(status)}: ${count}` }))
+        : [{ text: 'Nenhuma entrega criada neste período.' }]),
+      { text: '', style: 'spacer' as const },
+      { text: `Pedidos recentes (${overview.orders.length} de ${overview.orderCount})`, style: 'section' as const },
+      ...(overview.orders.length
+        ? overview.orders.map((order) => ({
+          text: `${formatBusinessDate(businessDateFromTimestamp(order.created_at))} · ${order.customer_name_snapshot} · ${order.requires_delivery ? 'Entrega' : 'Retirada'} · ${reportOrderStatus(order)} · ${formatBRLExact(String(order.total_cents))}`,
+        }))
+        : [{ text: 'Nenhum pedido criado neste período.' }]),
+      ...(overview.orderCount > overview.orders.length
+        ? [{ text: `O sistema tem mais ${overview.orderCount - overview.orders.length} pedido(s) neste período; a tela mostra os 12 mais recentes.`, style: 'note' as const }]
+        : []),
+    ]
+    downloadReportPdf({
+      title: 'Relatório geral',
+      subtitle: `${formatBusinessDate(startOn)} a ${formatBusinessDate(endOn)} · horário de Brasília`,
+      filename: `relatorio-geral-${startOn}-${endOn}.pdf`,
+      lines,
+    })
+  }
+
   return (
     <div className="page-stack report-page">
       <ReportsNavigation active="general" />
@@ -216,7 +246,7 @@ export function ReportsPage() {
           <h1>Relatório geral</h1>
           <p className="page-description">Pedidos, entregas e clientes no período.</p>
         </div>
-        <button className="button button-secondary report-actions" disabled={loading || !overview} onClick={() => window.print()} type="button">Imprimir</button>
+        <button className="button button-secondary report-actions" disabled={loading || !overview || Boolean(error)} onClick={exportPdf} type="button">Exportar PDF</button>
       </header>
       <p className="report-print-range">Período: {startOn && endOn ? `${formatBusinessDate(startOn)} a ${formatBusinessDate(endOn)}` : 'Datas pendentes'} · horário de Brasília</p>
 
