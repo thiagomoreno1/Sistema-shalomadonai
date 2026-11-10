@@ -312,7 +312,7 @@ Deno.serve(async (request: Request) => {
       .eq('user_id', userData.user.id)
       .maybeSingle()
     if (membershipError) return json({ error: 'access_check_failed' }, 500)
-    if (!membership || membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+    if (!membership || !['owner', 'manager'].includes(membership.role)) return json({ error: 'forbidden' }, 403)
 
     const config = loadConfiguration()
     if (action === 'status') {

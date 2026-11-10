@@ -3,7 +3,7 @@ import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from './AuthContext'
 import { AppShell } from '../components/AppShell'
 import { BusinessProvider } from '../business/BusinessProvider'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { isDemoPreviewEnabled } from '../lib/demoPreview'
 import { LoadingScreen, SetupPage } from '../pages/SetupPage'
 
@@ -35,13 +35,13 @@ const DemoPreviewPage = lazy(async () => ({ default: (await import('../pages/Dem
 function DemoPreviewRoute() {
   const { pathname } = useLocation()
   const { role } = useBusiness()
-  if (role === 'owner' && isDemoPreviewEnabled() && pathname !== '/') return <DemoPreviewPage />
+  if (canManageBusiness(role) && isDemoPreviewEnabled() && pathname !== '/') return <DemoPreviewPage />
   return <Outlet />
 }
 
 function DeliveryDriverPreviewRoute() {
   const { role } = useBusiness()
-  if (role !== 'owner') return <Navigate replace to="/" />
+  if (!canManageBusiness(role)) return <Navigate replace to="/" />
   return <DeliveryDriverPortalPage preview />
 }
 

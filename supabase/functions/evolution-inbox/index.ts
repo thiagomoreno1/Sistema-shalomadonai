@@ -1859,7 +1859,8 @@ export default {
         .eq('user_id', userId)
         .maybeSingle()
       if (membershipError) return json({ error: 'access_check_failed' }, 500)
-      if (!membership || !['owner', 'staff'].includes(membership.role)) return json({ error: 'forbidden' }, 403)
+      if (!membership || !['owner', 'manager', 'staff'].includes(membership.role)) return json({ error: 'forbidden' }, 403)
+      const canManageBusiness = membership.role === 'owner' || membership.role === 'manager'
 
       const admin = context.supabaseAdmin
       let config = await loadConfiguration(admin, businessId)
@@ -1893,7 +1894,7 @@ export default {
       if (!config) return json({ error: 'evolution_not_configured' }, 503)
 
       if (action === 'configure_webhook') {
-        if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        if (!canManageBusiness) return json({ error: 'forbidden' }, 403)
         if (!config.instanceName) return json({ error: 'whatsapp_connection_not_started' }, 409)
         try {
           await setEvolutionWebhook(config)
@@ -1905,7 +1906,7 @@ export default {
       }
 
       if (action === 'connect') {
-        if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        if (!canManageBusiness) return json({ error: 'forbidden' }, 403)
         let connectionConfig = config
         if (!connectionConfig) return json({ error: 'evolution_not_configured' }, 503)
         const pairingMethod = body.pairing_method === 'phone' ? 'phone' : 'qr'
@@ -2003,7 +2004,7 @@ export default {
       }
 
       if (action === 'disconnect') {
-        if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        if (!canManageBusiness) return json({ error: 'forbidden' }, 403)
         if (!config.instanceName) return json({ connected: false, connection_selected: false, instance_exists: false, connection_state: 'not_created' })
         let providerLogoutFailed = false
         try {
@@ -2250,7 +2251,7 @@ export default {
       }
 
       if (action === 'update_contact_preferences') {
-        if (membership.role !== 'owner') return json({ error: 'forbidden' }, 403)
+        if (!canManageBusiness) return json({ error: 'forbidden' }, 403)
         const hasDisplayName = Object.prototype.hasOwnProperty.call(body, 'display_name_override')
         const hasClassification = Object.prototype.hasOwnProperty.call(body, 'contact_classification')
         const hasHidden = Object.prototype.hasOwnProperty.call(body, 'hidden_from_inbox')

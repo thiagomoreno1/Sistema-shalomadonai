@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { formatBRLExact, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { useBusinessToday } from '../lib/useBusinessToday'
@@ -41,7 +41,7 @@ export function TeamPage() {
   const [confirmSalaryItem, setConfirmSalaryItem] = useState<SalaryItem | null>(null)
 
   const loadWorkers = useCallback(async () => {
-    if (!supabaseClient || role !== 'owner') {
+    if (!supabaseClient || !canManageBusiness(role)) {
       setLoading(false)
       return
     }
@@ -72,7 +72,7 @@ export function TeamPage() {
 
   async function createWorker(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!supabaseClient || saving || role !== 'owner') return
+    if (!supabaseClient || saving || !canManageBusiness(role)) return
     const cleanName = name.trim()
     const cleanPhone = phone.trim()
     const cleanEmail = email.trim().toLowerCase()
@@ -181,7 +181,7 @@ export function TeamPage() {
 
   async function connectDriver(event: FormEvent<HTMLFormElement>, worker: DeliveryWorker) {
     event.preventDefault()
-    if (!supabaseClient || actionWorkerId || role !== 'owner') return
+    if (!supabaseClient || actionWorkerId || !canManageBusiness(role)) return
     setActionWorkerId(worker.id)
     setError(null)
     setNotice(null)
@@ -209,7 +209,7 @@ export function TeamPage() {
   }
 
   async function setWorkerActive(worker: DeliveryWorker) {
-    if (!supabaseClient || actionWorkerId || role !== 'owner') return
+    if (!supabaseClient || actionWorkerId || !canManageBusiness(role)) return
     setActionWorkerId(worker.id)
     setError(null)
     setNotice(null)
@@ -233,7 +233,7 @@ export function TeamPage() {
 
   async function saveSalary(worker: DeliveryWorker, event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!supabaseClient || actionWorkerId || role !== 'owner') return
+    if (!supabaseClient || actionWorkerId || !canManageBusiness(role)) return
     const amountCents = salaryEditAmount.trim() ? parseBrazilianCurrency(salaryEditAmount) : null
     const dueDay = salaryEditDueDay ? Number(salaryEditDueDay) : null
     if (salaryEditAmount.trim() && (amountCents === null || !Number.isSafeInteger(amountCents) || amountCents <= 0)) {
@@ -270,7 +270,7 @@ export function TeamPage() {
 
   async function recordSalaryPayment(item: SalaryItem) {
     const key = `${item.worker_id}:${item.period_start}`
-    if (!supabaseClient || payingSalaryKey || role !== 'owner') return
+    if (!supabaseClient || payingSalaryKey || !canManageBusiness(role)) return
     setPayingSalaryKey(key)
     setError(null)
     setNotice(null)
@@ -297,7 +297,7 @@ export function TeamPage() {
   }
 
   async function unlinkDriver(worker: DeliveryWorker) {
-    if (!supabaseClient || actionWorkerId || role !== 'owner') return
+    if (!supabaseClient || actionWorkerId || !canManageBusiness(role)) return
     setActionWorkerId(worker.id)
     setError(null)
     try {
@@ -325,13 +325,13 @@ export function TeamPage() {
     <div className="page-stack team-page">
       <header className="page-heading">
         <div><p className="eyebrow">PESSOAS E PAGAMENTOS</p><h1>Equipe</h1><p className="page-description">Cadastre funcionários e entregadores, acompanhe os salários e gerencie acessos ao painel de entregas.</p></div>
-        {role === 'owner' && <div className="team-heading-actions"><Link className="button button-secondary" to="/entregador/visualizar"><Icon name="truck" /> Visualizar painel</Link><button className="button button-primary" onClick={() => { setShowForm((open) => !open); setAccountWorkerId(null); setMemberType('delivery_driver'); setName(''); setPhone(''); setMonthlySalary(''); setSalaryDueDay(''); setEmail(''); setPassword(''); setError(null); setNotice(null) }} type="button"><Icon name="plus" /> Novo membro</button></div>}
+        {canManageBusiness(role) && <div className="team-heading-actions"><Link className="button button-secondary" to="/entregador/visualizar"><Icon name="truck" /> Visualizar painel</Link><button className="button button-primary" onClick={() => { setShowForm((open) => !open); setAccountWorkerId(null); setMemberType('delivery_driver'); setName(''); setPhone(''); setMonthlySalary(''); setSalaryDueDay(''); setEmail(''); setPassword(''); setError(null); setNotice(null) }} type="button"><Icon name="plus" /> Novo membro</button></div>}
       </header>
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void loadWorkers()} type="button">Tentar novamente</button></div>}
 
-      {role !== 'owner' ? <section className="surface-panel team-state"><h2>Acesso da equipe</h2><p>A gestão da equipe é feita pela pessoa proprietária da empresa.</p></section> : <>
+      {!canManageBusiness(role) ? <section className="surface-panel team-state"><h2>Acesso da equipe</h2><p>A gestão da equipe é feita pela pessoa proprietária ou pela gestão da empresa.</p></section> : <>
         {showForm && <form className="surface-panel record-form" onSubmit={(event) => void createWorker(event)}>
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">CADASTRO DA EQUIPE</p><h2>{accountWorkerId ? `Criar acesso para ${workers.find((worker) => worker.id === accountWorkerId)?.name ?? 'entregador'}` : 'Novo membro da equipe'}</h2></div><button className="text-button" disabled={saving} onClick={() => { setShowForm(false); setAccountWorkerId(null); setPassword('') }} type="button">Fechar</button></div>
           {!accountWorkerId && <label className="record-field"><span className="field-label">Função na equipe</span><select className="text-input" onChange={(event) => setMemberType(event.target.value as 'delivery_driver' | 'employee')} value={memberType}><option value="delivery_driver">Entregador</option><option value="employee">Funcionário</option></select></label>}
@@ -353,10 +353,10 @@ export function TeamPage() {
           {loading ? <p className="inline-state" aria-live="polite">Carregando equipe…</p> : workers.length === 0 ? <p className="inline-state">Nenhum membro cadastrado.</p> : <ul className="worker-list team-worker-list">{workers.map((worker) => <li className={worker.is_active ? '' : 'record-inactive'} key={worker.id}>
             <span><strong>{worker.name}</strong><small>{worker.member_type === 'delivery_driver' ? 'Entregador' : 'Funcionário'} · {worker.phone || 'Telefone não informado'} · {worker.is_active ? 'Ativo' : 'Inativo'}{worker.member_type === 'delivery_driver' ? ` · ${worker.user_id ? 'Acesso ao painel ativo' : 'Sem acesso ao painel'}` : ''}{worker.monthly_salary_cents ? ` · Salário ${formatBRLExact(String(worker.monthly_salary_cents))}/mês, vence dia ${worker.salary_due_day}` : ''}</small></span>
             <div className="record-form-actions">
-              {role === 'owner' && <button className="text-button" onClick={() => { setSalaryEditWorkerId(salaryEditWorkerId === worker.id ? null : worker.id); setSalaryEditAmount(worker.monthly_salary_cents ? (Number(worker.monthly_salary_cents) / 100).toFixed(2).replace('.', ',') : ''); setSalaryEditDueDay(worker.salary_due_day?.toString() ?? ''); setError(null) }} type="button">{salaryEditWorkerId === worker.id ? 'Fechar salário' : 'Editar salário'}</button>}
-              {role === 'owner' && worker.member_type === 'delivery_driver' && worker.is_active && !worker.user_id && <><button className="text-button" onClick={() => { setAccountWorkerId(worker.id); setMemberType('delivery_driver'); setName(worker.name); setPhone(worker.phone ?? ''); setEmail(''); setPassword(''); setShowForm(true); setError(null); setNotice(null) }} type="button">Criar acesso</button><button className="text-button" onClick={() => { setLinkWorkerId(linkWorkerId === worker.id ? null : worker.id); setLinkEmail(''); setError(null) }} type="button">{linkWorkerId === worker.id ? 'Fechar' : 'Vincular conta existente'}</button></>}
-              {role === 'owner' && worker.member_type === 'delivery_driver' && worker.user_id && <button className="text-button" onClick={() => setConfirmUnlinkWorkerId(confirmUnlinkWorkerId === worker.id ? null : worker.id)} type="button">{confirmUnlinkWorkerId === worker.id ? 'Cancelar' : 'Remover acesso'}</button>}
-              {role === 'owner' && worker.member_type === 'delivery_driver' && worker.user_id && <Link className="text-button" to="/entregador/visualizar">Prévia do painel</Link>}
+              {canManageBusiness(role) && <button className="text-button" onClick={() => { setSalaryEditWorkerId(salaryEditWorkerId === worker.id ? null : worker.id); setSalaryEditAmount(worker.monthly_salary_cents ? (Number(worker.monthly_salary_cents) / 100).toFixed(2).replace('.', ',') : ''); setSalaryEditDueDay(worker.salary_due_day?.toString() ?? ''); setError(null) }} type="button">{salaryEditWorkerId === worker.id ? 'Fechar salário' : 'Editar salário'}</button>}
+              {canManageBusiness(role) && worker.member_type === 'delivery_driver' && worker.is_active && !worker.user_id && <><button className="text-button" onClick={() => { setAccountWorkerId(worker.id); setMemberType('delivery_driver'); setName(worker.name); setPhone(worker.phone ?? ''); setEmail(''); setPassword(''); setShowForm(true); setError(null); setNotice(null) }} type="button">Criar acesso</button><button className="text-button" onClick={() => { setLinkWorkerId(linkWorkerId === worker.id ? null : worker.id); setLinkEmail(''); setError(null) }} type="button">{linkWorkerId === worker.id ? 'Fechar' : 'Vincular conta existente'}</button></>}
+              {canManageBusiness(role) && worker.member_type === 'delivery_driver' && worker.user_id && <button className="text-button" onClick={() => setConfirmUnlinkWorkerId(confirmUnlinkWorkerId === worker.id ? null : worker.id)} type="button">{confirmUnlinkWorkerId === worker.id ? 'Cancelar' : 'Remover acesso'}</button>}
+              {canManageBusiness(role) && worker.member_type === 'delivery_driver' && worker.user_id && <Link className="text-button" to="/entregador/visualizar">Prévia do painel</Link>}
               <button className="text-button" disabled={actionWorkerId !== null} onClick={() => void setWorkerActive(worker)} type="button">{actionWorkerId === worker.id ? 'Salvando…' : worker.is_active ? 'Desativar' : 'Reativar'}</button>
             </div>
             {salaryEditWorkerId === worker.id && <form className="worker-access-form record-form-grid" onSubmit={(event) => void saveSalary(worker, event)}>

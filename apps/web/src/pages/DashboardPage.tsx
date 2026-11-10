@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { DashboardTrends, type DashboardTrendDay, type DashboardTrendPeriod } from '../components/DashboardTrends'
 import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
@@ -318,7 +318,7 @@ function readTrendDays(value: unknown, startOn: string, dayCount: number): Dashb
 
 export function DashboardPage() {
   const { id: businessId, role } = useBusiness()
-  const demoPreview = role === 'owner' && isDemoPreviewEnabled()
+  const demoPreview = canManageBusiness(role) && isDemoPreviewEnabled()
   const today = useBusinessToday()
   const businessDate = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'full', timeZone: 'America/Sao_Paulo' }).format(new Date(`${today}T12:00:00Z`))
   const prioritiesScopeKey = `${businessId}:${role}:${today}`
@@ -360,7 +360,7 @@ export function DashboardPage() {
 
   const loadTrends = useCallback(async (silent = false) => {
     const requestId = ++trendRequestId.current
-    if (role !== 'owner') {
+    if (!canManageBusiness(role)) {
       setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: [] })
       return
     }
@@ -392,7 +392,7 @@ export function DashboardPage() {
 
   const loadRevenueTrends = useCallback(async (silent = false) => {
     const requestId = ++revenueTrendRequestId.current
-    if (role !== 'owner') {
+    if (!canManageBusiness(role)) {
       setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: [] })
       return
     }
@@ -420,7 +420,7 @@ export function DashboardPage() {
 
   const loadFinancialSummary = useCallback(async (silent = false) => {
     const requestId = ++financialSummaryRequestId.current
-    if (role !== 'owner') return
+    if (!canManageBusiness(role)) return
     if (!silent) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: true, error: false, data: null })
     try {
       if (demoPreview) {
@@ -467,7 +467,7 @@ export function DashboardPage() {
 
   const loadPriorities = useCallback(async (silent = false) => {
     const requestId = ++prioritiesRequestId.current
-    if (role !== 'owner') {
+    if (!canManageBusiness(role)) {
       setPriorityState({ scopeKey: prioritiesScopeKey, loading: false, error: false, data: null })
       return
     }
@@ -503,7 +503,7 @@ export function DashboardPage() {
 
   const loadRecentOrders = useCallback(async (silent = false) => {
     const requestId = ++recentOrdersRequestId.current
-    if (role !== 'owner') {
+    if (!canManageBusiness(role)) {
       setRecentOrdersState({ scopeKey: recentOrdersScopeKey, loading: false, error: false, orders: [] })
       return
     }
@@ -664,7 +664,7 @@ export function DashboardPage() {
           <h1>Início</h1>
           <p className="page-description">O que precisa de ação hoje?</p>
         </div>
-        {role === 'owner' && <div className="dashboard-heading-actions">
+        {canManageBusiness(role) && <div className="dashboard-heading-actions">
           <label className="dashboard-range-picker" htmlFor="dashboard-period">
             <span>Período</span>
             <select id="dashboard-period" value={trendPeriod} onChange={(event) => setTrendPeriod(event.target.value as DashboardTrendPeriod)}>
@@ -674,7 +674,7 @@ export function DashboardPage() {
         </div>}
       </header>
 
-      {role === 'owner' ? <>
+      {canManageBusiness(role) ? <>
 
       <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
         <Link className="dashboard-summary-link is-followups" to="/atendimento">
@@ -880,9 +880,9 @@ export function DashboardPage() {
         <section className="surface-panel dashboard-recent-panel" aria-labelledby="dashboard-recent-orders-title">
           <div className="section-heading">
             <h2 id="dashboard-recent-orders-title">Pedidos recentes</h2>
-            {role === 'owner' && <Link className="quiet-link" to="/pedidos">Ver todos <Icon name="arrow" /></Link>}
+            {canManageBusiness(role) && <Link className="quiet-link" to="/pedidos">Ver todos <Icon name="arrow" /></Link>}
           </div>
-          {role !== 'owner' ? <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="shield" /></span><h3>Acesso indisponível</h3><p>Seu perfil atual não tem permissão para consultar pedidos recentes.</p></div> : <>
+          {!canManageBusiness(role) ? <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="shield" /></span><h3>Acesso indisponível</h3><p>Seu perfil atual não tem permissão para consultar pedidos recentes.</p></div> : <>
             {currentRecentOrders.loading && <p className="inline-state" aria-live="polite">Carregando pedidos recentes…</p>}
             {!currentRecentOrders.loading && currentRecentOrders.error && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="bag" /></span><h3>Não foi possível carregar os pedidos</h3><p>Tente novamente para atualizar esta lista.</p><button className="text-button" onClick={() => void loadRecentOrders()} type="button">Tentar novamente</button></div>}
             {!currentRecentOrders.loading && !currentRecentOrders.error && currentRecentOrders.orders.length === 0 && <div className="dashboard-panel-state"><span className="empty-icon"><Icon name="bag" /></span><h3>Ainda não há pedidos registrados</h3><p>Os últimos quatro pedidos aparecerão aqui.</p><Link className="quiet-link" to="/pedidos/novo">Criar primeiro pedido <Icon name="arrow" /></Link></div>}

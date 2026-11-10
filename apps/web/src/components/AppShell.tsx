@@ -1,7 +1,7 @@
 import { useLayoutEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { supabaseClient } from '../lib/supabase'
 import { clearDemoPreview, isDemoPreviewEnabled } from '../lib/demoPreview'
 import { Icon, type IconName } from './Icon'
@@ -63,7 +63,7 @@ export function AppShell() {
   const navigationType = useNavigationType()
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState<string | null>(null)
-  const demoPreview = role === 'owner' && isDemoPreviewEnabled()
+  const demoPreview = canManageBusiness(role) && isDemoPreviewEnabled()
   const profileName = session?.user.user_metadata?.display_name
   const displayName = typeof profileName === 'string' && profileName.trim()
     ? profileName.trim()
