@@ -1271,6 +1271,42 @@ function displayableContactName(value: unknown, phone: string | null): string | 
   return name
 }
 
+const ATTACHMENT_TYPES_BY_MIME: Record<string, 'image' | 'audio' | 'video'> = {
+  'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/gif': 'image',
+  'audio/aac': 'audio', 'audio/mpeg': 'audio', 'audio/mp4': 'audio', 'audio/ogg': 'audio',
+  'audio/wav': 'audio', 'audio/webm': 'audio', 'audio/3gpp': 'audio', 'audio/opus': 'audio',
+  'video/mp4': 'video', 'video/webm': 'video', 'video/3gpp': 'video',
+}
+
+const INLINE_ATTACHMENT_TYPES_BY_EXTENSION: Record<string, 'image' | 'audio' | 'video'> = {
+  jpg: 'image', jpeg: 'image', png: 'image', webp: 'image', gif: 'image',
+  aac: 'audio', mp3: 'audio', m4a: 'audio', ogg: 'audio', opus: 'audio', wav: 'audio', '3gp': 'audio',
+  mp4: 'video', webm: 'video',
+}
+
+function attachmentTypeFromMetadata(kind: string, mimeType: string | null, fileName: string | null): 'image' | 'audio' | 'video' | 'file' | null {
+  if (kind === 'sticker') return 'file'
+  const normalizedMimeType = mimeType?.split(';', 1)[0].trim().toLowerCase() ?? ''
+  const mimeTypeHint = ATTACHMENT_TYPES_BY_MIME[normalizedMimeType]
+  if (mimeTypeHint) return mimeTypeHint
+  // A non-generic declared MIME type takes precedence over the filename. This
+  // avoids rendering a mislabeled PDF or other document as active inline media.
+  if (normalizedMimeType && normalizedMimeType !== 'application/octet-stream') return 'file'
+  const extension = fileName?.includes('.') ? fileName.split('.').pop()?.trim().toLowerCase() ?? '' : ''
+  const extensionHint = INLINE_ATTACHMENT_TYPES_BY_EXTENSION[extension]
+  if (extensionHint) return extensionHint
+  if (kind === 'image' || kind === 'audio' || kind === 'video') return kind
+  if (kind === 'document' || fileName) return 'file'
+  return null
+}
+
+function attachmentExtension(mimeType: string | null, fileName: string | null): string | null {
+  const filenameExtension = fileName?.split('.').pop()?.trim().toLowerCase() ?? ''
+  if (/^[a-z0-9]{1,16}$/.test(filenameExtension) && fileName?.includes('.')) return filenameExtension
+  const mimeExtension = mimeType?.split(';', 1)[0].split('/')[1]?.trim().toLowerCase() ?? ''
+  return /^[a-z0-9]{1,16}$/.test(mimeExtension) ? mimeExtension : null
+}
+
 function contactClassification(value: unknown): 'unclassified' | 'customer' | 'personal' {
   return value === 'customer' || value === 'personal' ? value : 'unclassified'
 }
@@ -1280,10 +1316,11 @@ function normalizedMessage(row: JsonRecord, savedContactNames?: ContactDirectory
   const mediaMetadata = isRecord(row.media_metadata) ? row.media_metadata : {}
   const fileSize = typeof mediaMetadata.file_size === 'number' ? mediaMetadata.file_size : null
   const mimeType = text(mediaMetadata.mime_type, 160)
+  const fileName = text(mediaMetadata.file_name, 255)
   const savedSenderName = savedContactNames
     ? savedNameForJids(savedContactNames, mediaMetadata.participant_jid, mediaMetadata.participant_alt_jid)
     : null
-  const fileType = kind === 'image' ? 'image' : kind === 'audio' ? 'audio' : kind === 'video' ? 'video' : kind === 'document' || kind === 'sticker' ? 'file' : null
+  const fileType = attachmentTypeFromMetadata(kind, mimeType, fileName)
   return {
     id: row.id,
     content: row.deleted_at ? null : row.content ?? null,
@@ -1301,7 +1338,7 @@ function normalizedMessage(row: JsonRecord, savedContactNames?: ContactDirectory
     attachments: fileType ? [{
       id: row.id,
       file_type: fileType,
-      extension: mimeType?.split('/')[1]?.split(';')[0] ?? null,
+      extension: attachmentExtension(mimeType, fileName),
       file_size: fileSize,
       width: null,
       height: null,
