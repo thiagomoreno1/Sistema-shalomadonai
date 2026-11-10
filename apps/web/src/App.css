@@ -1570,12 +1570,22 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
   .whatsapp-conversation-panel, .whatsapp-chat-panel { min-height: min(650px, calc(100dvh - 235px)); max-height: none; }
   .whatsapp-conversation-panel.is-mobile-hidden, .whatsapp-chat-panel:not(.is-mobile-visible) { display: none; }
   .whatsapp-chat-panel { min-height: min(720px, calc(100dvh - 220px)); }
+  .whatsapp-chat-panel.is-mobile-visible {
+    position: fixed;
+    z-index: 14;
+    inset: 63px 0 max(68px, calc(56px + max(7px, env(safe-area-inset-bottom, 0px))));
+    width: auto;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    overflow: hidden;
+  }
   .whatsapp-chat-heading { min-height: 67px; flex-wrap: wrap; gap: 8px 11px; padding: 9px 12px; }
   .whatsapp-back-button { display: inline-flex; flex: 0 0 100%; justify-content: flex-start; min-height: 44px; }
   .whatsapp-chat-contact { flex: 1; }
   .whatsapp-chat-actions { flex: 0 0 auto; }
   .whatsapp-chat-actions .button { min-height: 42px; padding: 0 10px; }
-  .whatsapp-message-history { padding: 12px; }
+  .whatsapp-message-history { min-height: 0; padding: 12px; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
   .whatsapp-message { max-width: 88%; }
   .whatsapp-reaction-picker[open] > div { right: -4px; flex-wrap: wrap; max-width: min(218px, calc(100vw - 55px)); }
   .whatsapp-compose { padding: 10px 11px; }
@@ -1604,6 +1614,17 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
   .whatsapp-pairing-code strong { grid-row: 2; max-width: 100%; font-size: clamp(26px, 8vw, 34px); }
   .whatsapp-pairing-code > .button { grid-row: 3; width: 100%; justify-self: stretch; }
   .whatsapp-pairing-code > small { grid-row: 4; }
+}
+
+@media (max-width: 760px) and (max-height: 620px) {
+  .whatsapp-chat-panel.is-mobile-visible .whatsapp-context-disclosure { display: none; }
+  .whatsapp-chat-heading { min-height: 0; gap: 5px 8px; padding: 6px 10px; }
+  .whatsapp-back-button { min-height: 36px; }
+  .whatsapp-chat-actions .button { min-height: 36px; }
+  .whatsapp-message-history { padding: 8px; gap: 7px; }
+  .whatsapp-compose { gap: 5px; padding: 6px 8px; }
+  .whatsapp-compose textarea { min-height: 42px; max-height: 84px; padding: 7px 9px; }
+  .whatsapp-compose .button, .whatsapp-compose .whatsapp-attach-button { min-height: 36px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

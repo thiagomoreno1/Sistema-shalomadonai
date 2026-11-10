@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { FinancialChartsPanel } from '../components/FinancialChartsPanel'
 import { FinanceNavigation } from '../components/FinanceNavigation'
 import { businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
@@ -564,7 +564,7 @@ export function ReceivablesPage() {
       </header>
       <FinanceNavigation active="receivables" />
 
-      {businessRole === 'owner' && <FinancialChartsPanel />}
+      {canManageBusiness(businessRole) && <FinancialChartsPanel />}
 
       <div className="section-heading receivables-section-heading"><h2>Pagamentos a receber</h2></div>
       <p className="section-footnote order-policy-note">Atrasado = ainda há saldo e a data de vencimento já passou.</p>
