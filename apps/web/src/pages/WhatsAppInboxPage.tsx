@@ -550,12 +550,13 @@ function MessageAttachment({ attachment, businessId, conversationId, messageId, 
   }, [attachment.file_type, file, sticker])
 
   async function loadAttachment() {
-    if (!supabaseClient || loading || file || tooLarge) return
+    const client = supabaseClient
+    if (!client || loading || file || tooLarge) return
     focusAfterRequest.current = !autoLoading.current
     setLoading(true)
     setError(false)
     try {
-      const { data, error: requestError, response } = await withMediaRequestSlot(() => supabaseClient.functions.invoke<Blob>('evolution-inbox', {
+      const { data, error: requestError, response } = await withMediaRequestSlot(() => client.functions.invoke<Blob>('evolution-inbox', {
         body: {
           action: 'attachment', business_id: businessId, conversationId, messageId, attachmentId: attachment.id,
         },
