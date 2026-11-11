@@ -281,7 +281,6 @@ export function OrderDetailPage() {
     setPaymentAmount('')
     setReceivedAt('')
     setPaymentMethod('')
-    setPaymentNotes('')
     setAllocationDraft(Object.fromEntries(installments.map((installment) => [installment.id, ''])))
     setPaymentError(null)
     setPaymentUncertain(false)

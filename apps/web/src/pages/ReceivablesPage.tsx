@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { canManageBusiness, useBusiness } from '../business/BusinessContext'
+import { useBusiness } from '../business/BusinessContext'
 import { FinanceNavigation } from '../components/FinanceNavigation'
 import { businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
