@@ -39,8 +39,6 @@ type OutflowRow = {
   id: string
   outflow_type: 'purchase' | 'operating_expense' | 'delivery_cost'
   description: string
-  category: string | null
-  counterparty_name: string | null
   amount_cents: number | string
   paid_on: string
   order_id: string | null
@@ -184,9 +182,7 @@ function reportMoney(value: string | bigint) {
 function getCompletedBilling(summary: Summary) {
   const result = summary.managerial_result
   const grossCents = BigInt(result.product_subtotal_cents) + BigInt(result.customer_delivery_fee_cents)
-  const netBillingCents = result.missing_cost_line_count === 0 && result.returned_order_count === 0 && result.item_cost_cents !== null
-    ? BigInt(result.sales_cents) - BigInt(result.item_cost_cents)
-    : null
+  const netBillingCents = BigInt(result.sales_cents)
   return { grossCents, netBillingCents }
 }
 
@@ -212,9 +208,13 @@ export function FinancialReportsPage() {
   const [outflows, setOutflows] = useState<OutflowRow[]>([])
   const [completedOrders, setCompletedOrders] = useState<CompletedOrder[]>([])
   const [loading, setLoading] = useState(true)
+  const [detailsLoading, setDetailsLoading] = useState(false)
+  const [detailsLoaded, setDetailsLoaded] = useState(false)
+  const [detailsError, setDetailsError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reconciliationWarning, setReconciliationWarning] = useState(false)
   const reportRequestId = useRef(0)
+  const pendingPdfExport = useRef(false)
 
   const { startOn, endOn } = useMemo(() => {
     if (periodMode === 'today') return { startOn: today, endOn: today }
@@ -229,13 +229,58 @@ export function FinancialReportsPage() {
     return null
   }, [customEnd, customStart, periodMode])
 
+  const loadSummary = useCallback(async () => {
+    const requestId = reportRequestId.current + 1
+    reportRequestId.current = requestId
+    const client = supabaseClient
+    setLoading(true)
+    setDetailsLoading(false)
+    setError(null)
+    pendingPdfExport.current = false
+    setDetailsLoaded(false)
+    setDetailsError(null)
+    setReconciliationWarning(false)
+    setOrders([])
+    setPayments([])
+    setReceivables([])
+    setOutflows([])
+    setCompletedOrders([])
+    if (!client) {
+      setError('A conexão da empresa não está disponível.')
+      setLoading(false)
+      return
+    }
+    if (rangeError || !startOn || !endOn || endOn < startOn) {
+      setSummary(null)
+      setLoading(false)
+      return
+    }
+    try {
+      const [summaryResult, inventoryFinanceResult] = await Promise.all([
+        client.rpc('get_financial_report_summary', { p_business_id: businessId, p_start_on: startOn, p_end_on: endOn }),
+        client.rpc('get_inventory_finance_summary', { p_business_id: businessId, p_start_on: startOn, p_end_on: endOn }),
+      ])
+      if (summaryResult.error || !summaryResult.data || inventoryFinanceResult.error || !inventoryFinanceResult.data?.[0]) {
+        throw summaryResult.error ?? inventoryFinanceResult.error ?? new Error('Report summary was empty.')
+      }
+      if (reportRequestId.current !== requestId) return
+      setSummary({ ...(summaryResult.data as Omit<Summary, 'inventory_finance'>), inventory_finance: inventoryFinanceResult.data[0] as Summary['inventory_finance'] })
+    } catch {
+      if (reportRequestId.current === requestId) {
+        setSummary(null)
+        setError('Não foi possível calcular o resumo deste período. Tente novamente.')
+      }
+    } finally {
+      if (reportRequestId.current === requestId) setLoading(false)
+    }
+  }, [businessId, endOn, rangeError, startOn])
+
   const loadReport = useCallback(async () => {
     const requestId = reportRequestId.current + 1
     reportRequestId.current = requestId
     const client = supabaseClient
     if (!client) {
-      setError('A conexão da empresa não está disponível.')
-      setLoading(false)
+      setDetailsError('A conexão da empresa não está disponível.')
       return
     }
     if (rangeError || !startOn || !endOn || endOn < startOn) {
@@ -247,12 +292,12 @@ export function FinancialReportsPage() {
       setOutflows([])
       setCompletedOrders([])
       setReconciliationWarning(false)
-      setLoading(false)
+      setDetailsLoaded(false)
       return
     }
 
-    setLoading(true)
-    setError(null)
+    setDetailsLoading(true)
+    setDetailsError(null)
     try {
       const { startAt, endAt } = timestampRange(startOn, endOn)
       const [orderResult, paymentResult, installmentResult, outflowResult, deliveryResult, pickupResult] = await Promise.all([
@@ -282,7 +327,7 @@ export function FinancialReportsPage() {
           .order('installment_number', { ascending: true })
           .range(from, to)),
         loadAllPages<OutflowRow>((from, to) => client.from('financial_outflows')
-          .select('id, outflow_type, description, category, counterparty_name, amount_cents, paid_on, order_id', { count: 'exact' })
+          .select('id, outflow_type, description, amount_cents, paid_on, order_id', { count: 'exact' })
           .eq('business_id', businessId)
           .gte('paid_on', startOn)
           .lte('paid_on', endOn)
@@ -568,10 +613,11 @@ export function FinancialReportsPage() {
       setOutflows(loadedOutflows)
       setCompletedOrders(loadedCompletedOrders)
       setReconciliationWarning(summaryMismatch)
+      setDetailsLoaded(true)
     } catch {
       if (reportRequestId.current !== requestId) return
-      setError('Não foi possível carregar todos os dados deste período. Tente novamente.')
-      setSummary(null)
+      pendingPdfExport.current = false
+      setDetailsError('Não foi possível carregar os lançamentos detalhados. Tente novamente.')
       setOrders([])
       setPayments([])
       setReceivables([])
@@ -579,30 +625,34 @@ export function FinancialReportsPage() {
       setCompletedOrders([])
       setReconciliationWarning(false)
     } finally {
-      if (reportRequestId.current === requestId) setLoading(false)
+      if (reportRequestId.current === requestId) setDetailsLoading(false)
     }
   }, [businessId, endOn, rangeError, startOn])
 
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect
-    void loadReport()
+    void loadSummary()
     return () => { reportRequestId.current += 1 }
-  }, [loadReport])
+  }, [loadSummary])
 
   const reportMatchesPeriod = Boolean(summary && summary.start_on === startOn && summary.end_on === endOn)
-  const reportCanBeUsed = reportMatchesPeriod && !loading && !error && !reconciliationWarning
   const completedBilling = summary ? getCompletedBilling(summary) : null
   const inventoryLossMissingCostCount = Number(summary?.inventory_finance.inventory_loss_missing_cost_count ?? 0)
   const profitEstimateIsPartial = Boolean(summary?.managerial_result.available && summary.managerial_result.result_cents !== null && inventoryLossMissingCostCount > 0)
 
-  function exportPdf() {
+  const exportPdf = useCallback(() => {
     if (!summary || !completedBilling) return
+    if (!detailsLoaded) {
+      pendingPdfExport.current = true
+      if (!detailsLoading) void loadReport()
+      return
+    }
     const rows: string[][] = [
       ['Relatório financeiro', `${formatBusinessDate(summary.start_on)} a ${formatBusinessDate(summary.end_on)}`],
       ['Escopo', 'Este arquivo inclui pedidos, pagamentos recebidos registrados manualmente, parcelas ainda não pagas, gastos pagos, entradas menos gastos registrados e lucro estimado antes de impostos. Perdas físicas reduzem o lucro, mas não alteram pagamentos já feitos. Lançamentos anulados por erro ficam visíveis na lista, mas são excluídos dos totais. Não representa saldo bancário.'],
       ['Nota sobre pagamentos recebidos', 'Os pagamentos são registrados manualmente pelo proprietário; o sistema não processa nem verifica pagamentos ou créditos bancários.'],
       ['Nota sobre saídas', 'Compras, despesas e custos de entrega aparecem somente quando pagos e são informados manualmente. Compra de estoque afeta o caixa; o resultado reconhece o custo congelado nos itens vendidos.'],
-      ['Como o faturamento líquido é calculado', 'Vendas concluídas após descontos − custo dos produtos vendidos. Os pedidos entram pela data de entrega ou retirada.'],
+      ['Como o faturamento líquido é calculado', 'Faturamento bruto − descontos. Pedidos entram pela data de entrega ou retirada.'],
       ['Como o resultado estimado é calculado', 'Vendas após descontos − custo dos produtos vendidos − perdas reais no estoque − gastos da empresa pagos − pagamentos de entrega. Correções de contagem alteram o valor atual do estoque, não o dinheiro já pago.'],
       ['Datas usadas no cálculo do lucro', 'Pedidos e custo dos produtos: data de entrega concluída ou retirada pelo cliente. Gastos e pagamentos de entrega: data do pagamento informado.'],
       ['Lucro estimado antes de impostos (R$)', summary.managerial_result.result_cents === null ? 'Indisponível; falta o custo de algum produto ou há devolução sem ajuste financeiro.' : reportMoney(summary.managerial_result.result_cents)],
@@ -613,11 +663,10 @@ export function FinancialReportsPage() {
       ['Pedidos concluídos (entrega ou retirada)', String(summary.managerial_result.completed_order_count)],
       ['Faturamento bruto das vendas concluídas (R$)', reportMoney(completedBilling.grossCents)],
       ['Descontos nas vendas concluídas (R$)', reportMoney(summary.managerial_result.discount_cents)],
-      ['Vendas concluídas após descontos (R$)', reportMoney(summary.managerial_result.sales_cents)],
+      ['Faturamento líquido (R$)', reportMoney(completedBilling.netBillingCents)],
       ['Custo dos produtos vendidos (R$)', summary.managerial_result.item_cost_cents === null ? 'Indisponível' : reportMoney(summary.managerial_result.item_cost_cents)],
       [inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido no período (R$)' : 'Perdas reais no estoque no período (R$)', summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : reportMoney(summary.managerial_result.inventory_loss_cents)],
       ['Perdas sem custo excluídas do lucro', String(inventoryLossMissingCostCount)],
-      ['Faturamento líquido (R$)', completedBilling.netBillingCents === null ? 'Indisponível' : reportMoney(completedBilling.netBillingCents)],
       ['Pedidos ainda em andamento criados no período', String(summary.sales.active_order_count)],
       ['Pedidos criados no período atualmente cancelados', String(summary.sales.cancelled_order_count)],
       ['Total originalmente registrado nesses pedidos atualmente cancelados (R$)', reportMoney(summary.sales.cancelled_total_cents)],
@@ -637,8 +686,8 @@ export function FinancialReportsPage() {
       ['Pagamentos recebidos', 'Data do pagamento', 'Cliente', 'Forma de pagamento', 'Valor (R$)'],
       ...payments.map((payment) => [payment.order_id, reportDate(payment.received_at), payment.customer_name, payment.payment_method ?? '', reportMoney(String(payment.amount_cents))]),
       [],
-      ['Gastos pagos', 'Data paga', 'Tipo', 'Descrição', 'Categoria', 'Pago a', 'Pedido relacionado', 'Valor (R$)', 'Situação', 'Motivo da anulação'],
-      ...outflows.map((outflow) => [outflow.id, formatBusinessDate(outflow.paid_on), outflowTypeLabel(outflow.outflow_type), outflow.description, outflow.category ?? '', outflow.counterparty_name ?? '', outflow.order_id ?? '', reportMoney(String(outflow.amount_cents)), outflow.void_event ? 'Anulado por erro; excluído dos totais' : 'Ativo', outflow.void_event?.reason ?? '']),
+      ['Gastos pagos', 'Data paga', 'Tipo', 'Gasto', 'Pedido relacionado', 'Valor (R$)', 'Situação', 'Motivo da anulação'],
+      ...outflows.map((outflow) => [outflow.id, formatBusinessDate(outflow.paid_on), outflowTypeLabel(outflow.outflow_type), outflow.description, outflow.order_id ?? '', reportMoney(String(outflow.amount_cents)), outflow.void_event ? 'Anulado por erro; excluído dos totais' : 'Ativo', outflow.void_event?.reason ?? '']),
       [],
       ['Pagamentos que ainda faltam receber', 'Data limite', 'Cliente', 'Parcela', 'Valor original (R$)', 'Falta receber hoje (R$)', 'Situação'],
       ...receivables.map((item) => [item.order_id, formatBusinessDate(item.due_on), item.customer_name, String(item.installment_number), reportMoney(String(item.amount_cents)), reportMoney(item.balance_cents), item.due_on < (summary.as_of_on ?? today) ? 'Atrasado' : 'Ainda não pago']),
@@ -662,7 +711,13 @@ export function FinancialReportsPage() {
       filename: `relatorio-financeiro-${summary.start_on}-${summary.end_on}.pdf`,
       lines,
     })
-  }
+  }, [completedBilling, completedOrders, detailsLoaded, detailsLoading, loadReport, orders, outflows, payments, receivables, summary, today])
+
+  useEffect(() => {
+    if (!pendingPdfExport.current || !detailsLoaded || detailsLoading || detailsError || reconciliationWarning || !reportMatchesPeriod) return
+    pendingPdfExport.current = false
+    exportPdf()
+  }, [detailsError, detailsLoaded, detailsLoading, exportPdf, reconciliationWarning, reportMatchesPeriod])
 
   return (
     <div className="page-stack report-page">
@@ -674,7 +729,7 @@ export function FinancialReportsPage() {
           <p className="page-description">Faturamento, pagamentos e gastos registrados no período.</p>
         </div>
         <div className="record-heading-actions report-actions">
-          <button className="button button-secondary" disabled={!reportCanBeUsed} onClick={exportPdf} type="button">Exportar PDF</button>
+        <button className="button button-secondary" disabled={!reportMatchesPeriod || loading || Boolean(error) || detailsLoading || (detailsLoaded && reconciliationWarning)} onClick={exportPdf} type="button">{detailsLoading ? 'Preparando PDF…' : 'Exportar PDF'}</button>
         </div>
       </header>
       <p className="report-print-range">Período: {reportMatchesPeriod && summary ? `${formatBusinessDate(summary.start_on)} a ${formatBusinessDate(summary.end_on)}` : startOn && endOn ? `${formatBusinessDate(startOn)} a ${formatBusinessDate(endOn)}` : 'Datas pendentes'} · Valores que faltam receber apurados em {formatBusinessDate(summary?.as_of_on ?? today)}</p>
@@ -691,20 +746,20 @@ export function FinancialReportsPage() {
         </div>
       </section>
 
-      {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void loadReport()} type="button">Tentar novamente</button></div>}
-      {(loading || (summary !== null && !reportMatchesPeriod)) && <p className="inline-state" aria-live="polite">Carregando lançamentos do período…</p>}
+      {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void loadSummary()} type="button">Tentar novamente</button></div>}
+      {(loading || (summary !== null && !reportMatchesPeriod)) && <p className="inline-state" aria-live="polite">Carregando resumo do período…</p>}
 
       {!loading && reportMatchesPeriod && summary && !error && <>
-        {reconciliationWarning && <div className="form-message form-message-warning report-reconciliation-warning" role="alert"><span>O resumo e os lançamentos detalhados não coincidem neste carregamento. Confira novamente antes de usar estes valores.</span><button className="text-button" disabled={loading} onClick={() => void loadReport()} type="button">Reconciliar novamente</button></div>}
+        {reconciliationWarning && <div className="form-message form-message-warning report-reconciliation-warning" role="alert"><span>O resumo e os lançamentos detalhados não coincidem neste carregamento. Confira novamente antes de usar estes valores.</span><button className="text-button" disabled={detailsLoading} onClick={() => void loadReport()} type="button">Reconciliar novamente</button></div>}
         {!reconciliationWarning && <>
         <p className="section-footnote report-scope-note">Faturamento pela data da entrega ou retirada. Pedidos em andamento não entram no faturamento.</p>
         <section className="report-summary-grid" aria-label="Resumo do período">
-          <article className="surface-panel report-summary-card"><span>Faturamento bruto</span><strong>{formatBRLExact(completedBilling?.grossCents ?? 0n)}</strong><small>{summary.managerial_result.completed_order_count} entregas ou retiradas · antes dos descontos</small></article>
-          <article className="surface-panel report-summary-card"><span>Faturamento líquido</span><strong>{completedBilling?.netBillingCents === null ? 'A conferir' : formatBRLExact(completedBilling?.netBillingCents ?? 0n)}</strong><small>Vendas após descontos − custo dos produtos</small></article>
-          <article className="surface-panel report-summary-card"><span>Pagamentos recebidos</span><strong>{formatBRLExact(summary.receipts.amount_cents)}</strong><small>{summary.receipts.record_count} pagamentos registrados</small></article>
-          <article className="surface-panel report-summary-card"><span>Saldo a receber</span><strong>{formatBRLExact(summary.receivables.open_balance_cents)}</strong><small>{summary.receivables.installment_count} parcelas pendentes</small></article>
-          <article className="surface-panel report-summary-card"><span>Parcelas de clientes atrasadas</span><strong>{formatBRLExact(summary.receivables.overdue_balance_cents)}</strong><small>Valores que os clientes ainda não pagaram no prazo</small></article>
-          <article className="surface-panel report-summary-card"><span>Gastos pagos</span><strong>{formatBRLExact(summary.outflows.total_cents)}</strong><small>{summary.outflows.record_count} gastos registrados</small></article>
+          <article className="surface-panel report-summary-card"><span>Faturamento bruto</span><strong>{formatBRLExact(completedBilling?.grossCents ?? 0n)}</strong></article>
+          <article className="surface-panel report-summary-card"><span>Faturamento líquido</span><strong>{formatBRLExact(completedBilling?.netBillingCents ?? 0n)}</strong></article>
+          <article className="surface-panel report-summary-card"><span>Pagamentos recebidos</span><strong>{formatBRLExact(summary.receipts.amount_cents)}</strong></article>
+          <article className="surface-panel report-summary-card"><span>Saldo a receber</span><strong>{formatBRLExact(summary.receivables.open_balance_cents)}</strong></article>
+          <article className="surface-panel report-summary-card"><span>Parcelas atrasadas</span><strong>{formatBRLExact(summary.receivables.overdue_balance_cents)}</strong></article>
+          <article className="surface-panel report-summary-card"><span>Gastos pagos</span><strong>{formatBRLExact(summary.outflows.total_cents)}</strong></article>
         </section>
 
         <section className="surface-panel report-definition-panel" aria-labelledby="report-result-title">
@@ -712,25 +767,29 @@ export function FinancialReportsPage() {
             <p className="eyebrow">LUCRO ESTIMADO · ANTES DE IMPOSTOS</p>
             <h2 id="report-result-title">{summary.managerial_result.available && summary.managerial_result.result_cents !== null ? formatBRLExact(summary.managerial_result.result_cents) : 'Não foi possível calcular o lucro deste período'}</h2>
             {profitEstimateIsPartial && <p className="report-scope-note" role="status">Estimativa parcial: exclui {inventoryLossMissingCostCount} perda(s) antiga(s) sem custo registrado. As perdas com custo conhecido continuam incluídas.</p>}
-            <p className="report-result-formula">Vendas após descontos − custo dos produtos vendidos − perdas reais − gastos pagos − entregas pagas.</p>
-            <div className="report-breakdown report-result-breakdown" aria-label="Valores usados no lucro estimado">
-              <div><span>Faturamento bruto</span><strong>{formatBRLExact(completedBilling?.grossCents ?? 0n)}</strong></div>
-              <div><span>Descontos</span><strong>− {formatBRLExact(summary.managerial_result.discount_cents)}</strong></div>
-              <div><span>Vendas após descontos</span><strong>{formatBRLExact(summary.managerial_result.sales_cents)}</strong></div>
-              <div><span>Custo dos produtos</span><strong>{summary.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(summary.managerial_result.item_cost_cents)}</strong></div>
-              <div><span>Faturamento líquido</span><strong>{completedBilling?.netBillingCents === null ? 'A conferir' : formatBRLExact(completedBilling?.netBillingCents ?? 0n)}</strong></div>
-              <div><span>{inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido' : 'Perdas reais no estoque'}</span><strong>{summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : `− ${formatBRLExact(summary.managerial_result.inventory_loss_cents)}`}</strong></div>
-              <div><span>Gastos</span><strong>{formatBRLExact(summary.managerial_result.operating_expense_cents)}</strong></div>
-              <div><span>Entregas</span><strong>{formatBRLExact(summary.managerial_result.delivery_cost_cents)}</strong></div>
-            </div>
-            {!summary.managerial_result.available && <p className="report-scope-note">{summary.managerial_result.missing_cost_line_count > 0 ? `Falta o custo de ${summary.managerial_result.missing_cost_line_count} produto(s) vendido(s).` : ''}{summary.managerial_result.returned_order_count > 0 ? ` ${summary.managerial_result.returned_order_count} pedido(s) têm produtos devolvidos sem ajuste financeiro.` : ''}{inventoryLossMissingCostCount > 0 ? ` ${inventoryLossMissingCostCount} perda(s) também não têm custo registrado e ficarão fora da estimativa.` : ''} O lucro fica oculto até que os custos dos itens vendidos e os ajustes de devolução estejam disponíveis.</p>}
             <details className="report-calculation-details">
-              <summary>Como calculamos</summary>
-              <p>O custo de produtos para revenda entra quando cada produto é vendido. O registro de gastos é opcional; gastos não informados ficam fora do cálculo. Impostos, reembolsos e ajustes não estão incluídos.</p>
+              <summary>Ver cálculo do lucro</summary>
+              <div className="report-breakdown report-result-breakdown" aria-label="Valores usados no lucro estimado">
+                <div><span>Faturamento bruto</span><strong>{formatBRLExact(completedBilling?.grossCents ?? 0n)}</strong></div>
+                <div><span>Descontos</span><strong>− {formatBRLExact(summary.managerial_result.discount_cents)}</strong></div>
+                <div><span>Faturamento líquido</span><strong>{formatBRLExact(completedBilling?.netBillingCents ?? 0n)}</strong></div>
+                <div><span>Custo dos produtos</span><strong>{summary.managerial_result.item_cost_cents === null ? 'Indisponível' : formatBRLExact(summary.managerial_result.item_cost_cents)}</strong></div>
+                <div><span>{inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido' : 'Perdas reais no estoque'}</span><strong>{summary.managerial_result.inventory_loss_cents === null ? 'Indisponível' : `− ${formatBRLExact(summary.managerial_result.inventory_loss_cents)}`}</strong></div>
+                <div><span>Despesas</span><strong>{formatBRLExact(summary.managerial_result.operating_expense_cents)}</strong></div>
+                <div><span>Entregas</span><strong>{formatBRLExact(summary.managerial_result.delivery_cost_cents)}</strong></div>
+              </div>
+              {!summary.managerial_result.available && <p className="report-scope-note">Estimativa indisponível. Confira o custo dos produtos vendidos e os ajustes de devolução.</p>}
+              <p>Faturamento líquido = bruto − descontos. Lucro estimado = líquido − custos, perdas, despesas e entregas. Impostos ficam fora.</p>
             </details>
           </div>
           <Link className="quiet-link report-related-link" to="/financeiro/saidas">Registrar gasto pago</Link>
         </section>
+
+        <details className="surface-panel report-details-disclosure" onToggle={(event) => { if (event.currentTarget.open && !detailsLoaded && !detailsLoading) void loadReport() }}>
+          <summary>Ver lançamentos detalhados <span>{detailsLoaded ? 'Pedidos, pagamentos e gastos' : 'Carregados quando abrir'}</span></summary>
+          {detailsLoading && <p className="inline-state" aria-live="polite">Carregando lançamentos detalhados…</p>}
+          {detailsError && <div className="inline-state inline-state-error" role="alert"><p>{detailsError}</p><button className="text-button" disabled={detailsLoading} onClick={() => void loadReport()} type="button">Tentar novamente</button></div>}
+          {detailsLoaded && !reconciliationWarning && <>
 
         <section className="surface-panel record-panel report-section" aria-labelledby="report-completed-title">
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">DATA DA ENTREGA OU RETIRADA</p><h2 id="report-completed-title">Pedidos entregues ou retirados</h2></div><span className="neutral-status">{completedOrders.length}</span></div>
@@ -762,7 +821,7 @@ export function FinancialReportsPage() {
             <span>Gastos da empresa <strong>{formatBRLExact(summary.outflows.operating_expense_cents)}</strong></span>
             <span>Pagamentos de entrega <strong>{formatBRLExact(summary.outflows.delivery_cost_cents)}</strong></span>
           </div>
-          {outflows.length === 0 ? <p className="inline-state">Nenhum gasto pago neste período.</p> : <details className="dashboard-trend-details report-table-details"><summary>Ver gastos pagos no período <span>{outflows.length} registros</span></summary><div aria-label="Tabela de gastos pagos do período" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data paga</th><th>Tipo</th><th>Descrição</th><th>Categoria</th><th>Pago a</th><th>Pedido</th><th>Valor</th><th>Situação</th></tr></thead><tbody>{outflows.map((outflow) => <tr key={outflow.id}><td>{formatBusinessDate(outflow.paid_on)}</td><td>{outflowTypeLabel(outflow.outflow_type)}</td><td>{outflow.description}</td><td>{outflow.category || '—'}</td><td>{outflow.counterparty_name || '—'}</td><td>{outflow.order_id ? <Link className="report-order-link" to={`/pedidos/${outflow.order_id}`}>Abrir pedido</Link> : '—'}</td><td>{formatBRLExact(String(outflow.amount_cents))}</td><td>{outflow.void_event ? <><strong>Anulado por erro</strong><small className="section-footnote">{formatBusinessDate(outflow.void_event.created_at)} · {outflow.void_event.reason}</small></> : 'Ativo'}</td></tr>)}</tbody></table></div></details>}
+          {outflows.length === 0 ? <p className="inline-state">Nenhum gasto pago neste período.</p> : <details className="dashboard-trend-details report-table-details"><summary>Ver gastos pagos no período <span>{outflows.length} registros</span></summary><div aria-label="Tabela de gastos pagos do período" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data</th><th>Tipo</th><th>Gasto</th><th>Pedido</th><th>Valor</th><th>Situação</th></tr></thead><tbody>{outflows.map((outflow) => <tr key={outflow.id}><td>{formatBusinessDate(outflow.paid_on)}</td><td>{outflowTypeLabel(outflow.outflow_type)}</td><td>{outflow.description}</td><td>{outflow.order_id ? <Link className="report-order-link" to={`/pedidos/${outflow.order_id}`}>Abrir pedido</Link> : '—'}</td><td>{formatBRLExact(String(outflow.amount_cents))}</td><td>{outflow.void_event ? <><strong>Anulado por erro</strong><small className="section-footnote">{formatBusinessDate(outflow.void_event.created_at)} · {outflow.void_event.reason}</small></> : 'Ativo'}</td></tr>)}</tbody></table></div></details>}
           <p className="section-footnote">Inclui gastos pagos e compras para revenda.</p>
         </section>
 
@@ -771,6 +830,8 @@ export function FinancialReportsPage() {
           {receivables.length === 0 ? <p className="inline-state">Nenhum pagamento pendente neste período.</p> : <details className="dashboard-trend-details report-table-details"><summary>Ver parcelas a receber no período <span>{receivables.length} registros</span></summary><div aria-label="Tabela de pagamentos pendentes" className="report-table-wrap" role="region" tabIndex={0}><table className="report-table"><thead><tr><th>Data limite</th><th>Cliente / pedido</th><th>Parcela</th><th>Valor original</th><th>Falta receber hoje</th><th>Situação</th></tr></thead><tbody>{receivables.map((item) => <tr key={item.id}><td>{formatBusinessDate(item.due_on)}</td><td><Link className="report-order-link" to={`/pedidos/${item.order_id}`}>{item.customer_name}</Link></td><td>{item.installment_number}</td><td>{formatBRLExact(String(item.amount_cents))}</td><td>{formatBRLExact(item.balance_cents.toString())}</td><td>{item.due_on < (summary.as_of_on ?? today) ? 'Atrasado' : 'Ainda não pago'}</td></tr>)}</tbody></table></div></details>}
           <p className="section-footnote">Saldo restante após os pagamentos registrados.</p>
         </section>
+          </>}
+        </details>
         </>}
       </>}
     </div>

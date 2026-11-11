@@ -1,0 +1,9 @@
+.dashboard-financial-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.dashboard-financial-metrics article { display: grid; min-width: 0; gap: 7px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.dashboard-financial-metrics article span { color: var(--muted); font-size: 11px; }
+.dashboard-financial-metrics article strong { color: var(--ink); font-size: clamp(16px, 1.5vw, 21px); font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+@media (max-width: 680px) {
+  .dashboard-financial-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-financial-metrics article:last-child { grid-column: 1 / -1; }
+}

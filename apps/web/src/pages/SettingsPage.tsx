@@ -237,9 +237,18 @@ export function SettingsPage() {
         <span className="module-heading-icon"><Icon name="settings" /></span>
       </header>
 
-      <ProfileSettingsPanel />
+      <nav aria-label="Seções das configurações" className="finance-subnav settings-section-nav">
+        <a href="#settings-profile">Perfil</a>
+        <a href="#settings-account">Conta</a>
+        <a href="#settings-access">Acessos</a>
+        {canManageBusiness(business.role) && <a href="#settings-team">Equipe</a>}
+        <a href="#settings-appearance">Aparência</a>
+        <a href="#settings-automation">Automação</a>
+      </nav>
 
-      <section className="surface-panel settings-panel" aria-labelledby="account-title">
+      <div id="settings-profile" className="settings-anchor-target"><ProfileSettingsPanel /></div>
+
+      <section id="settings-account" className="surface-panel settings-panel settings-anchor-target" aria-labelledby="account-title">
         <div className="section-heading">
           <div>
             <p className="eyebrow">CONTA</p>
@@ -256,7 +265,7 @@ export function SettingsPage() {
         </dl>
       </section>
 
-      <section className="surface-panel settings-panel" aria-labelledby="access-requests-title">
+      <section id="settings-access" className="surface-panel settings-panel settings-anchor-target" aria-labelledby="access-requests-title">
         <div className="section-heading">
           <div>
             <p className="eyebrow">ACESSO À EMPRESA</p>
@@ -302,7 +311,7 @@ export function SettingsPage() {
         )}
       </section>
 
-      {canManageBusiness(business.role) && <section className="surface-panel settings-panel" aria-labelledby="team-members-title">
+      {canManageBusiness(business.role) && <section id="settings-team" className="surface-panel settings-panel settings-anchor-target" aria-labelledby="team-members-title">
         <div className="section-heading">
           <div>
             <p className="eyebrow">EQUIPE AUTORIZADA</p>
@@ -351,7 +360,7 @@ export function SettingsPage() {
         ) : null}
       </section>}
 
-      <section className="surface-panel settings-panel settings-team-entry" aria-labelledby="team-entry-title">
+      <section id="settings-delivery-team" className="surface-panel settings-panel settings-team-entry settings-anchor-target" aria-labelledby="team-entry-title">
         <div className="section-heading">
           <div><p className="eyebrow">ENTREGAS</p><h2 id="team-entry-title">Equipe de entregadores</h2></div>
           <span className="neutral-status">Cadastro e painel</span>
@@ -363,7 +372,7 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section className="surface-panel settings-panel" aria-labelledby="appearance-title">
+      <section id="settings-appearance" className="surface-panel settings-panel settings-anchor-target" aria-labelledby="appearance-title">
         <div className="section-heading">
           <div>
             <p className="eyebrow">APARÊNCIA</p>
@@ -388,7 +397,7 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section className="surface-panel settings-panel" aria-labelledby="automations-title">
+      <section id="settings-automation" className="surface-panel settings-panel settings-anchor-target" aria-labelledby="automations-title">
         <div className="section-heading">
           <div><p className="eyebrow">AUTOMAÇÃO</p><h2 id="automations-title">Regras da operação</h2></div>
           <span className="neutral-status">1 ativa</span>
@@ -400,7 +409,7 @@ export function SettingsPage() {
         </ul>
       </section>
 
-      <section className="surface-panel settings-panel" aria-labelledby="records-title">
+      <section id="settings-data" className="surface-panel settings-panel settings-anchor-target" aria-labelledby="records-title">
         <div className="section-heading">
           <div>
             <p className="eyebrow">DADOS DA OPERAÇÃO</p>

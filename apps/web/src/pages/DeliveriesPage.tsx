@@ -7,7 +7,7 @@ import { supabaseClient } from '../lib/supabase'
 
 type DeliveryStatus = 'awaiting_separation' | 'ready' | 'dispatched' | 'delivered' | 'attempted' | 'rescheduled' | 'returned'
 type Delivery = { id: string; order_id: string; status: DeliveryStatus; delivery_worker_id: string | null; scheduled_on: string | null; time_window: string | null; notes: string | null; canceled_at: string | null; dispatched_at: string | null; delivered_at: string | null; attempted_at: string | null; returned_at: string | null; created_at: string }
-type Order = { id: string; customer_id: string; customer_name_snapshot: string; delivery_address_snapshot: string | null; status: 'open' | 'cancelled'; delivery_fee_cents: number; notes: string | null; created_at: string }
+type Order = { id: string; customer_id: string; customer_name_snapshot: string; delivery_address_snapshot: string | null; status: 'open' | 'cancelled'; delivery_fee_cents: number; created_at: string }
 type Worker = { id: string; name: string; phone: string | null; is_active: boolean; user_id: string | null }
 type OrderComponent = { order_id: string; product_id: string; product_name_snapshot: string; inventory_unit_snapshot: string | null; quantity_snapshot: number; inventory_tracked_snapshot: boolean }
 type InventoryMovement = { order_id: string | null; product_id: string; movement_type: string; quantity_delta: number }
@@ -27,6 +27,8 @@ const statusLabels: Record<DeliveryStatus, string> = {
 }
 
 const statusOrder: DeliveryStatus[] = ['awaiting_separation', 'ready', 'dispatched', 'attempted', 'rescheduled', 'delivered', 'returned']
+const pendingDeliveryStatuses: DeliveryStatus[] = ['awaiting_separation', 'ready', 'dispatched', 'attempted', 'rescheduled']
+const DELIVERY_PAGE_SIZE = 40
 const deliveryWindowPresets = ['Manhã', '13h–15h', '15h–17h', '17h–19h']
 const failedDeliveryPresets = [
   { label: 'Cliente ausente', note: 'Cliente não estava disponível no endereço.', nextStep: 'Entrar em contato e combinar novo horário.' },
@@ -57,7 +59,15 @@ export function DeliveriesPage() {
   const [movements, setMovements] = useState<InventoryMovement[]>([])
   const [balances, setBalances] = useState<Balance[]>([])
   const [events, setEvents] = useState<DeliveryEvent[]>([])
+  const [eventsLoadedIds, setEventsLoadedIds] = useState<Set<string>>(new Set())
+  const [eventLoadingIds, setEventLoadingIds] = useState<Set<string>>(new Set())
+  const [eventErrorIds, setEventErrorIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const nextOffsetRef = useRef(0)
+  const [pendingTotal, setPendingTotal] = useState(0)
+  const [filteredTotal, setFilteredTotal] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('pending')
@@ -87,71 +97,128 @@ export function DeliveriesPage() {
   const wasPlanOpenRef = useRef(false)
   const wasStatusOpenRef = useRef(false)
 
-  const loadQueue = useCallback(async () => {
+  const loadQueue = useCallback(async (append = false, requestedFilter: Filter = filter) => {
     if (!supabaseClient) {
       setError('A conexão da empresa não está disponível.')
       setLoading(false)
       return false
     }
-    setLoading(true)
+    if (append) setLoadingMore(true)
+    else setLoading(true)
     try {
-      const [deliveryResult, workerResult, balanceResult] = await Promise.all([
-        supabaseClient.from('deliveries').select('id, order_id, status, delivery_worker_id, scheduled_on, time_window, notes, canceled_at, dispatched_at, delivered_at, attempted_at, returned_at, created_at')
-          .eq('business_id', businessId).is('canceled_at', null).order('scheduled_on', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false }).range(0, 999),
-        supabaseClient.from('delivery_workers').select('id, name, phone, is_active, user_id')
-          .eq('business_id', businessId).eq('member_type', 'delivery_driver').order('is_active', { ascending: false }).order('name', { ascending: true }),
-        supabaseClient.from('inventory_balances').select('product_id, quantity_on_hand, inventory_unit').eq('business_id', businessId),
-      ])
-      if (deliveryResult.error || workerResult.error || balanceResult.error) {
+      const offset = append ? nextOffsetRef.current : 0
+      let deliveryQuery = supabaseClient.from('deliveries')
+        .select('id, order_id, status, delivery_worker_id, scheduled_on, time_window, notes, canceled_at, dispatched_at, delivered_at, attempted_at, returned_at, created_at, order:orders!inner(status)', { count: 'exact' })
+        .eq('business_id', businessId)
+        .eq('order.status', 'open')
+        .is('canceled_at', null)
+        .order('scheduled_on', { ascending: true, nullsFirst: false })
+        .order('created_at', { ascending: false })
+      if (requestedFilter === 'pending') deliveryQuery = deliveryQuery.in('status', pendingDeliveryStatuses)
+      else if (requestedFilter !== 'all') deliveryQuery = deliveryQuery.eq('status', requestedFilter)
+      const deliveryResult = await deliveryQuery.range(offset, offset + DELIVERY_PAGE_SIZE - 1)
+      if (deliveryResult.error) {
         setError('Não foi possível carregar a fila de entregas. Tente novamente.')
         return false
       }
       const deliveryRows = (deliveryResult.data ?? []) as Delivery[]
-      const orderIds = [...new Set(deliveryRows.map((delivery) => delivery.order_id))]
-      if (orderIds.length === 0) {
-        setDeliveries(deliveryRows)
-        setOrders([])
+      const total = deliveryResult.count ?? offset + deliveryRows.length
+      setFilteredTotal(total)
+      setHasMore(offset + deliveryRows.length < total)
+      nextOffsetRef.current = offset + deliveryRows.length
+
+      if (!append) {
+        const [workerResult, balanceResult, pendingCountResult] = await Promise.all([
+          supabaseClient.from('delivery_workers').select('id, name, phone, is_active, user_id')
+            .eq('business_id', businessId).eq('member_type', 'delivery_driver').order('is_active', { ascending: false }).order('name', { ascending: true }),
+          supabaseClient.from('inventory_balances').select('product_id, quantity_on_hand, inventory_unit').eq('business_id', businessId),
+          supabaseClient.from('deliveries').select('id, order:orders!inner(status)', { count: 'exact', head: true })
+            .eq('business_id', businessId).eq('order.status', 'open').is('canceled_at', null).in('status', pendingDeliveryStatuses),
+        ])
+        if (workerResult.error || balanceResult.error || pendingCountResult.error) {
+          setError('Não foi possível carregar os dados de apoio da fila. Tente novamente.')
+          return false
+        }
         setWorkers((workerResult.data ?? []) as Worker[])
         setBalances((balanceResult.data ?? []) as Balance[])
-        setComponents([])
-        setMovements([])
+        setPendingTotal(pendingCountResult.count ?? 0)
         setEvents([])
+        setEventsLoadedIds(new Set())
+        setEventErrorIds(new Set())
+      }
+      const orderIds = [...new Set(deliveryRows.map((delivery) => delivery.order_id))]
+      if (orderIds.length === 0) {
+        if (!append) {
+          setDeliveries([])
+          setOrders([])
+          setComponents([])
+          setMovements([])
+        }
         setError(null)
         return true
       }
-      const [orderResult, componentResult, movementResult, eventResult] = await Promise.all([
-        supabaseClient.from('orders').select('id, customer_id, customer_name_snapshot, delivery_address_snapshot, status, delivery_fee_cents, notes, created_at')
+      const [orderResult, componentResult, movementResult] = await Promise.all([
+        supabaseClient.from('orders').select('id, customer_id, customer_name_snapshot, delivery_address_snapshot, status, delivery_fee_cents, created_at')
           .eq('business_id', businessId).in('id', orderIds),
         supabaseClient.from('order_line_components').select('order_id, product_id, product_name_snapshot, inventory_unit_snapshot, quantity_snapshot, inventory_tracked_snapshot')
           .eq('business_id', businessId).in('order_id', orderIds),
         supabaseClient.from('inventory_movements').select('order_id, product_id, movement_type, quantity_delta')
           .eq('business_id', businessId).in('order_id', orderIds),
-        supabaseClient.from('delivery_events').select('id, delivery_id, event_type, from_status, to_status, delivery_worker_id, scheduled_on, time_window, note, next_step, stock_warnings, occurred_at')
-          .eq('business_id', businessId).in('delivery_id', deliveryRows.map((delivery) => delivery.id)).order('occurred_at', { ascending: false }),
       ])
-      if (orderResult.error || componentResult.error || movementResult.error || eventResult.error) {
-        setError('Não foi possível carregar detalhes e histórico das entregas.')
+      if (orderResult.error || componentResult.error || movementResult.error) {
+        setError('Não foi possível carregar os dados dos pedidos para entrega.')
         return false
       }
-      setDeliveries(deliveryRows)
-      setOrders((orderResult.data ?? []) as Order[])
-      setWorkers((workerResult.data ?? []) as Worker[])
-      setComponents((componentResult.data ?? []) as OrderComponent[])
-      setMovements((movementResult.data ?? []) as InventoryMovement[])
-      setBalances((balanceResult.data ?? []) as Balance[])
-      setEvents((eventResult.data ?? []) as DeliveryEvent[])
+      const mergeById = <T extends { id: string }>(existing: T[], incoming: T[]) => {
+        const merged = new Map(existing.map((item) => [item.id, item]))
+        for (const item of incoming) merged.set(item.id, item)
+        return [...merged.values()]
+      }
+      setDeliveries((existing) => append ? mergeById(existing, deliveryRows) : deliveryRows)
+      setOrders((existing) => append ? mergeById(existing, (orderResult.data ?? []) as Order[]) : (orderResult.data ?? []) as Order[])
+      setComponents((existing) => append ? [...existing, ...((componentResult.data ?? []) as OrderComponent[])] : (componentResult.data ?? []) as OrderComponent[])
+      setMovements((existing) => append ? [...existing, ...((movementResult.data ?? []) as InventoryMovement[])] : (movementResult.data ?? []) as InventoryMovement[])
       setError(null)
       return true
     } catch {
       setError('Não foi possível carregar a fila de entregas. Tente novamente.')
       return false
     } finally {
-      setLoading(false)
+      if (append) setLoadingMore(false)
+      else setLoading(false)
     }
-  }, [businessId])
+  }, [businessId, filter])
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadQueue() }, [loadQueue])
+
+  const loadDeliveryEvents = useCallback(async (deliveryId: string) => {
+    if (!supabaseClient || eventsLoadedIds.has(deliveryId) || eventLoadingIds.has(deliveryId)) return
+    setEventLoadingIds((current) => new Set(current).add(deliveryId))
+    setEventErrorIds((current) => { const next = new Set(current); next.delete(deliveryId); return next })
+    try {
+      const history: DeliveryEvent[] = []
+      const pageSize = 200
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error: eventsError, count } = await supabaseClient.from('delivery_events')
+          .select('id, delivery_id, event_type, from_status, to_status, delivery_worker_id, scheduled_on, time_window, note, next_step, stock_warnings, occurred_at', { count: 'exact' })
+          .eq('business_id', businessId)
+          .eq('delivery_id', deliveryId)
+          .order('occurred_at', { ascending: false })
+          .range(offset, offset + pageSize - 1)
+        if (eventsError) throw eventsError
+        const page = (data ?? []) as DeliveryEvent[]
+        history.push(...page)
+        if (page.length < pageSize || (count !== null && count !== undefined && history.length >= count)) break
+      }
+      setEvents((current) => [...current.filter((event) => event.delivery_id !== deliveryId), ...history])
+      setEventsLoadedIds((current) => new Set(current).add(deliveryId))
+    } catch {
+      setEventErrorIds((current) => new Set(current).add(deliveryId))
+    } finally {
+      setEventLoadingIds((current) => { const next = new Set(current); next.delete(deliveryId); return next })
+    }
+  }, [businessId, eventLoadingIds, eventsLoadedIds])
 
   useEffect(() => {
     if (editingPlanId) planHeadingRef.current?.focus()
@@ -346,7 +413,7 @@ export function DeliveriesPage() {
     }
   }
 
-  const pendingCount = deliveries.filter((delivery) => !['delivered', 'returned'].includes(delivery.status) && orderMap.get(delivery.order_id)?.status === 'open').length
+  const pendingCount = pendingTotal
   const currentDate = businessToday()
 
   return (
@@ -388,11 +455,11 @@ export function DeliveriesPage() {
               <div className="delivery-card-head">
                 <span className="delivery-order-mark"><Icon name="truck" /></span>
                 <div className="delivery-card-main"><div className="delivery-customer-line"><strong>{order.customer_name_snapshot}</strong><span className={'delivery-status delivery-status-' + delivery.status}>{statusLabels[delivery.status]}</span></div><small><Link to={'/pedidos/' + order.id}>Pedido {order.id.slice(0, 8)} →</Link>{delivery.scheduled_on ? ' · ' + (delivery.scheduled_on < currentDate ? 'Agendada ' : '') + formatBusinessDate(delivery.scheduled_on) : ' · Sem data agendada'}</small></div>
-                <button aria-expanded={expanded} aria-label={(expanded ? 'Fechar detalhes de ' : 'Abrir detalhes de ') + order.customer_name_snapshot} className="button button-secondary delivery-expand-button" onClick={() => { setExpandedId(expanded ? null : delivery.id); setStatusTarget(null); setEditingPlanId(null) }} type="button">{expanded ? 'Fechar' : 'Abrir'}</button>
+                <button aria-expanded={expanded} aria-label={(expanded ? 'Fechar detalhes de ' : 'Abrir detalhes de ') + order.customer_name_snapshot} className="button button-secondary delivery-expand-button" onClick={() => { setExpandedId(expanded ? null : delivery.id); setStatusTarget(null); setEditingPlanId(null); if (!expanded) void loadDeliveryEvents(delivery.id) }} type="button">{expanded ? 'Fechar' : 'Abrir'}</button>
               </div>
               <div className="delivery-card-summary"><span><small>Endereço</small><strong>{order.delivery_address_snapshot || 'Não informado'}</strong></span><span><small>Entregador</small><strong>{worker?.name ?? 'Sem atribuição'}</strong></span></div>
               {expanded && <div className="delivery-card-details">
-                <dl className="customer-facts delivery-facts"><div><dt>Pedido</dt><dd><Link to={'/pedidos/' + order.id}>Abrir pedido completo</Link></dd></div><div><dt>Endereço</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div><div><dt>Taxa registrada no pedido</dt><dd>{order.delivery_fee_cents === 0 ? 'Sem taxa informada' : 'Conferir no pedido'}</dd></div><div><dt>Observações do pedido</dt><dd>{order.notes || 'Nenhuma observação'}</dd></div><div><dt>Entregador atribuído</dt><dd>{worker ? worker.name + (worker.phone ? ' · ' + worker.phone : '') : 'Nenhum'}</dd></div><div><dt>Agendamento</dt><dd>{delivery.scheduled_on ? formatBusinessDate(delivery.scheduled_on) + (delivery.time_window ? ' · ' + delivery.time_window : '') : 'Não informado'}</dd></div></dl>
+                <dl className="customer-facts delivery-facts"><div><dt>Pedido</dt><dd><Link to={'/pedidos/' + order.id}>Abrir pedido</Link></dd></div><div><dt>Endereço</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div><div><dt>Taxa de entrega</dt><dd>{order.delivery_fee_cents === 0 ? 'Sem taxa' : 'Conferir no pedido'}</dd></div><div><dt>Entregador</dt><dd>{worker ? worker.name + (worker.phone ? ' · ' + worker.phone : '') : 'Nenhum'}</dd></div><div><dt>Agendamento</dt><dd>{delivery.scheduled_on ? formatBusinessDate(delivery.scheduled_on) + (delivery.time_window ? ' · ' + delivery.time_window : '') : 'Não informado'}</dd></div></dl>
                 <div className="delivery-card-actions"><button className="button button-secondary" disabled={delivery.status === 'delivered' || delivery.status === 'returned' || Boolean(error)} onClick={(event) => openPlan(delivery, event.currentTarget)} type="button">Editar entregador e horário</button>{actions.map((nextStatus) => <button className={nextStatus === 'dispatched' ? 'button button-primary' : 'button button-secondary'} disabled={Boolean(error)} key={nextStatus} onClick={(event) => beginStatus(delivery, nextStatus, event.currentTarget)} type="button">{nextStatus === 'dispatched' ? 'Preparar despacho' : nextStatus === 'attempted' ? 'Registrar entrega não concluída' : 'Marcar: ' + statusLabels[nextStatus]}</button>)}</div>
 
                 {isEditingPlan && <form className="delivery-action-form" onSubmit={(event) => void handlePlanSubmit(event, delivery)}>
@@ -403,7 +470,7 @@ export function DeliveriesPage() {
                     <div className="record-field"><span className="field-label">Data agendada <span className="field-optional">opcional · {delivery.scheduled_on ? 'data salva' : 'padrão: hoje · alterável'}</span></span><label className="field-label"><input checked={planScheduleEnabled} disabled={planSaving || planUncertain} onChange={(event) => setPlanScheduleEnabled(event.target.checked)} type="checkbox" /> Agendar entrega para esta data</label><input className="text-input" disabled={planSaving || planUncertain || !planScheduleEnabled} onChange={(event) => { setPlanDate(event.target.value); setPlanScheduleEnabled(true) }} type="date" value={planDate} /></div>
                     <div className="record-field record-field-wide"><span className="field-label">Janela rápida <span className="field-optional">opcional</span></span><div className="record-form-actions" aria-label="Escolher janela de entrega">{deliveryWindowPresets.map((window) => <button aria-pressed={planWindow === window} className="button button-secondary" disabled={planSaving || planUncertain} key={window} onClick={() => { setPlanWindow(window); setPlanScheduleEnabled(true) }} type="button">{window}</button>)}</div></div>
                     <label className="record-field"><span className="field-label">Personalizar janela ou horário <span className="field-optional">opcional</span></span><input className="text-input" disabled={planSaving || planUncertain} maxLength={120} onChange={(event) => { setPlanWindow(event.target.value); if (event.target.value.trim()) setPlanScheduleEnabled(true) }} placeholder="Ex.: manhã, 14h–16h" value={planWindow} /></label>
-                    <label className="record-field"><span className="field-label">Observações da entrega</span><input className="text-input" disabled={planSaving || planUncertain} maxLength={2000} onChange={(event) => setPlanNotes(event.target.value)} value={planNotes} /></label>
+                    <label className="record-field"><span className="field-label">Instruções para o entregador</span><input className="text-input" disabled={planSaving || planUncertain} maxLength={2000} onChange={(event) => setPlanNotes(event.target.value)} value={planNotes} /></label>
                   </div>
                   <p className="section-footnote">A data começa preenchida com hoje, mas só será aplicada se você marcar “Agendar entrega”. Assim, salvar apenas a atribuição do entregador não agenda a entrega.</p>
                   {planError && <p className="form-message form-message-error" role="alert">{planError}</p>}
@@ -417,19 +484,22 @@ export function DeliveriesPage() {
                     <label className="record-field"><span className="field-label">O que ocorreu? <span aria-hidden="true">*</span></span><textarea className="text-input record-textarea" disabled={statusSaving || statusUncertain} maxLength={1000} onChange={(event) => setStatusNote(event.target.value)} required rows={2} value={statusNote} /></label>
                     <label className="record-field"><span className="field-label">Próxima ação <span aria-hidden="true">*</span></span><input className="text-input" disabled={statusSaving || statusUncertain} maxLength={1000} onChange={(event) => setNextStep(event.target.value)} required value={nextStep} /></label>
                   </>}
-                  {target.status === 'delivered' && <label className="record-field"><span className="field-label">Observação de conclusão <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" disabled={statusSaving || statusUncertain} maxLength={1000} onChange={(event) => setStatusNote(event.target.value)} rows={2} value={statusNote} /></label>}
                   {target.status === 'dispatched' && <><p className="section-footnote">O estoque baixa no despacho. Reentregas consideram os itens já enviados e retornos conferidos.</p>{dispatchWarnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Saldo insuficiente para este despacho.</strong><ul>{dispatchWarnings.map((warning) => <li key={warning.name}>{warning.name}: disponível {formatQuantity(warning.available)} {warning.unit}, necessário {formatQuantity(warning.needed)} {warning.unit}; saldo após despacho {formatQuantity(warning.projected)} {warning.unit}.</li>)}</ul><span>Você pode continuar; o saldo ficará negativo e o aviso será registrado.</span></div>}</>}
                   {target.status === 'returned' && <p className="form-message form-message-warning" role="status">Marcar a entrega como devolvida não adiciona mercadoria ao estoque. Registre o retorno após conferência em Estoque.</p>}
                   {statusError && <p className="form-message form-message-error" role="alert">{statusError}</p>}
                   <div className="record-form-actions"><button className="button button-primary" disabled={statusSaving} type="submit">{statusSaving ? 'Atualizando…' : statusUncertain ? 'Tentar novamente sem alterar os dados' : target.status === 'dispatched' && dispatchWarnings.length > 0 ? 'Despachar mesmo sem estoque suficiente' : 'Confirmar estado'}</button><button className="text-button" disabled={statusSaving || statusUncertain} onClick={() => setStatusTarget(null)} type="button">Cancelar</button></div>
                 </form>}
 
-                <section className="delivery-history" aria-label="Histórico desta entrega"><details className="dashboard-trend-details delivery-history-details"><summary>Ver histórico da entrega <span>{deliveryEvents.length} atualizações</span></summary>{deliveryEvents.length === 0 ? <p className="inline-state">Nenhuma atualização de entrega encontrada.</p> : <ul className="timeline-list">{deliveryEvents.map((entry) => <li key={entry.id}><span className="timeline-dot" /><div><strong>{entry.event_type === 'created' ? 'Entrega criada' : entry.event_type === 'plan_updated' ? 'Horário ou entregador atualizado' : (entry.from_status ? statusLabels[entry.from_status] + ' → ' : '') + statusLabels[entry.to_status]}</strong><p>{timestamp(entry.occurred_at)}</p>{entry.note && <p>{entry.note}</p>}{entry.next_step && <p>Próximo passo: {entry.next_step}</p>}{entry.event_type === 'status_changed' && entry.to_status === 'dispatched' && <p>O estoque foi atualizado quando o pedido saiu para entrega.</p>}{entry.stock_warnings?.length > 0 && <p className="delivery-stock-warning">Estoque abaixo de zero após o despacho: {entry.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(Number(warning.quantity_on_hand)) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}</ul>}</details></section>
+                <section className="delivery-history" aria-label="Histórico desta entrega"><details className="dashboard-trend-details delivery-history-details"><summary>Ver histórico da entrega <span>{eventsLoadedIds.has(delivery.id) ? `${deliveryEvents.length} atualizações` : 'Carregar histórico'}</span></summary>{eventLoadingIds.has(delivery.id) ? <p className="inline-state" aria-live="polite">Carregando histórico…</p> : eventErrorIds.has(delivery.id) ? <p className="inline-state inline-state-error" role="alert">Não foi possível carregar o histórico. <button className="text-button" onClick={() => void loadDeliveryEvents(delivery.id)} type="button">Tentar novamente</button></p> : !eventsLoadedIds.has(delivery.id) ? <p className="inline-state">Abra os detalhes da entrega para carregar o histórico.</p> : deliveryEvents.length === 0 ? <p className="inline-state">Nenhuma atualização de entrega encontrada.</p> : <ul className="timeline-list">{deliveryEvents.map((entry) => <li key={entry.id}><span className="timeline-dot" /><div><strong>{entry.event_type === 'created' ? 'Entrega criada' : entry.event_type === 'plan_updated' ? 'Horário ou entregador atualizado' : (entry.from_status ? statusLabels[entry.from_status] + ' → ' : '') + statusLabels[entry.to_status]}</strong><p>{timestamp(entry.occurred_at)}</p>{entry.note && <p>{entry.note}</p>}{entry.next_step && <p>Próximo passo: {entry.next_step}</p>}{entry.event_type === 'status_changed' && entry.to_status === 'dispatched' && <p>O estoque foi atualizado quando o pedido saiu para entrega.</p>}{entry.stock_warnings?.length > 0 && <p className="delivery-stock-warning">Estoque abaixo de zero após o despacho: {entry.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(Number(warning.quantity_on_hand)) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}</ul>}</details></section>
                 {['attempted', 'rescheduled', 'returned', 'delivered'].includes(delivery.status) && <p className="section-footnote delivery-return-note">Se algum item voltou, registre a quantidade conferida separadamente em <Link to="/estoque">Estoque</Link>. A mudança de estado não repõe saldo.</p>}
               </div>}
             </li>
           })}
         </ul>}
+        {!loading && !error && <div className="record-form-actions delivery-pagination" aria-live="polite">
+          <span className="section-footnote">Mostrando {deliveries.length} de {filteredTotal} entregas neste filtro.</span>
+          {hasMore && <button className="button button-secondary" disabled={loadingMore} onClick={() => void loadQueue(true)} type="button">{loadingMore ? 'Carregando…' : 'Carregar mais entregas'}</button>}
+        </div>}
       </section>
     </div>
   )

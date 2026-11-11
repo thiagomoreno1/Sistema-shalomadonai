@@ -498,7 +498,9 @@ export function ProductsPage() {
     const isInitiallyActive = isCombo ? true : mustConfigureInventory ? false : isActive
     const record = {
       name,
-      description: String(form.get('description') ?? '').trim() || null,
+      // Keep legacy product descriptions intact without asking people to maintain
+      // free-form copy that is not used by the operational workflow.
+      description: editingProduct?.description ?? null,
       category_id: String(form.get('category_id') ?? '').trim() || null,
       inventory_unit: inventoryUnit || null,
       sale_price_cents: salePrice,
@@ -760,7 +762,7 @@ export function ProductsPage() {
   return (
     <div className="page-stack">
       <header className="page-heading">
-        <div><p className="eyebrow">CATÁLOGO</p><h1>Produtos</h1><p className="page-description">Cadastre produtos com estoque atualizado automaticamente.</p></div>
+        <div><p className="eyebrow">CATÁLOGO</p><h1>Produtos</h1></div>
         <button className="button button-primary" onClick={startCreate} type="button"><Icon name="plus" /> Novo produto</button>
       </header>
 
@@ -776,23 +778,21 @@ export function ProductsPage() {
             <label className="record-field"><span className="field-label">Preço de venda <span className="field-optional">R$</span></span><input className="text-input" defaultValue={editingProduct?.sale_price_cents === null || !editingProduct ? '' : (editingProduct.sale_price_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="sale_price" placeholder="0,00" /></label>
             <label className="record-field"><span className="field-label">Custo médio unitário <span className="field-optional">R$ · {comboEnabled || productIsActive ? 'obrigatório para ativar' : 'necessário para faturamento'}</span></span><input className="text-input" defaultValue={editingProduct?.cost_cents === null || !editingProduct ? '' : (editingProduct.cost_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="cost" placeholder="0,00" /><small className="field-optional">Combos usam o custo informado no próprio cadastro.</small></label>
             {editingProduct && <div className="record-field record-field-wide"><ProductPriceHistory businessId={businessId} productId={editingProduct.id} refreshToken={priceHistoryRefreshToken} /></div>}
-            <label className="record-field record-field-wide"><span className="field-label">Descrição <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" defaultValue={editingProduct?.description ?? ''} maxLength={2000} name="description" rows={3} /></label>
+            <details className="optional-record-details record-field-wide" open={Boolean(editingProduct?.image_path || photoPreviewUrl) || undefined}>
+              <summary>Foto do produto <span className="field-optional">opcional</span></summary>
+              <div className="record-form-grid">
             <div className="record-field record-field-wide product-photo-field">
-              <span className="field-label">Foto do produto <span className="field-optional">opcional · JPEG, PNG ou WEBP · até 5 MB</span></span>
+              <span className="field-label">Imagem <span className="field-optional">JPEG, PNG ou WEBP · até 5 MB</span></span>
               <div className="product-photo-layout">
                 <span className="product-photo-preview">
                   {(photoPreviewUrl || editingProduct?.image_url) ? <img alt={editingProduct ? `Foto de ${editingProduct.name}` : 'Prévia da foto do produto'} onError={() => { if (editingProduct?.image_path) void refreshProductPhoto(editingProduct.id, editingProduct.image_path) }} src={photoPreviewUrl ?? editingProduct?.image_url ?? ''} /> : <Icon name="box" />}
                 </span>
                 <div className="product-photo-copy">
-                  <p className="section-footnote">{!editingProduct
-                    ? selectedPhoto
-                      ? 'A foto será enviada junto com o primeiro salvamento do produto.'
-                      : 'Escolha uma foto agora; ela será enviada junto com o primeiro salvamento.'
-                    : selectedPhoto
-                      ? `Nova foto pronta: ${selectedPhoto.name}. Ela será enviada ao salvar.`
-                      : editingProduct.image_path
-                        ? 'A foto atual aparece somente para usuários autorizados.'
-                        : 'Nenhuma foto cadastrada.'}{editingProduct?.pending_image_cleanup_path ? ' Um arquivo antigo aguarda exclusão.' : ''}</p>
+                  <p className="section-footnote">{selectedPhoto
+                    ? `${selectedPhoto.name} · será salva junto com o produto.`
+                    : editingProduct?.image_path
+                      ? 'Foto cadastrada.'
+                      : 'Nenhuma foto.'}{editingProduct?.pending_image_cleanup_path ? ' Uma foto antiga aguarda exclusão.' : ''}</p>
                   <div className="product-photo-actions">
                     <label className={`button button-secondary product-photo-picker${saving || editingProduct?.pending_image_cleanup_path ? ' is-disabled' : ''}`}>Escolher foto<input accept="image/jpeg,image/png,image/webp" aria-describedby="product-photo-help" disabled={saving || Boolean(editingProduct?.pending_image_cleanup_path)} onChange={handlePhotoChange} type="file" /></label>
                     {selectedPhoto && <button className="text-button" disabled={saving} onClick={() => { selectProductPhoto(null); setPhotoError(null) }} type="button">Cancelar troca</button>}
@@ -806,11 +806,13 @@ export function ProductsPage() {
               {(saving && selectedPhoto) && <p className="section-footnote" aria-live="polite" role="status">Salvando produto e enviando foto…</p>}
               {photoError && <p className="form-message form-message-error" role="alert">{photoError}</p>}
             </div>
+              </div>
+            </details>
             <section className="product-stock-settings record-field-wide" hidden={comboEnabled} aria-labelledby="product-stock-heading">
               <div className="section-heading section-heading-compact"><div><p className="eyebrow">ESTOQUE AUTOMÁTICO</p><h3 id="product-stock-heading">Saldo do produto</h3></div></div>
               <p className="section-footnote">{editingProduct?.inventory_tracked
-                ? 'Ex.: televisão por unidade/peça; pão por peso em kg. O saldo muda em despachos e recebimentos; para corrigir a quantidade, use Estoque.'
-                : 'Ex.: televisão → unidade/peça, 2; pão por peso → kg, 15. Unidade/peça e unidades personalizadas usam inteiros; kg e outras medidas aceitam até 3 casas. Informe o saldo físico atual.'}</p>
+                ? 'Ex.: TV em unidades; pão em kg. Corrija o saldo em Estoque.'
+                : 'Ex.: 2 TVs ou 15 kg de pão.'}</p>
               <div className="record-form-grid product-stock-grid">
                 <label className="record-field"><span className="field-label">Unidade de contagem <span aria-hidden="true">*</span></span>
                   <select className="text-input" disabled={saving || comboEnabled || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => setInventoryUnitChoice(event.target.value)} required={!comboEnabled} value={inventoryUnitChoice}>
@@ -820,7 +822,10 @@ export function ProductsPage() {
                 </label>
                 {inventoryUnitChoice === OTHER_INVENTORY_UNIT_OPTION && <label className="record-field"><span className="field-label">Especifique a unidade <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || comboEnabled || Boolean(editingProduct?.inventory_tracked)} maxLength={32} onChange={(event) => setCustomInventoryUnit(event.target.value)} placeholder="Ex.: fardo, bandeja" required={!comboEnabled} value={customInventoryUnit} /></label>}
                 {!editingProduct?.inventory_tracked && <label className="record-field"><span className="field-label">Quantidade inicial{chosenInventoryUnit ? ` · ${chosenInventoryUnit}` : ''} <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || comboEnabled} inputMode={isDiscreteInventoryUnit(chosenInventoryUnit) ? 'numeric' : 'decimal'} max={999999999.999} min={0} onChange={(event) => setOpeningQuantity(event.target.value)} placeholder="0" required={!comboEnabled} step={isDiscreteInventoryUnit(chosenInventoryUnit) ? 1 : 0.001} value={openingQuantity} /></label>}
-                <label className="record-field"><span className="field-label">Estoque mínimo{formInventoryUnit ? ` · ${formInventoryUnit}` : ''} <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving || comboEnabled} inputMode={isDiscreteInventoryUnit(formInventoryUnit) ? 'numeric' : 'decimal'} max={999999999.999} min={0} onChange={(event) => setMinimumStock(event.target.value)} placeholder="Sem alerta" step={isDiscreteInventoryUnit(formInventoryUnit) ? 1 : 0.001} value={minimumStock} /></label>
+                <details className="optional-record-details product-stock-minimum" open={Boolean(minimumStock) || undefined}>
+                  <summary>Definir estoque mínimo <span className="field-optional">opcional</span></summary>
+                  <label className="record-field"><span className="field-label">Estoque mínimo{formInventoryUnit ? ` · ${formInventoryUnit}` : ''}</span><input className="text-input" disabled={saving || comboEnabled} inputMode={isDiscreteInventoryUnit(formInventoryUnit) ? 'numeric' : 'decimal'} max={999999999.999} min={0} onChange={(event) => setMinimumStock(event.target.value)} placeholder="Sem alerta" step={isDiscreteInventoryUnit(formInventoryUnit) ? 1 : 0.001} value={minimumStock} /></label>
+                </details>
               </div>
             </section>
             <label className="record-checkbox record-field-wide"><input checked={comboEnabled} disabled={saving || Boolean(editingProduct?.is_combo) || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => setComboEnabled(event.target.checked)} name="is_combo" type="checkbox" /><span><strong>Este produto é um combo</strong><small>O combo usa o saldo dos produtos da composição; não precisa de saldo próprio.</small></span></label>

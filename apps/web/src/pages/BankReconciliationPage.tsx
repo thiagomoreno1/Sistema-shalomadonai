@@ -164,7 +164,6 @@ export function BankReconciliationPage() {
   const [description, setDescription] = useState('')
   const [counterpartyName, setCounterpartyName] = useState('')
   const [amount, setAmount] = useState('')
-  const [notes, setNotes] = useState('')
   const [movementRequestId, setMovementRequestId] = useState(newRequestId)
   const [candidateTarget, setCandidateTarget] = useState<BankTransaction | null>(null)
   const [candidates, setCandidates] = useState<MatchCandidate[]>([])
@@ -547,14 +546,13 @@ export function BankReconciliationPage() {
         p_description: description.trim(),
         p_counterparty_name: counterpartyName.trim() || null,
         p_amount_cents: parsedAmount,
-        p_notes: notes.trim() || null,
+        p_notes: null,
         p_request_id: movementRequestId,
       })
       if (error) throw error
       setDescription('')
       setCounterpartyName('')
       setAmount('')
-      setNotes('')
       setMovementUncertain(false)
       setMovementRequestId(newRequestId())
       setMovementFormOpen(false)
@@ -882,7 +880,6 @@ export function BankReconciliationPage() {
             <label className="record-field"><span className="field-label">Valor</span><input className="text-input" disabled={movementUncertain} inputMode="decimal" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" required value={amount} /></label>
             <label className="record-field record-field-wide"><span className="field-label">Descrição</span><input className="text-input" disabled={movementUncertain} maxLength={200} onChange={(event) => setDescription(event.target.value)} required value={description} /></label>
             <label className="record-field"><span className="field-label">Contraparte <span className="field-optional">(opcional)</span></span><input className="text-input" disabled={movementUncertain} maxLength={160} onChange={(event) => setCounterpartyName(event.target.value)} value={counterpartyName} /></label>
-            <label className="record-field record-field-wide"><span className="field-label">Observação <span className="field-optional">(opcional)</span></span><textarea className="text-input record-textarea" disabled={movementUncertain} maxLength={1000} onChange={(event) => setNotes(event.target.value)} value={notes} /></label>
           </div>
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
           <div className="record-form-actions"><button className="button button-primary" disabled={savingMovement || loading || Boolean(loadError)} type="submit">{savingMovement ? 'Registrando…' : movementUncertain ? 'Tentar novamente' : 'Registrar movimento'}</button><button className="text-button" onClick={() => { setMovementFormOpen(false); setMovementUncertain(false); setMovementRequestId(newRequestId()); setFormError(null) }} type="button">Cancelar</button></div>

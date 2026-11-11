@@ -31,17 +31,19 @@ export function ModulePage({ title, description, icon, nextStep }: ModulePagePro
   )
 }
 
-const secondaryModules: Array<{ to: string; title: string; description: string; icon: IconName }> = [
-  { to: '/clientes', title: 'Clientes', description: 'Cadastros e histórico', icon: 'people' },
-  { to: '/catalogo', title: 'Catálogo', description: 'Produtos, cestas e combos', icon: 'tag' },
-  { to: '/estoque', title: 'Estoque', description: 'Saldos e movimentações', icon: 'box' },
-  { to: '/entregas', title: 'Entregas', description: 'Separação e acompanhamento', icon: 'truck' },
-  { to: '/equipe', title: 'Equipe', description: 'Entregadores e acesso ao painel', icon: 'people' },
-  { to: '/whatsapp', title: 'WhatsApp', description: 'Caixa de entrada e conversas', icon: 'message' },
-  { to: '/financeiro', title: 'Dashboard', description: 'Pagamentos a receber e gastos pagos', icon: 'coin' },
-  { to: '/relatorios', title: 'Relatórios', description: 'Visões diárias e mensais', icon: 'reports' },
-  { to: '/configuracoes', title: 'Configurações', description: 'Perfil, acesso e aparência', icon: 'settings' },
+const secondaryModules: Array<{ group: string; to: string; title: string; description: string; icon: IconName }> = [
+  { group: 'Vendas', to: '/clientes', title: 'Clientes', description: 'Cadastros e histórico', icon: 'people' },
+  { group: 'Vendas', to: '/catalogo', title: 'Catálogo', description: 'Produtos e combos', icon: 'tag' },
+  { group: 'Operação', to: '/estoque', title: 'Estoque', description: 'Saldos e movimentações', icon: 'box' },
+  { group: 'Operação', to: '/entregas', title: 'Entregas', description: 'Separação e acompanhamento', icon: 'truck' },
+  { group: 'Operação', to: '/equipe', title: 'Equipe', description: 'Acessos e pagamentos', icon: 'people' },
+  { group: 'Operação', to: '/whatsapp', title: 'WhatsApp', description: 'Conversas e chamadas', icon: 'message' },
+  { group: 'Gestão', to: '/financeiro', title: 'Dashboard', description: 'Faturamento e gráficos', icon: 'coin' },
+  { group: 'Gestão', to: '/relatorios', title: 'Relatórios', description: 'Resumo da operação', icon: 'reports' },
+  { group: 'Gestão', to: '/configuracoes', title: 'Configurações', description: 'Conta e preferências', icon: 'settings' },
 ]
+
+const secondaryModuleGroups = [...new Set(secondaryModules.map((module) => module.group))]
 
 export function MorePage() {
   return (
@@ -53,15 +55,20 @@ export function MorePage() {
           <p className="page-description">Acesse os outros módulos da operação.</p>
         </div>
       </header>
-      <div className="module-link-list">
-        {secondaryModules.map((module) => (
-          <Link className="module-link" onPointerEnter={() => prefetchRoute(module.to)} onFocus={() => prefetchRoute(module.to)} onTouchStart={() => prefetchRoute(module.to)} to={module.to} key={module.to}>
-            <span className="module-link-icon"><Icon name={module.icon} /></span>
-            <span><strong>{module.title}</strong><small>{module.description}</small></span>
-            <Icon className="quick-link-arrow" name="arrow" />
-          </Link>
-        ))}
-      </div>
+      {secondaryModuleGroups.map((group) => (
+        <section aria-labelledby={`more-group-${group.toLowerCase()}`} className="more-module-group" key={group}>
+          <div className="section-heading section-heading-compact"><h2 id={`more-group-${group.toLowerCase()}`}>{group}</h2></div>
+          <div className="module-link-list">
+            {secondaryModules.filter((module) => module.group === group).map((module) => (
+              <Link className="module-link" onPointerEnter={() => prefetchRoute(module.to)} onFocus={() => prefetchRoute(module.to)} onTouchStart={() => prefetchRoute(module.to)} to={module.to} key={module.to}>
+                <span className="module-link-icon"><Icon name={module.icon} /></span>
+                <span><strong>{module.title}</strong><small>{module.description}</small></span>
+                <Icon className="quick-link-arrow" name="arrow" />
+              </Link>
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   )
 }

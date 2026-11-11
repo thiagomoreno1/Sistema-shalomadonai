@@ -206,7 +206,7 @@ export function FinancialChartsPanel() {
         periodLabel={label}
         startOn={startOn}
       />
-      <details className="dashboard-trend-details dashboard-product-revenue-details">
+      <details className="dashboard-trend-details dashboard-product-revenue-details" open>
         <summary>Ver faturamento por produto <span>Vendas, custos e descontos</span></summary>
         <DashboardProductRevenue endOn={today} startOn={startOn} />
       </details>
