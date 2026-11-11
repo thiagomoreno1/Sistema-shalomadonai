@@ -72,12 +72,12 @@ insert into catalog_records values ('category', (select id from created));
 
 with created as (
   insert into public.products (
-    business_id, category_id, name, description, inventory_unit, sale_price_cents, cost_cents
+    business_id, category_id, name, description, inventory_unit, sale_price_cents, cost_cents, is_active
   )
   values (
     pg_temp.uid('catalog-business'),
     (select id from catalog_records where name = 'category'),
-    'Synthetic product', 'Local RLS fixture', 'un', 1000, 400
+    'Synthetic product', 'Local RLS fixture', 'un', 1000, 400, false
   )
   returning id
 )

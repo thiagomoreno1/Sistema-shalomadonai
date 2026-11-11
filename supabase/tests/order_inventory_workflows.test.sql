@@ -54,10 +54,10 @@ values (
 );
 select set_config('request.jwt.claim.sub', pg_temp.uid('workflow-owner')::text, true);
 insert into public.products (
-  id, business_id, name, sale_price_cents, cost_cents, created_by
+  id, business_id, name, inventory_unit, sale_price_cents, cost_cents, created_by, is_active
 ) values (
   pg_temp.uid('workflow-product'), pg_temp.uid('workflow-business'),
-  'Synthetic tracked product', 1000, 400, pg_temp.uid('workflow-owner')
+  'Synthetic tracked product', 'un', 1000, 400, pg_temp.uid('workflow-owner'), false
 );
 
 create temp table workflow_results (name text primary key, id uuid);
@@ -87,6 +87,9 @@ select is((
    where business_id = pg_temp.uid('workflow-business')
      and product_id = pg_temp.uid('workflow-product')
 ), 5::numeric, 'Opening count establishes the expected stock balance');
+update public.products set is_active = true
+ where business_id = pg_temp.uid('workflow-business')
+   and id = pg_temp.uid('workflow-product');
 
 insert into workflow_results values ('pickup_order', pg_temp.make_order('workflow-pickup-order', 2, false));
 select is((select total_cents from public.orders where id = (select id from workflow_results where name = 'pickup_order')),
