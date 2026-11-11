@@ -7,6 +7,7 @@ import { supabaseClient } from '../lib/supabase'
 type CallEvent = {
   id: string
   conversation_id: string
+  customer_id: string | null
   contact: { name: string | null; phone: string | null }
   customer_name: string | null
   status_label: string
@@ -45,10 +46,12 @@ export function WhatsAppCallEventsCard() {
         return
       }
       const result = await supabaseClient.functions.invoke<{ calls?: CallEvent[] }>('evolution-inbox', {
-        body: { action: 'calls', business_id: businessId },
+        body: { action: 'calls', business_id: businessId, customer_only: true },
       })
       if (result.error) throw result.error
-      setCalls((result.data?.calls ?? []).slice(0, 5))
+      setCalls((result.data?.calls ?? [])
+        .filter((call) => Boolean(call.customer_id && call.customer_name))
+        .slice(0, 5))
     } catch {
       setError('Não foi possível carregar as chamadas do WhatsApp.')
     } finally {
@@ -71,8 +74,8 @@ export function WhatsAppCallEventsCard() {
       {loading && <p className="inline-state" role="status">Carregando chamadas…</p>}
       {!loading && !error && !configured && <p className="inline-state">O registro aparecerá aqui depois de conectar a Evolution API.</p>}
       {!loading && error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadCalls() }} type="button">Tentar novamente</button></div>}
-      {!loading && configured && !error && calls.length === 0 && <p className="inline-state">Nenhum evento de chamada recebido ainda.</p>}
-      {calls.length > 0 && <ul className="timeline-list">{calls.map((call) => <li key={call.id}><span className="timeline-dot" /><div><strong>{call.customer_name || call.contact.name || call.contact.phone || 'Contato sem identificação'}</strong><p>{call.contact.phone || 'Telefone indisponível'} · {call.status_label}{call.is_video ? ' · vídeo' : ''}{call.event_count > 1 ? ` · ${call.event_count} eventos` : ''}</p><p>{timeLabel(call.occurred_at)}</p></div></li>)}</ul>}
+      {!loading && configured && !error && calls.length === 0 && <p className="inline-state">Nenhuma chamada de cliente identificada.</p>}
+      {calls.length > 0 && <ul className="timeline-list">{calls.map((call) => <li key={call.id}><span className="timeline-dot" /><div><strong>{call.customer_name}</strong><p>{call.contact.phone || 'Telefone não informado'} · {call.status_label}{call.is_video ? ' · vídeo' : ''}{call.event_count > 1 ? ` · ${call.event_count} eventos` : ''}</p><p>{timeLabel(call.occurred_at)}</p></div></li>)}</ul>}
       <p className="section-footnote">A Evolution envia eventos, não gravação ou áudio da ligação.</p>
     </section>
   )

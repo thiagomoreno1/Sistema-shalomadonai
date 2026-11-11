@@ -641,21 +641,32 @@ async function resolvePhoneMatch(admin: AdminClient, businessId: string, phone: 
     if (context?.match_method === 'phone') {
       const { error: deleteError } = await admin.from('whatsapp_conversation_contexts')
         .delete().eq('business_id', businessId).eq('conversation_id', conversationId)
+        .eq('match_method', 'phone').is('order_id', null)
       if (deleteError) throw new Error('stale_phone_match_clear_failed')
     }
     return
   }
   if (context?.customer_id === customerId && context?.match_method === 'phone') return
 
-  const { error: upsertError } = await admin.from('whatsapp_conversation_contexts').upsert({
-    business_id: businessId,
-    conversation_id: conversationId,
-    customer_id: customerId,
-    order_id: null,
-    match_method: 'phone',
-    updated_by: null,
-  }, { onConflict: 'business_id,conversation_id' })
-  if (upsertError) throw new Error('context_save_failed')
+  if (context?.match_method === 'phone' && !context.order_id) {
+    const { error: updateError } = await admin.from('whatsapp_conversation_contexts')
+      .update({ customer_id: customerId, match_method: 'phone', updated_by: null })
+      .eq('business_id', businessId).eq('conversation_id', conversationId)
+      .eq('match_method', 'phone').is('order_id', null)
+    if (updateError) throw new Error('context_save_failed')
+    return
+  }
+  if (!context) {
+    const { error: insertError } = await admin.from('whatsapp_conversation_contexts').upsert({
+      business_id: businessId,
+      conversation_id: conversationId,
+      customer_id: customerId,
+      order_id: null,
+      match_method: 'phone',
+      updated_by: null,
+    }, { onConflict: 'business_id,conversation_id', ignoreDuplicates: true })
+    if (insertError) throw new Error('context_save_failed')
+  }
 }
 
 async function upsertConversation(
@@ -711,7 +722,8 @@ async function upsertConversation(
     }
     if (isGroup) {
       const { error: staleMatchError } = await admin.from('whatsapp_conversation_contexts')
-        .delete().eq('business_id', businessId).eq('conversation_id', existing.id).eq('match_method', 'phone')
+        .delete().eq('business_id', businessId).eq('conversation_id', existing.id)
+        .eq('match_method', 'phone').is('order_id', null)
       if (staleMatchError) throw new Error('group_phone_match_clear_failed')
     } else if (allowAlternateIdentity) {
       await resolvePhoneMatch(admin, businessId, matchingPhone, existing.id)
@@ -720,7 +732,8 @@ async function upsertConversation(
       if (safePhone) await resolvePhoneMatch(admin, businessId, safePhone, existing.id as string)
       else {
         const { error: staleMatchError } = await admin.from('whatsapp_conversation_contexts')
-          .delete().eq('business_id', businessId).eq('conversation_id', existing.id).eq('match_method', 'phone')
+          .delete().eq('business_id', businessId).eq('conversation_id', existing.id)
+          .eq('match_method', 'phone').is('order_id', null)
         if (staleMatchError) throw new Error('stale_phone_match_clear_failed')
       }
       await registerConversationJidAliases(admin, businessId, instanceName, existing.id as string, remoteJid)
@@ -757,7 +770,8 @@ async function upsertConversation(
   }
   if (isGroup) {
     const { error: staleMatchError } = await admin.from('whatsapp_conversation_contexts')
-      .delete().eq('business_id', businessId).eq('conversation_id', conversationId).eq('match_method', 'phone')
+      .delete().eq('business_id', businessId).eq('conversation_id', conversationId)
+      .eq('match_method', 'phone').is('order_id', null)
     if (staleMatchError) throw new Error('group_phone_match_clear_failed')
   } else if (allowAlternateIdentity) {
     await resolvePhoneMatch(admin, businessId, safePhone, conversationId)
@@ -922,27 +936,48 @@ async function processCallEvent(admin: AdminClient, businessId: string, instance
     && ['offer', 'terminate', 'reject', 'accept', 'ringing'].includes(stringValue(child.tag, 32)?.toLowerCase() ?? ''))
     ?? children[0]
   const childAttrs = callChild && isRecord(callChild.attrs) ? callChild.attrs : {}
-  const rawCallerJid = stringValue(packetAttrs.from ?? callData.from ?? callData.remoteJid, 256)
-  const callerJid = canonicalLidJid(rawCallerJid) ?? rawCallerJid
-  const rawCallerJidAlt = stringValue(childAttrs.caller_pn ?? childAttrs.callerPn
-    ?? packetAttrs.caller_pn ?? callData.remoteJidAlt ?? callData.fromAlt, 256)
-  const callerJidAlt = canonicalLidJid(rawCallerJidAlt) ?? rawCallerJidAlt
-  const callIdentityValues = [
-    callerJid, callerJidAlt,
-    childAttrs.caller_pn, childAttrs.callerPn, childAttrs.phoneNumberJid, childAttrs.phone_number_jid,
-    childAttrs.remoteJid, childAttrs.remoteJidAlt, childAttrs.remoteJidLid,
-    childAttrs.phoneNumber, childAttrs.phone_number, childAttrs.caller,
-    packetAttrs.caller_pn, packetAttrs.callerPn, packetAttrs.phoneNumberJid, packetAttrs.phone_number_jid,
-    packetAttrs.remoteJid, packetAttrs.remoteJidAlt, packetAttrs.remoteJidLid,
-    packetAttrs.phoneNumber, packetAttrs.phone_number, packetAttrs.caller,
-    callData.callerPn, callData.phoneNumberJid, callData.phone_number_jid,
-    callData.remoteJidLid, callData.lidJid, callData.wuid, callData.phoneNumber, callData.phone_number,
+  // Evolution versions expose caller identity under different fields. Read the
+  // address and number aliases from each layer instead of relying only on
+  // attrs.from, which leaves valid caller numbers empty on some CALL packets.
+  const identitySourceQueue = [packetAttrs, childAttrs, ...children.flatMap((child) => isRecord(child.attrs) ? [child.attrs] : []), callData]
+    .map((source) => ({ source, depth: 0 }))
+  const seenIdentitySources = new Set<JsonRecord>(identitySourceQueue.map(({ source }) => source))
+  for (let index = 0; index < identitySourceQueue.length && identitySourceQueue.length < 64; index += 1) {
+    const { source, depth } = identitySourceQueue[index]
+    if (depth >= 4) continue
+    for (const key of ['data', 'payload', 'call', 'caller', 'key']) {
+      const nested = source[key]
+      if (!isRecord(nested) || seenIdentitySources.has(nested)) continue
+      seenIdentitySources.add(nested)
+      identitySourceQueue.push({ source: nested, depth: depth + 1 })
+    }
+  }
+  const identitySources = identitySourceQueue.map(({ source }) => source)
+  const identityFields = [
+    'caller_pn', 'callerPn', 'phoneNumberJid', 'phone_number_jid', 'remoteJid', 'remote_jid',
+    'remoteJidAlt', 'remote_jid_alt', 'remoteJidLid', 'remote_jid_lid', 'from', 'fromAlt',
+    'caller', 'callerJid', 'caller_jid', 'phoneNumber', 'phone_number', 'phone', 'wuid',
+    'lid', 'lidJid', 'lid_jid', 'jid',
   ]
+  const callIdentityValues = identitySources.flatMap((source) => identityFields.map((field) => source[field]))
+  const directJids = [...new Set(callIdentityValues.filter(isDirectWhatsAppJid))]
+  const lidJids = [...new Set(directJids.map(canonicalLidJid).filter((jid): jid is string => Boolean(jid)))]
+  const phoneJids = [...new Set(callIdentityValues.map(phoneJidFromProviderValue).filter((jid): jid is string => Boolean(jid)))]
+  const callerLid = lidJids.length === 1 ? lidJids[0] : null
+  const directPhoneJid = phoneJids.length === 1 ? phoneJids[0] : null
+  const ambiguousCallerIdentity = lidJids.length > 1 || phoneJids.length > 1
+  const callerJid = ambiguousCallerIdentity ? null : canonicalLidJid(callerLid)
+    ?? directJids.find((jid) => jid.toLowerCase().endsWith('@s.whatsapp.net'))
+    ?? directPhoneJid
+    ?? directJids[0]
+    ?? null
+  const rawCallerJidAlt = identitySources.flatMap((source) => [source.caller_pn, source.callerPn,
+    source.phoneNumberJid, source.phone_number_jid, source.remoteJidAlt, source.remote_jid_alt,
+    source.remoteJidLid, source.remote_jid_lid, source.fromAlt]).find((candidate) => isDirectWhatsAppJid(candidate))
+  const callerJidAlt = ambiguousCallerIdentity ? null : canonicalLidJid(rawCallerJidAlt) ?? stringValue(rawCallerJidAlt, 256)
   const explicitIdentity = await saveContactIdentityMapping(admin, businessId, instanceName, callIdentityValues)
-  const callerLid = callIdentityValues.find((value) => isDirectWhatsAppJid(value) && value.toLowerCase().endsWith('@lid'))
-  const directPhoneJid = callIdentityValues.map(phoneJidFromProviderValue).find((value): value is string => Boolean(value))
   const callerLidString = typeof callerLid === 'string' ? callerLid : null
-  const rejectedIdentity = Boolean(callerLid && directPhoneJid && !explicitIdentity)
+  const rejectedIdentity = ambiguousCallerIdentity || Boolean(callerLid && directPhoneJid && !explicitIdentity)
     || (callerLidString ? await isConflictedContactLid(admin, businessId, instanceName, callerLidString) : false)
   const mappedIdentity = explicitIdentity ?? (!rejectedIdentity && typeof callerLid === 'string'
     ? await mappedPhoneIdentity(admin, businessId, instanceName, callerLid)

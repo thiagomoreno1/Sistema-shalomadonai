@@ -148,6 +148,14 @@ function phoneDirectoryKeys(value: string): string[] {
   return keys
 }
 
+function canonicalCustomerPhone(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 64) return null
+  const digits = digitsOnly(value)
+  if (digits.length === 10 || digits.length === 11) return `+55${digits}`
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) return `+${digits}`
+  return null
+}
+
 function savedContactPicture(row: JsonRecord): string | null {
   const value = row.profilePicUrl ?? row.profilePictureUrl ?? row.profile_picture_url
     ?? row.pictureUrl ?? row.picture_url ?? row.picture
@@ -1132,7 +1140,8 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
 
     if (group) {
       const { error } = await admin.from('whatsapp_conversation_contexts').delete()
-        .eq('business_id', businessId).eq('conversation_id', conversationId).eq('match_method', 'phone')
+        .eq('business_id', businessId).eq('conversation_id', conversationId)
+        .eq('match_method', 'phone').is('order_id', null)
       if (error) throw new RequestError(500, 'history_sync_failed')
     }
 
@@ -1908,21 +1917,32 @@ async function resolvePhoneMatchForInbox(admin: any, businessId: string, phone: 
   if (!customerId || Number(match?.matches_count) !== 1) {
     if (context?.match_method === 'phone') {
       const { error } = await admin.from('whatsapp_conversation_contexts').delete()
-        .eq('business_id', businessId).eq('conversation_id', conversationId).eq('match_method', 'phone')
+        .eq('business_id', businessId).eq('conversation_id', conversationId)
+        .eq('match_method', 'phone').is('order_id', null)
       if (error) throw new RequestError(500, 'history_sync_failed')
     }
     return
   }
   if (context?.customer_id === customerId && context?.match_method === 'phone') return
-  const { error } = await admin.from('whatsapp_conversation_contexts').upsert({
-    business_id: businessId,
-    conversation_id: conversationId,
-    customer_id: customerId,
-    order_id: null,
-    match_method: 'phone',
-    updated_by: null,
-  }, { onConflict: 'business_id,conversation_id' })
-  if (error) throw new RequestError(500, 'history_sync_failed')
+  if (context?.match_method === 'phone' && !context.order_id) {
+    const { error } = await admin.from('whatsapp_conversation_contexts')
+      .update({ customer_id: customerId, match_method: 'phone', updated_by: null })
+      .eq('business_id', businessId).eq('conversation_id', conversationId)
+      .eq('match_method', 'phone').is('order_id', null)
+    if (error) throw new RequestError(500, 'history_sync_failed')
+    return
+  }
+  if (!context) {
+    const { error } = await admin.from('whatsapp_conversation_contexts').upsert({
+      business_id: businessId,
+      conversation_id: conversationId,
+      customer_id: customerId,
+      order_id: null,
+      match_method: 'phone',
+      updated_by: null,
+    }, { onConflict: 'business_id,conversation_id', ignoreDuplicates: true })
+    if (error) throw new RequestError(500, 'history_sync_failed')
+  }
 }
 
 function providerMessageRecord(value: unknown): JsonRecord | null {
@@ -2760,74 +2780,173 @@ export default {
           .select('id, conversation_id, caller_jid, caller_phone, call_state, is_video, occurred_at, provider_call_id')
           .eq('business_id', businessId).eq('instance_name', config.instanceName)
           .order('occurred_at', { ascending: false })
-          .limit(100)
+          .limit(body.customer_only === true ? 1000 : 100)
         if (error) throw new RequestError(500, 'call_list_failed')
         const conversationIds = [...new Set((callRows ?? []).map((row: JsonRecord) => String(row.conversation_id)))]
         let conversationMap = new Map<string, JsonRecord>()
         if (conversationIds.length) {
-        const { data: rows, error: conversationError } = await admin.from('whatsapp_conversations')
+          const { data: rows, error: conversationError } = await admin.from('whatsapp_conversations')
             .select('id, remote_jid, remote_jid_alt, contact_name, contact_phone, display_name_override, contact_classification, hidden_from_inbox, status')
             .eq('business_id', businessId).eq('instance_name', config.instanceName)
             .in('id', conversationIds)
           if (conversationError) throw new RequestError(500, 'call_conversation_lookup_failed')
           conversationMap = new Map((rows ?? []).map((row: JsonRecord) => [String(row.id), row]))
         }
+        const activeConversationIds = [...conversationMap.keys()]
         const linksByConversation = new Map<string, JsonRecord>()
-        const customerIds = new Set<string>()
-        if (conversationIds.length) {
+        if (activeConversationIds.length) {
           const { data: links, error: linksError } = await admin.from('whatsapp_conversation_contexts')
-            .select('conversation_id, customer_id')
+            .select('conversation_id, customer_id, order_id, match_method')
             .eq('business_id', businessId)
-            .in('conversation_id', conversationIds)
+            .in('conversation_id', activeConversationIds)
           if (linksError) throw new RequestError(500, 'call_customer_lookup_failed')
           for (const link of links ?? []) {
             linksByConversation.set(String(link.conversation_id), link)
-            if (typeof link.customer_id === 'string') customerIds.add(link.customer_id)
           }
         }
+        const { data: customers, error: customerError } = await admin.from('customers')
+          .select('id, name, phone, whatsapp_phone, is_active')
+          .eq('business_id', businessId).eq('is_active', true)
+        if (customerError) throw new RequestError(500, 'call_customer_lookup_failed')
+        const customersById = new Map<string, JsonRecord>((customers ?? []).map((customer: JsonRecord) => [String(customer.id), customer]))
         const customerNames = new Map<string, string>()
-        if (customerIds.size) {
-          const { data: customerRows, error: customerError } = await admin.from('customers')
-            .select('id, name')
-            .eq('business_id', businessId)
-            .in('id', [...customerIds])
-          if (customerError) throw new RequestError(500, 'call_customer_lookup_failed')
-          for (const customer of customerRows ?? []) customerNames.set(String(customer.id), String(customer.name))
+        for (const customer of customers ?? []) {
+          if (typeof customer.id === 'string' && typeof customer.name === 'string') {
+            customerNames.set(customer.id, customer.name)
+          }
+        }
+        const customersByPhone = new Map<string, Set<string>>()
+        for (const customer of customers ?? []) {
+          if (customer.is_active !== true) continue
+          const phoneKeys = new Set([canonicalCustomerPhone(customer.phone), canonicalCustomerPhone(customer.whatsapp_phone)]
+            .filter((phone): phone is string => Boolean(phone)))
+          for (const phone of phoneKeys) {
+            const matchingIds = customersByPhone.get(phone) ?? new Set<string>()
+            matchingIds.add(String(customer.id))
+            customersByPhone.set(phone, matchingIds)
+          }
         }
         const savedNames = await loadSavedContactNames(config, admin, businessId)
         const groupedCalls = new Map<string, JsonRecord[]>()
-        for (const row of callRows ?? []) {
+        const activeCallRows = (callRows ?? []).filter((row: JsonRecord) => conversationMap.has(String(row.conversation_id)))
+        for (const row of activeCallRows) {
           const key = typeof row.provider_call_id === 'string' && row.provider_call_id
             ? `provider:${row.provider_call_id}`
             : `event:${row.id}`
           groupedCalls.set(key, [...(groupedCalls.get(key) ?? []), row])
         }
-        const calls = [...groupedCalls.values()].map((rows) => {
+        const callGroups = [...groupedCalls.values()].map((rows) => {
           const row = rows[0]
           const conversation = conversationMap.get(String(row.conversation_id))
-          const context = linksByConversation.get(String(row.conversation_id))
-          const customerName = typeof context?.customer_id === 'string' ? customerNames.get(context.customer_id) ?? null : null
           const latest = rows.reduce((current, item) => String(item.occurred_at) > String(current.occurred_at) ? item : current, row)
           const uniqueStates = [...new Set(rows.map((item) => text(item.call_state, 64)).filter((value): value is string => Boolean(value)))]
-          const callerPhone = displayPhone(row.caller_phone) ?? displayPhone(conversation?.contact_phone)
+          const callerPhone = rows.map((item) => displayPhone(item.caller_phone)).find((phone): phone is string => Boolean(phone))
+            ?? displayPhone(conversation?.contact_phone)
             ?? savedPhoneForJids(savedNames, row.caller_jid, conversation?.remote_jid_alt, conversation?.remote_jid)
             ?? phoneFromWhatsAppJid(String(conversation?.remote_jid_alt ?? conversation?.remote_jid ?? ''))
             ?? phoneFromWhatsAppJid(String(row.caller_jid ?? ''))
+          return { rows, row, conversation, latest, uniqueStates, callerPhone }
+        })
+        const pendingPhoneInserts = new Map<string, string>()
+        const pendingPhoneUpdates = new Map<string, string>()
+        const pendingPhoneDeletes = new Set<string>()
+        for (const call of callGroups) {
+          if (!call.conversation) continue
+          const conversationId = String(call.row.conversation_id)
+          const context = linksByConversation.get(conversationId)
+          if (context?.match_method === 'manual' || context?.order_id) continue
+          const phoneMatches = !isGroupJid(String(call.conversation?.remote_jid ?? '')) && call.callerPhone
+            ? customersByPhone.get(canonicalCustomerPhone(call.callerPhone) ?? '')
+            : undefined
+          const matchedPhoneCustomerId = phoneMatches?.size === 1 ? [...phoneMatches][0] : null
+          if (matchedPhoneCustomerId) {
+            if (!context) pendingPhoneInserts.set(conversationId, matchedPhoneCustomerId)
+            else if (context.match_method === 'phone' && context.customer_id !== matchedPhoneCustomerId) {
+              pendingPhoneUpdates.set(conversationId, matchedPhoneCustomerId)
+            }
+          } else if (context?.match_method === 'phone' && !context.order_id) {
+            pendingPhoneDeletes.add(conversationId)
+          }
+        }
+        if (pendingPhoneInserts.size) {
+          const { error: linkError } = await admin.from('whatsapp_conversation_contexts').upsert(
+            [...pendingPhoneInserts].map(([conversationId, customerId]) => ({
+              business_id: businessId,
+              conversation_id: conversationId,
+              customer_id: customerId,
+              order_id: null,
+              match_method: 'phone',
+              updated_by: null,
+            })),
+            { onConflict: 'business_id,conversation_id', ignoreDuplicates: true },
+          )
+          if (linkError) throw new RequestError(500, 'call_customer_link_save_failed')
+        }
+        const phoneLinkChanges = await Promise.all([
+          ...[...pendingPhoneUpdates].map(async ([conversationId, customerId]) => {
+            const { error: updateError } = await admin.from('whatsapp_conversation_contexts')
+              .update({ customer_id: customerId, match_method: 'phone', updated_by: null })
+              .eq('business_id', businessId).eq('conversation_id', conversationId)
+              .eq('match_method', 'phone').is('order_id', null)
+            return updateError
+          }),
+          ...[...pendingPhoneDeletes].map(async (conversationId) => {
+            const { error: deleteError } = await admin.from('whatsapp_conversation_contexts')
+              .delete().eq('business_id', businessId).eq('conversation_id', conversationId)
+              .eq('match_method', 'phone').is('order_id', null)
+            return deleteError
+          }),
+        ])
+        if (phoneLinkChanges.some(Boolean)) throw new RequestError(500, 'call_customer_link_save_failed')
+        const affectedConversationIds = [...new Set([
+          ...pendingPhoneInserts.keys(), ...pendingPhoneUpdates.keys(), ...pendingPhoneDeletes,
+        ])]
+        if (affectedConversationIds.length) {
+          const { data: refreshedLinks, error: refreshError } = await admin.from('whatsapp_conversation_contexts')
+            .select('conversation_id, customer_id, order_id, match_method')
+            .eq('business_id', businessId).in('conversation_id', affectedConversationIds)
+          if (refreshError) throw new RequestError(500, 'call_customer_lookup_failed')
+          for (const conversationId of affectedConversationIds) linksByConversation.delete(conversationId)
+          for (const link of refreshedLinks ?? []) linksByConversation.set(String(link.conversation_id), link)
+        }
+        const calls = callGroups.map(({ rows, row, conversation, latest, uniqueStates, callerPhone }) => {
+          // A legacy call row may point to a missing conversation or to one from
+          // another WhatsApp connection. Never use it to resolve a CRM customer.
+          const isDirectCustomerConversation = Boolean(conversation)
+            && !isGroupJid(String(conversation?.remote_jid ?? ''))
+          const context = isDirectCustomerConversation ? linksByConversation.get(String(row.conversation_id)) : null
+          const explicitCustomerId = isDirectCustomerConversation && (context?.match_method === 'manual' || context?.order_id)
+            ? typeof context.customer_id === 'string' ? context.customer_id : null
+            : null
+          const phoneMatches = isDirectCustomerConversation
+            && context?.match_method !== 'manual'
+            && !context?.order_id
+            && callerPhone
+            ? customersByPhone.get(canonicalCustomerPhone(callerPhone) ?? '')
+            : undefined
+          const matchedPhoneCustomerId = phoneMatches?.size === 1 ? [...phoneMatches][0] : null
+          const customerId = explicitCustomerId ?? matchedPhoneCustomerId
+          const customer = customerId ? customersById.get(customerId) : null
+          const customerName = customerId ? customerNames.get(customerId) ?? null : null
+          const customerPhone = displayPhone(customer?.whatsapp_phone) ?? displayPhone(customer?.phone)
+          const resolvedPhone = callerPhone ?? customerPhone
           return {
             id: typeof row.provider_call_id === 'string' && row.provider_call_id ? row.provider_call_id : row.id,
             conversation_id: row.conversation_id,
+            customer_id: customerId,
             contact_classification: contactClassification(conversation?.contact_classification),
             hidden_from_inbox: conversation?.hidden_from_inbox === true,
             display_name_override: displayableContactName(conversation?.display_name_override,
-              displayPhone(conversation?.contact_phone)),
+              resolvedPhone),
             contact: {
-              name: displayableContactName(conversation?.display_name_override,
-                callerPhone)
+              name: customerName
+                ?? displayableContactName(conversation?.display_name_override,
+                  resolvedPhone)
                 ?? displayableContactName(savedNameForJids(savedNames, conversation?.remote_jid, conversation?.remote_jid_alt, row.caller_jid),
-                  callerPhone)
+                  resolvedPhone)
                 ?? displayableContactName(conversation?.contact_name,
-                  callerPhone),
-              phone: callerPhone,
+                  resolvedPhone),
+              phone: resolvedPhone,
             },
             customer_name: customerName,
             status: latest.call_state,
@@ -2838,7 +2957,9 @@ export default {
             states: uniqueStates,
           }
         })
-        return json({ calls })
+        return json({ calls: body.customer_only === true
+          ? calls.filter((call) => call.customer_id && call.customer_name).slice(0, 5)
+          : calls })
       }
 
       const conversationId = body.conversationId
