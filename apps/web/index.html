@@ -2,21 +2,20 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/shalom-adonai-logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#F5F1E8" />
+    <meta name="theme-color" content="#F5F7F0" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>Shalom Adonai · Operação</title>
+    <title>Arvelo · Operação</title>
   </head>
   <body>
     <div id="root"></div>
     <script>
       try {
-        const savedTheme = localStorage.getItem('shalom-adonai-theme');
+        const savedTheme = localStorage.getItem('arvelo-theme') || localStorage.getItem('shalom-adonai-theme');
         const theme = savedTheme === 'dark' || savedTheme === 'light' ? savedTheme : 'light';
         document.documentElement.dataset.theme = theme;
         document.documentElement.style.colorScheme = theme;
-        document.querySelector('meta[name="theme-color"]').setAttribute('content', theme === 'dark' ? '#07172D' : '#F5F1E8');
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', theme === 'dark' ? '#101312' : '#F5F7F0');
       } catch {
         document.documentElement.dataset.theme = 'light';
         document.documentElement.style.colorScheme = 'light';

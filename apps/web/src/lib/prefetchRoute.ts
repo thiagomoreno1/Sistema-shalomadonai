@@ -1,6 +1,5 @@
 const routeLoaders: Record<string, () => Promise<unknown>> = {
   '/clientes': () => import('../pages/CustomersPage'),
-  '/clientes/arariboia': () => import('../pages/ArariboiaPage'),
   '/atendimento': () => import('../pages/FollowUpsPage'),
   '/whatsapp': () => import('../pages/WhatsAppInboxPage'),
   '/pedidos': () => import('../pages/OrdersPage'),

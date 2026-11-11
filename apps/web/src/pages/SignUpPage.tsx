@@ -17,7 +17,7 @@ export function SignUpPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [createdWithSession, setCreatedWithSession] = useState(false)
-  const [signupCompanyName, setSignupCompanyName] = useState('Shalom Adonai')
+  const [signupCompanyName, setSignupCompanyName] = useState('Arvelo')
 
   if (!supabaseClient) return <SetupPage />
 
@@ -46,7 +46,7 @@ export function SignUpPage() {
         setSubmitting(false)
         return
       }
-      setSignupCompanyName(signupBusiness.name || 'Shalom Adonai')
+      setSignupCompanyName(signupBusiness.name || 'Arvelo')
       signupOptions = { data: { requested_business_id: signupBusiness.id } }
     }
 
@@ -72,7 +72,7 @@ export function SignUpPage() {
     return (
       <main className="auth-screen auth-screen-single">
         <section className="auth-panel recovery-card" aria-live="polite">
-          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
+          <p className="auth-brand-wordmark">Arvelo</p>
           <p className="eyebrow">{driverSignup ? 'ACESSO DO ENTREGADOR' : 'PEDIDO ENVIADO'}</p>
           <h1>Conta criada</h1>
           <p className="auth-description">{driverSignup
@@ -88,7 +88,7 @@ export function SignUpPage() {
     return (
       <main className="auth-screen auth-screen-single">
         <section className="auth-panel recovery-card" aria-labelledby="signup-active-title">
-          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
+          <p className="auth-brand-wordmark">Arvelo</p>
           <p className="eyebrow">SESSÃO ATIVA</p>
           <h1 id="signup-active-title">Você já está conectado</h1>
           <p className="auth-description">Saia da conta atual antes de criar outro acesso.</p>
@@ -104,14 +104,13 @@ export function SignUpPage() {
         <div className="auth-theme-toggle-wrap"><ThemeToggle /></div>
         <div className="auth-form-wrap">
           <div className="brand-lockup signup-brand">
-            <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
-            <span><strong>Shalom Adonai</strong><small>Operação</small></span>
+            <span><strong>Arvelo</strong><small>Operação</small></span>
           </div>
           <p className="eyebrow">{driverSignup ? 'ACESSO DA ENTREGA' : 'NOVO ACESSO'}</p>
           <h1 id="signup-title">{driverSignup ? 'Criar acesso de entregador' : 'Criar conta'}</h1>
           <p className="auth-description">{driverSignup
             ? 'Crie sua conta com seu próprio e-mail. A gestão precisa vincular esse e-mail ao seu cadastro antes de liberar o painel.'
-            : 'Crie seu acesso e peça aprovação para Shalom Adonai. A conta só verá os dados da empresa depois da aprovação.'}</p>
+            : 'Crie seu acesso e peça aprovação à gestão. Você verá os dados da empresa após a aprovação.'}</p>
 
           <form className="form-stack" onSubmit={handleSubmit}>
             <label className="field-label" htmlFor="signup-email">E-mail</label>

@@ -161,8 +161,7 @@ function BusinessUnavailable({ issue, onRetry, userId }: { issue: 'missing' | 'a
   return (
     <main className="setup-screen">
       <section className="setup-card" aria-labelledby="business-setup-title">
-        <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
-        <p className="eyebrow">Shalom Adonai · Operação</p>
+        <p className="eyebrow">Arvelo · Operação</p>
         <h1 id="business-setup-title">{issue === 'missing' ? hasPendingRequest ? 'Pedido aguardando aprovação' : 'Acesso à empresa pendente' : issue === 'ambiguous' ? 'Esta conta está vinculada a mais de uma empresa' : 'Não foi possível confirmar o acesso'}</h1>
         <p className="setup-copy">
           {issue === 'missing'

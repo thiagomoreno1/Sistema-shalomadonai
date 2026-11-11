@@ -10,7 +10,6 @@ import { LoadingScreen, SetupPage } from '../pages/SetupPage'
 const DashboardPage = lazy(async () => ({ default: (await import('../pages/DashboardPage')).DashboardPage }))
 const DashboardDesignReferencesPage = lazy(async () => ({ default: (await import('../pages/DashboardDesignReferencesPage')).DashboardDesignReferencesPage }))
 const CustomersPage = lazy(async () => ({ default: (await import('../pages/CustomersPage')).CustomersPage }))
-const ArariboiaPage = lazy(async () => ({ default: (await import('../pages/ArariboiaPage')).ArariboiaPage }))
 const CustomerDetailPage = lazy(async () => ({ default: (await import('../pages/CustomerDetailPage')).CustomerDetailPage }))
 const ProductsPage = lazy(async () => ({ default: (await import('../pages/ProductsPage')).ProductsPage }))
 const OrdersPage = lazy(async () => ({ default: (await import('../pages/OrdersPage')).OrdersPage }))
@@ -73,7 +72,7 @@ export function AuthRoutes() {
             <Route element={<DemoPreviewRoute />}>
               <Route index element={<DashboardPage />} />
               <Route path="clientes" element={<CustomersPage />} />
-              <Route path="clientes/arariboia" element={<ArariboiaPage />} />
+              <Route path="clientes/arariboia" element={<Navigate replace to="/clientes" />} />
               <Route path="clientes/:customerId" element={<CustomerDetailPage />} />
               <Route path="atendimento" element={<FollowUpsPage />} />
               <Route path="whatsapp" element={<WhatsAppInboxPage />} />

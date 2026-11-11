@@ -7,6 +7,8 @@
 .brand-lockup strong, .brand-lockup small { display: block; }
 .brand-lockup strong { color: var(--ink); font-size: 15px; letter-spacing: -0.02em; }
 .brand-lockup small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.auth-brand-wordmark { margin: 0 0 24px; color: var(--ink); font-size: 19px; font-weight: 750; letter-spacing: -0.04em; }
+.setup-brand { margin-bottom: 22px; }
 .desktop-sidebar .brand-lockup strong, .desktop-sidebar .account-copy strong { color: var(--sidebar-ink); }
 .desktop-sidebar .brand-lockup small, .desktop-sidebar .account-copy small { color: var(--sidebar-muted); }
 .desktop-sidebar .sidebar-caption { color: var(--sidebar-muted); }
@@ -378,17 +380,17 @@
 .bank-reconciliation-summary-card dd span { color: var(--muted); font-size: 12px; line-height: 1.4; }
 
 .auth-screen { display: grid; grid-template-columns: minmax(320px, 0.94fr) minmax(420px, 1.06fr); min-height: 100vh; min-height: 100svh; background: var(--canvas); }
-.auth-intro { position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: space-between; min-height: 100vh; min-height: 100svh; overflow: hidden; padding: clamp(32px, 5vw, 68px); color: #F7F9FC; background: radial-gradient(ellipse at 14% 14%, rgba(203, 161, 74, 0.16), transparent 43%), linear-gradient(145deg, #182C47 0%, #10213A 54%, #0B1729 100%); }
+.auth-intro { position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: space-between; min-height: 100vh; min-height: 100svh; overflow: hidden; padding: clamp(32px, 5vw, 68px); color: #F5F7F0; background: #101312; }
 .auth-intro .brand-image { width: 48px; height: 48px; border: 1px solid rgba(239, 218, 168, 0.58); box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.07); }
 .auth-intro .brand-lockup strong { color: #FFFFFF; font-size: 16px; }
 .auth-intro .brand-lockup small { color: #C3D0DF; }
 .auth-intro .brand-mark { color: var(--action-ink); background: var(--action); }
 .auth-intro-copy { width: min(100%, 480px); margin: auto 0; padding: 70px 0; }
-.auth-intro-copy .eyebrow { color: #E8CB83; }
+.auth-intro-copy .eyebrow { color: #A8E000; }
 .auth-intro-copy h1 { max-width: 460px; margin: 12px 0 16px; color: #FFFFFF; font-size: clamp(32px, 4vw, 48px); font-weight: 620; letter-spacing: -0.045em; line-height: 1.08; }
 .auth-intro-copy > p:last-child { max-width: 390px; margin: 0; color: #D0DBE8; font-size: 15px; line-height: 1.65; }
 .auth-intro-footer { display: flex; align-items: center; gap: 9px; color: #B9C8D8; font-size: 12px; }
-.auth-intro-footer svg { width: 16px; height: 16px; color: #E8CB83; }
+.auth-intro-footer svg { width: 16px; height: 16px; color: #A8E000; }
 .auth-panel { position: relative; display: flex; align-items: center; justify-content: center; padding: 44px clamp(25px, 6vw, 88px); background: var(--canvas); }
 .auth-form-wrap { width: min(100%, 400px); }
 .auth-signin-form { width: min(100%, 444px); padding: clamp(28px, 4vw, 42px); border: 1px solid var(--line); border-radius: 18px; background: var(--paper); box-shadow: 0 18px 52px rgba(15, 31, 52, 0.08); }

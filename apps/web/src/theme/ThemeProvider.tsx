@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 
 export type Theme = 'light' | 'dark'
-export type AccentColor = 'blue' | 'violet' | 'teal' | 'green' | 'rose' | 'amber'
+export type AccentColor = 'lime' | 'blue' | 'violet' | 'teal' | 'green' | 'rose' | 'amber'
 
 export const ACCENT_COLORS: { id: AccentColor; label: string; light: string; dark: string }[] = [
+  { id: 'lime', label: 'Verde-lima Arvelo', light: '#405B00', dark: '#A8E000' },
   { id: 'blue', label: 'Azul', light: '#0A84FF', dark: '#64A9FF' },
   { id: 'violet', label: 'Violeta', light: '#7047C8', dark: '#B49AFF' },
   { id: 'teal', label: 'Turquesa', light: '#087E8B', dark: '#62D5DD' },
@@ -12,22 +13,28 @@ export const ACCENT_COLORS: { id: AccentColor; label: string; light: string; dar
   { id: 'amber', label: 'Dourado', light: '#966300', dark: '#F0C36A' },
 ]
 
-const STORAGE_KEY = 'shalom-adonai-theme'
-const ACCENT_STORAGE_KEY = 'shalom-adonai-accent'
-const THEME_COLORS: Record<Theme, string> = { light: '#F3F4F6', dark: '#101114' }
+const STORAGE_KEY = 'arvelo-theme'
+const ACCENT_STORAGE_KEY = 'arvelo-accent'
+const LEGACY_THEME_STORAGE_KEY = 'shalom-adonai-theme'
+const LEGACY_ACCENT_STORAGE_KEY = 'shalom-adonai-accent'
+const THEME_COLORS: Record<Theme, string> = { light: '#F5F7F0', dark: '#101312' }
 
 function readStoredAccent(): AccentColor {
   try {
     const saved = window.localStorage.getItem(ACCENT_STORAGE_KEY)
-    return ACCENT_COLORS.some((color) => color.id === saved) ? saved as AccentColor : 'blue'
+    if (ACCENT_COLORS.some((color) => color.id === saved)) return saved as AccentColor
+    const legacySaved = window.localStorage.getItem(LEGACY_ACCENT_STORAGE_KEY)
+    return ACCENT_COLORS.some((color) => color.id === legacySaved) && legacySaved !== 'blue'
+      ? legacySaved as AccentColor
+      : 'lime'
   } catch {
-    return 'blue'
+    return 'lime'
   }
 }
 
 function readStoredTheme(): Theme {
   try {
-    const saved = window.localStorage.getItem(STORAGE_KEY)
+    const saved = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY)
     return saved === 'dark' || saved === 'light' ? saved : 'light'
   } catch {
     return 'light'
@@ -43,10 +50,12 @@ function applyTheme(theme: Theme, accent: AccentColor) {
   const root = document.documentElement.style
   root.setProperty('--accent', value)
   root.setProperty('--accent-hover', theme === 'dark' ? `color-mix(in srgb, ${value} 78%, white)` : `color-mix(in srgb, ${value} 82%, black)`)
-  root.setProperty('--accent-soft', `color-mix(in srgb, ${value} ${theme === 'dark' ? '22%' : '12%'}, ${theme === 'dark' ? '#1A1B20' : 'white'})`)
-  root.setProperty('--accent-wash', `color-mix(in srgb, ${value} ${theme === 'dark' ? '16%' : '7%'}, ${theme === 'dark' ? '#101114' : '#F3F4F6'})`)
-  root.setProperty('--action', theme === 'dark' ? `color-mix(in srgb, ${value} 48%, #141519)` : value)
-  root.setProperty('--action-hover', theme === 'dark' ? `color-mix(in srgb, ${value} 62%, #141519)` : `color-mix(in srgb, ${value} 82%, black)`)
+  root.setProperty('--accent-soft', `color-mix(in srgb, ${value} ${theme === 'dark' ? '22%' : '12%'}, ${theme === 'dark' ? '#1A1D1B' : 'white'})`)
+  root.setProperty('--accent-wash', `color-mix(in srgb, ${value} ${theme === 'dark' ? '16%' : '7%'}, ${theme === 'dark' ? '#101312' : '#F5F7F0'})`)
+  const arveloAccent = accent === 'lime'
+  root.setProperty('--action', arveloAccent ? '#A8E000' : theme === 'dark' ? `color-mix(in srgb, ${value} 48%, #141915)` : value)
+  root.setProperty('--action-hover', arveloAccent ? '#97C900' : theme === 'dark' ? `color-mix(in srgb, ${value} 62%, #141915)` : `color-mix(in srgb, ${value} 82%, black)`)
+  root.setProperty('--action-ink', arveloAccent ? '#101312' : '#FFFFFF')
   root.setProperty('--focus', value)
 }
 

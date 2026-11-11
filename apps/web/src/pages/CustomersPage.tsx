@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link, useNavigate } from 'react-router-dom'
 import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { formatBRL, parseBrazilianCurrency } from '../lib/formatters'
+import { formatBRL } from '../lib/formatters'
 import { searchCustomers, toInternationalPhone } from '../lib/customer-search.mjs'
 import { supabaseClient } from '../lib/supabase'
 
@@ -95,8 +95,6 @@ type Customer = {
   delivery_address: string | null
   created_at: string
   is_active: boolean
-  is_arariboia: boolean
-  arariboia_limit_cents: number | null
   open_balance_cents: number | null
 }
 type CustomerOpenBalance = { customer_id: string; balance_cents: number | string }
@@ -121,8 +119,6 @@ export function CustomersPage() {
   const [balancesUnavailable, setBalancesUnavailable] = useState(!canViewBalances)
   const [saving, setSaving] = useState(false)
   const [showForm, setShowForm] = useState(false)
-  const [isArariboia, setIsArariboia] = useState(false)
-  const [arariboiaLimit, setArariboiaLimit] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [phone, setPhone] = useState('')
@@ -235,7 +231,7 @@ export function CustomersPage() {
       const [customerResult, balanceResult] = await Promise.all([
         supabaseClient
           .from('customers')
-          .select('id, name, phone, whatsapp_phone, delivery_address, created_at, is_active, is_arariboia, arariboia_limit_cents')
+          .select('id, name, phone, whatsapp_phone, delivery_address, created_at, is_active')
           .eq('business_id', businessId)
           .eq('is_active', !showArchived)
           .order('name', { ascending: true }),
@@ -324,17 +320,12 @@ export function CustomersPage() {
     if (!supabaseClient) return
     const form = new FormData(event.currentTarget)
     const name = String(form.get('name') ?? '').trim()
-    const arariboiaLimitCents = isArariboia ? parseBrazilianCurrency(String(form.get('arariboia_limit') ?? '')) : null
     const phoneWasEntered = phone.trim().length > 0
     const whatsappWasEntered = showDifferentWhatsapp && whatsappPhone.trim().length > 0
     const normalizedWhatsappPhone = internationalWhatsapp
     const normalizedPhone = internationalPhone
     if (!name) {
       setSaveError('Informe o nome do cliente.')
-      return
-    }
-    if (isArariboia && Number.isNaN(arariboiaLimitCents)) {
-      setSaveError('Confira o limite do cartão. Use um valor como 600,00.')
       return
     }
     if ((phoneCountry.iso === 'OTHER' && phoneWasEntered && !/^[1-9]\d{0,2}$/.test(phoneCountry.callingCode))
@@ -402,8 +393,6 @@ export function CustomersPage() {
           phone: normalizedPhone || null,
           whatsapp_phone: normalizedWhatsappPhone || null,
           delivery_address: deliveryAddress.trim() || null,
-          is_arariboia: isArariboia,
-          arariboia_limit_cents: arariboiaLimitCents,
         })
         .select('id')
         .single()
@@ -429,8 +418,7 @@ export function CustomersPage() {
           <p className="page-description">Cadastros e valores em aberto.</p>
         </div>
         <div className="record-heading-actions">
-          <Link className="button button-secondary" to="/clientes/arariboia"><Icon name="coin" /> Arariboia</Link>
-          <button className="button button-primary" disabled={saving} onClick={() => { setShowForm((value) => !value); setIsArariboia(false); setArariboiaLimit(''); setSaveError(null); clearPhoneLookupState(); setPhone(''); setPhoneCountryIso('BR'); setCustomPhoneCallingCode(''); setPhoneIsWhatsApp(true); setShowDifferentWhatsapp(false); setWhatsappPhone(''); setWhatsappCountryIso('BR'); setCustomWhatsappCallingCode(''); setShowOptionalDetails(false); setCep(''); setCepStatus('idle'); setCepResultAddress(''); setDeliveryAddress(''); setAddressEdited(false); addressEditedRef.current = false }} type="button">
+          <button className="button button-primary" disabled={saving} onClick={() => { setShowForm((value) => !value); setSaveError(null); clearPhoneLookupState(); setPhone(''); setPhoneCountryIso('BR'); setCustomPhoneCallingCode(''); setPhoneIsWhatsApp(true); setShowDifferentWhatsapp(false); setWhatsappPhone(''); setWhatsappCountryIso('BR'); setCustomWhatsappCallingCode(''); setShowOptionalDetails(false); setCep(''); setCepStatus('idle'); setCepResultAddress(''); setDeliveryAddress(''); setAddressEdited(false); addressEditedRef.current = false }} type="button">
             <Icon name="plus" /> {showForm ? 'Fechar' : 'Novo cliente'}
           </button>
         </div>
@@ -479,7 +467,7 @@ export function CustomersPage() {
                   <td data-label="Cliente">
                     <Link className="customer-debt-customer" to={`/clientes/${customer.id}`}>
                       <span className="record-avatar" aria-hidden="true">{customer.name.slice(0, 1).toLocaleUpperCase('pt-BR')}</span>
-                      <span><strong>{customer.name}</strong><small>{customer.phone || (customer.whatsapp_phone ? `WhatsApp: ${customer.whatsapp_phone}` : 'Telefone não informado')}{customer.is_arariboia ? ` · Arariboia${customer.arariboia_limit_cents === null ? '' : ` · limite de referência ${formatBRL(customer.arariboia_limit_cents)}`}` : ''}</small></span>
+                      <span><strong>{customer.name}</strong><small>{customer.phone || (customer.whatsapp_phone ? `WhatsApp: ${customer.whatsapp_phone}` : 'Telefone não informado')}</small></span>
                     </Link>
                   </td>
                   <td className={`customer-debt-amount${customer.open_balance_cents === null ? '' : customer.open_balance_cents > 0 ? ' has-open-balance' : ' is-clear'}`} data-label="Falta receber">{customer.open_balance_cents === null ? '—' : formatBRL(customer.open_balance_cents)}</td>
@@ -501,8 +489,6 @@ export function CustomersPage() {
               <span className="field-label">Nome <span aria-hidden="true">*</span></span>
               <input autoFocus className="text-input" disabled={saving} maxLength={160} name="name" required />
             </label>
-            <label className="record-checkbox record-field-wide"><input checked={isArariboia} disabled={saving} onChange={(event) => setIsArariboia(event.target.checked)} type="checkbox" /><span><strong>Cliente Arariboia</strong></span></label>
-            {isArariboia && <label className="record-field"><span className="field-label">Limite de referência <span className="field-optional">opcional</span></span><input className="text-input" disabled={saving} inputMode="decimal" maxLength={18} name="arariboia_limit" onChange={(event) => setArariboiaLimit(event.target.value)} placeholder="R$ 600,00" value={arariboiaLimit} /></label>}
             <div className="record-field record-field-wide">
               <span className="field-label" id="customer-phone-label">Telefone ou WhatsApp <span className="field-optional">opcional</span></span>
               <div className={`customer-phone-row${phoneCountry.iso === 'OTHER' ? ' customer-phone-row-custom' : ''}`}>

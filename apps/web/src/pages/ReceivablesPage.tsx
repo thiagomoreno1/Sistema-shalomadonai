@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { FinanceNavigation } from '../components/FinanceNavigation'
-import { isArariboiaPaymentMethod, nextArariboiaDueDate } from '../lib/arariboia'
 import { businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
@@ -333,13 +332,9 @@ export function ReceivablesPage() {
     if (activeFollowUpId) followUpHeadingRef.current?.focus()
   }, [activeFollowUpId])
 
-  const arariboiaDueDate = nextArariboiaDueDate(today)
-  const arariboiaCycle = useMemo(() => receivables.filter((item) => isArariboiaPaymentMethod(item.payment_method) && item.due_on === arariboiaDueDate), [arariboiaDueDate, receivables])
-  const arariboiaCustomerCount = new Set(arariboiaCycle.map((item) => item.customer_id ?? item.order_id)).size
-  const arariboiaCycleIds = useMemo(() => new Set(arariboiaCycle.map((item) => item.id)), [arariboiaCycle])
-  const overdue = useMemo(() => receivables.filter((item) => !arariboiaCycleIds.has(item.id) && item.due_on < today), [arariboiaCycleIds, receivables, today])
-  const dueToday = useMemo(() => receivables.filter((item) => !arariboiaCycleIds.has(item.id) && item.due_on === today), [arariboiaCycleIds, receivables, today])
-  const upcoming = useMemo(() => receivables.filter((item) => !arariboiaCycleIds.has(item.id) && item.due_on > today), [arariboiaCycleIds, receivables, today])
+  const overdue = useMemo(() => receivables.filter((item) => item.due_on < today), [receivables, today])
+  const dueToday = useMemo(() => receivables.filter((item) => item.due_on === today), [receivables, today])
+  const upcoming = useMemo(() => receivables.filter((item) => item.due_on > today), [receivables, today])
 
   function openFollowUp(item: Receivable, trigger: HTMLButtonElement) {
     if (followUpSavingId || followUpDraft?.pending || !followUpStorageReady) return
@@ -582,7 +577,6 @@ export function ReceivablesPage() {
       {followUpNotice && <p className="form-message form-message-success" role="status">{followUpNotice} <Link to="/atendimento">Abrir fila de Atendimento</Link></p>}
 
       {!loading && !error && <section className="receivable-summary-grid" aria-label="Resumo dos pagamentos a receber">
-        {arariboiaCycle.length > 0 && <article className="surface-panel receivable-summary-card"><span>Arariboia · ciclo do dia 6</span><strong>{formatBRL(groupTotal(arariboiaCycle))}</strong><small>{arariboiaCustomerCount} clientes · vence {formatBusinessDate(arariboiaDueDate)}</small></article>}
         <article className="surface-panel receivable-summary-card"><span>Parcelas atrasadas</span><strong>{formatBRL(groupTotal(overdue))}</strong><small>{overdue.length} pagamentos passaram da data</small></article>
         <article className="surface-panel receivable-summary-card"><span>Parcelas para hoje</span><strong>{formatBRL(groupTotal(dueToday))}</strong><small>{dueToday.length} pagamentos ainda faltam</small></article>
         <article className="surface-panel receivable-summary-card"><span>Próximas datas</span><strong>{formatBRL(groupTotal(upcoming))}</strong><small>{upcoming.length} pagamentos ainda faltam</small></article>
@@ -592,10 +586,6 @@ export function ReceivablesPage() {
 
       {loading ? <p className="inline-state" aria-live="polite">Carregando pagamentos…</p> : !error && (
         <div className="page-stack receivable-groups">
-          {arariboiaCycle.length > 0 && <section className="surface-panel record-panel" aria-labelledby="receivable-arariboia-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">CARTÃO ARARIBOIA</p><h2 id="receivable-arariboia-heading">Pagamento do dia 6 · {formatBusinessDate(arariboiaDueDate)}</h2></div><span className="neutral-status">{arariboiaCycle.length}</span></div>
-            {renderGroup(arariboiaCycle, 'Nenhum pagamento pendente neste ciclo.')}
-          </section>}
           <section className="surface-panel record-panel" aria-labelledby="receivable-overdue-heading">
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">PRIORIDADE</p><h2 id="receivable-overdue-heading">Parcelas de clientes atrasadas</h2></div><span className="neutral-status">{overdue.length}</span></div>
             {renderGroup(overdue, 'Nenhum pagamento atrasado.')}

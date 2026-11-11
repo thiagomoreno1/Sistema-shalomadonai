@@ -230,11 +230,11 @@ export function BelvoSandboxCard() {
         <div className="belvo-sandbox-scope-copy" role="note">
         <strong>O widget ficará restrito à instituição fictícia da Belvo Sandbox.</strong>
         <p>A Belvo pedirá seu consentimento para cadastro, contas, cartões e operações de crédito.</p>
-        <p>Nesta prova, o aplicativo buscará somente dados de contas (<code>ACCOUNTS</code>). Não pediremos <code>TRANSACTIONS</code> nem importaremos extratos ou movimentos para o Shalom.</p>
+        <p>Nesta prova, o aplicativo buscará somente dados de contas (<code>ACCOUNTS</code>). Não pediremos <code>TRANSACTIONS</code> nem importaremos extratos ou movimentos para a Arvelo.</p>
         <p>O teste cria um vínculo único (<code>access_mode=single</code>). Sem configuração específica, a Belvo pode reter credenciais desse tipo de vínculo por até 365 dias. A regra <code>stale_in=1d</code> remove dados derivados após 1 dia sem atualização, mas não exclui o vínculo.</p>
-        <p>Depois da confirmação, use <strong>Excluir vínculo de teste</strong> antes de sair desta tela. O Shalom não salva o ID do vínculo; se você sair sem excluir, esse botão não poderá recuperá-lo depois.</p>
+        <p>Depois da confirmação, use <strong>Excluir vínculo de teste</strong> antes de sair desta tela. A Arvelo não salva o ID do vínculo; se você sair sem excluir, esse botão não poderá recuperá-lo depois.</p>
         <p>Use somente a identidade fictícia indicada no <a href={BELVO_SANDBOX_GUIDE} rel="noreferrer" target="_blank">guia oficial da Belvo Sandbox</a>.</p>
-        <p>O nome e o CPF fictícios serão enviados à Belvo pelo servidor para gerar o token, mas não serão salvos pelo Shalom. Não informe CPF, senha ou código de uma conta real.</p>
+        <p>O nome e o CPF fictícios serão enviados à Belvo pelo servidor para gerar o token, mas não serão salvos pela Arvelo. Não informe CPF, senha ou código de uma conta real.</p>
         </div>
       </details>
 
@@ -250,7 +250,7 @@ export function BelvoSandboxCard() {
 
       {!statusLoading && !statusError && ready && canManageBusiness(role) && <form className="belvo-sandbox-form" onSubmit={(event) => void startSandbox(event)}>
         <h3>Iniciar teste de consentimento</h3>
-        <p>Os dados fictícios são enviados uma única vez ao servidor e à Belvo para criar o token temporário do widget. Eles não são salvos pelo Shalom.</p>
+        <p>Os dados fictícios são enviados uma única vez ao servidor e à Belvo para criar o token temporário do widget. Eles não são salvos pela Arvelo.</p>
         <div className="record-form-grid">
           <label className="record-field"><span className="field-label">Nome fictício da identidade</span><input autoComplete="off" className="text-input" maxLength={120} onChange={(event) => setFullName(event.target.value)} required value={fullName} /></label>
           <label className="record-field"><span className="field-label">CPF fictício da sandbox</span><input autoComplete="off" className="text-input" inputMode="numeric" maxLength={14} onChange={(event) => setCpf(event.target.value.replace(/\D/g, '').slice(0, 11))} required value={cpf} /></label>

@@ -22,7 +22,6 @@ const desktopItems: NavItem[] = [
   { to: '/', label: 'Início', icon: 'home' },
   { to: '/financeiro', label: 'Dashboard', icon: 'coin' },
   { to: '/clientes', label: 'Clientes', icon: 'people' },
-  { to: '/clientes/arariboia', label: 'Arariboia', icon: 'coin' },
   { to: '/atendimento', label: 'Atendimento', icon: 'phone' },
   { to: '/whatsapp', label: 'WhatsApp', icon: 'message' },
   { to: '/pedidos', label: 'Pedidos', icon: 'bag' },
@@ -36,7 +35,6 @@ const desktopItems: NavItem[] = [
 const routeLabels: Record<string, string> = {
   '/': 'Início',
   '/clientes': 'Clientes',
-  '/clientes/arariboia': 'Arariboia',
   '/atendimento': 'Atendimento',
   '/whatsapp': 'WhatsApp',
   '/pedidos': 'Pedidos',
@@ -53,7 +51,6 @@ const routeLabels: Record<string, string> = {
 }
 
 function getRouteLabel(pathname: string) {
-  if (pathname === '/clientes/arariboia') return 'Arariboia'
   if (pathname.startsWith('/clientes/')) return 'Cliente'
   if (pathname.startsWith('/whatsapp/')) return 'WhatsApp'
   return routeLabels[pathname] ?? 'Operação'
@@ -110,8 +107,7 @@ export function AppShell() {
       <a className="skip-link" href="#main-content">Pular para o conteúdo</a>
       <aside className="desktop-sidebar" aria-label="Navegação principal">
         <div className="brand-lockup sidebar-brand">
-          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
-          <span><strong>Shalom Adonai</strong><small>Operação</small></span>
+          <span><strong>Arvelo</strong><small>Operação</small></span>
         </div>
         <p className="sidebar-caption">OPERAÇÃO</p>
         <nav className="sidebar-nav">
@@ -129,8 +125,7 @@ export function AppShell() {
       <div className="app-column">
         <header className="topbar">
           <div className="topbar-greeting">
-            <img className="mobile-mark" src="/shalom-adonai-logo.png" alt="" />
-          <span><strong>Shalom Adonai</strong><small className="topbar-email">{getRouteLabel(location.pathname)}{displayName ? ` · ${displayName}` : ''}</small></span>
+            <span><strong>Arvelo</strong><small className="topbar-email">{getRouteLabel(location.pathname)}{displayName ? ` · ${displayName}` : ''}</small></span>
           </div>
           <div className="topbar-actions">
             <ThemeToggle />
@@ -170,7 +165,6 @@ function NavigationLink({ item, compact = false }: { item: NavItem; compact?: bo
       className={({ isActive }) => {
         const isCustomerDetail = item.to === '/clientes'
           && pathname.startsWith('/clientes/')
-          && pathname !== '/clientes/arariboia'
         const active = item.to === '/clientes'
           ? pathname === '/clientes' || isCustomerDetail
           : isActive

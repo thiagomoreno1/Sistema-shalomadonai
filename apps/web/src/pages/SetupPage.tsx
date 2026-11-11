@@ -5,8 +5,7 @@ export function SetupPage() {
   return (
     <main className="setup-screen">
       <section className="setup-card" aria-labelledby="setup-title">
-        <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
-        <p className="eyebrow">Shalom Adonai · Operação</p>
+        <div className="brand-lockup setup-brand"><span><strong>Arvelo</strong><small>Operação</small></span></div>
         <h1 id="setup-title">Este ambiente ainda não foi conectado</h1>
         <p className="setup-copy">
           A autenticação precisa ser configurada pela pessoa responsável pela implantação antes do acesso aos dados da empresa.

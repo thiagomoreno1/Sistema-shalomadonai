@@ -60,9 +60,8 @@ export function SignInPage() {
     <main className="auth-screen">
       <aside className="auth-intro">
         <div className="brand-lockup">
-          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
           <span>
-            <strong>Shalom Adonai</strong>
+            <strong>Arvelo</strong>
             <small>Operação</small>
           </span>
         </div>
@@ -78,8 +77,7 @@ export function SignInPage() {
         <div className="auth-theme-toggle-wrap"><ThemeToggle /></div>
         <div className="auth-form-wrap auth-signin-form">
           <div className="brand-lockup auth-mobile-brand">
-            <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
-            <span><strong>Shalom Adonai</strong><small>Operação</small></span>
+            <span><strong>Arvelo</strong><small>Operação</small></span>
           </div>
           <p className="eyebrow">BEM-VINDO</p>
           <h2 id="auth-title">{isRecovery ? 'Recuperar acesso' : 'Entrar no sistema'}</h2>
@@ -187,7 +185,7 @@ export function PasswordRecoveryPage() {
     return (
       <main className="auth-screen auth-screen-single">
         <section className="auth-panel recovery-card" aria-live="polite">
-          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
+          <p className="auth-brand-wordmark">Arvelo</p>
           <p className="eyebrow">ACESSO ATUALIZADO</p>
           <h1>Senha alterada</h1>
           <p className="auth-description">Sua nova senha foi salva. Você já pode entrar no sistema.</p>
@@ -201,7 +199,7 @@ export function PasswordRecoveryPage() {
     return (
       <main className="auth-screen auth-screen-single">
         <section className="auth-panel recovery-card" aria-labelledby="recovery-title">
-          <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
+          <p className="auth-brand-wordmark">Arvelo</p>
           <p className="eyebrow">RECUPERAÇÃO DE ACESSO</p>
           <h1 id="recovery-title">Abra o link enviado por e-mail</h1>
           <p className="auth-description">Para definir uma nova senha, use o link mais recente enviado para o e-mail da sua conta.</p>
@@ -214,7 +212,7 @@ export function PasswordRecoveryPage() {
   return (
     <main className="auth-screen auth-screen-single">
       <section className="auth-panel recovery-card" aria-labelledby="recovery-title">
-        <img className="brand-image" src="/shalom-adonai-logo.png" alt="" />
+        <p className="auth-brand-wordmark">Arvelo</p>
         <p className="eyebrow">RECUPERAÇÃO DE ACESSO</p>
         <h1 id="recovery-title">Defina uma nova senha</h1>
         <p className="auth-description">Escolha uma senha segura que você ainda não usa em outro serviço.</p>

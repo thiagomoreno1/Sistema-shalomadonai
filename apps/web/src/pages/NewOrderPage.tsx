@@ -4,12 +4,11 @@ import { useAuth } from '../auth/AuthContext'
 import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
 import { CustomerSearchSelect } from '../components/CustomerSearchSelect'
-import { nextArariboiaDueDate } from '../lib/arariboia'
 import { formatBRL, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { isDiscreteInventoryUnit } from '../lib/inventoryUnits'
 import { supabaseClient } from '../lib/supabase'
 
-type Customer = { id: string; name: string; phone: string | null; whatsapp_phone: string | null; delivery_address: string | null; is_arariboia: boolean; arariboia_limit_cents: number | null }
+type Customer = { id: string; name: string; phone: string | null; whatsapp_phone: string | null; delivery_address: string | null }
 type CustomerAddress = { id: string; label: string; address: string; is_default: boolean }
 type DeliveryWorkerChoice = { id: string; name: string; user_id: string | null }
 type Product = { id: string; name: string; inventory_unit: string | null; sale_price_cents: number | null; is_combo: boolean }
@@ -432,7 +431,7 @@ export function NewOrderPage() {
         ? supabaseClient.from('delivery_workers').select('id, name, user_id').eq('business_id', businessId).eq('member_type', 'delivery_driver').eq('is_active', true).not('user_id', 'is', null).order('name', { ascending: true })
         : Promise.resolve({ data: [] as DeliveryWorkerChoice[], error: null })
       const [customersResult, productsResult, stockProductsResult, customComboOrderSupport, deliveryWorkersResult] = await Promise.all([
-        supabaseClient.from('customers').select('id, name, phone, whatsapp_phone, delivery_address, is_arariboia, arariboia_limit_cents')
+        supabaseClient.from('customers').select('id, name, phone, whatsapp_phone, delivery_address')
           .eq('business_id', businessId).eq('is_active', true).order('name', { ascending: true }),
         supabaseClient.from('products').select('id, name, inventory_unit, sale_price_cents, is_combo')
           .eq('business_id', businessId).eq('is_active', true).not('sale_price_cents', 'is', null)
@@ -855,10 +854,6 @@ export function NewOrderPage() {
   }, [customerId, loadCustomerOrderSuggestion, loadingChoices, requestedCustomerId, sourceOrderId])
 
   const selectedCustomer = customers.find((customer) => customer.id === customerId)
-  const arariboiaDueDate = nextArariboiaDueDate(businessDateForTimestamp(new Date(), timezone))
-  const arariboiaLimitLabel = selectedCustomer?.arariboia_limit_cents === null || selectedCustomer?.arariboia_limit_cents === undefined
-    ? ''
-    : ` · limite de referência ${formatBRL(selectedCustomer.arariboia_limit_cents)}`
   const productById = new Map(products.map((product) => [product.id, product]))
   const estimate = useMemo(() => {
     let subtotal = 0
@@ -1711,23 +1706,6 @@ export function NewOrderPage() {
                 setFormError(null)
               }} type="button"><strong>Parcelado</strong><span>Divisão mensal automática</span></button>
             </div>
-            {selectedCustomer?.is_arariboia && <div className="order-payment-preview" aria-label="Cartão Arariboia">
-              <span><strong>Arariboia</strong> · vence no dia 6 ({formatBusinessDate(arariboiaDueDate)}){arariboiaLimitLabel}</span>
-              <button className="button button-secondary" disabled={disabled} onClick={() => {
-                customerPrefillManualRef.current.installments = true
-                customerPrefillManualRef.current.baseDate = true
-                autoScheduleRef.current = false
-                setScheduleBaseDate(arariboiaDueDate)
-                setInstallments([{ key: newKey(), amount: '', dueOn: arariboiaDueDate, paymentMethod: 'Arariboia' }])
-                setPaymentPlanMode('once')
-                setInstallmentPaymentMethod('Arariboia')
-                setSelectedScheduleTemplateId('')
-                setCustomerPaymentPattern(null)
-                setScheduleTemplateMessage(null)
-                setScheduleTemplateError(null)
-                setFormError(null)
-              }} type="button">Usar Arariboia</button>
-            </div>}
             {paymentPlanMode !== 'custom' && <div className="record-form-grid order-adjustments">
               {paymentPlanMode === 'monthly' && <label className="record-field"><span className="field-label">Quantidade de parcelas</span>
                 <input className="text-input" disabled={disabled} inputMode="numeric" max="120" min="2" onChange={(event) => setInstallmentCount(event.target.value)} type="number" value={installmentCount} />
