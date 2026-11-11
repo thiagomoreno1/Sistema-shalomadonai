@@ -52,7 +52,7 @@ type Order = { id: string; created_at: string; status: 'open' | 'cancelled'; tot
 type ConversationLink = { conversation_id: string; customer_id: string | null; order_id: string | null; match_method: 'phone' | 'manual' }
 type CallEvent = { id: string; conversation_id: string; contact: { name: string | null; phone: string | null }; display_name_override?: string | null; contact_classification?: ContactClassification; hidden_from_inbox?: boolean; customer_name?: string | null; status: string | null; status_label: string; is_video: boolean | null; occurred_at: string; event_count?: number; states?: string[] }
 type ConversationListResponse = { conversations?: Conversation[]; meta?: { page?: number; has_more?: boolean; history_sync?: { status?: string; notice?: string } } }
-type ConversationDetailResponse = { conversation?: Conversation; meta?: { has_more?: boolean } }
+type ConversationDetailResponse = { conversation?: Conversation; meta?: { has_more?: boolean; recent_history_sync?: 'syncing' | 'current' | 'updated' | 'not_found' | 'unavailable' } }
 type MessageStatusesResponse = { statuses?: { id: string; status: Message['status'] }[] }
 type OlderMessagesResponse = { messages?: Message[]; meta?: { has_more?: boolean; notice?: string } }
 type CallListResponse = { calls?: CallEvent[] }
@@ -669,6 +669,8 @@ export function WhatsAppInboxPage() {
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailSyncNotice, setDetailSyncNotice] = useState<string | null>(null)
+  const [detailHistorySyncPending, setDetailHistorySyncPending] = useState(false)
   const [historyHasMore, setHistoryHasMore] = useState(false)
   const [olderMessagesLoading, setOlderMessagesLoading] = useState(false)
   const [olderMessagesError, setOlderMessagesError] = useState<string | null>(null)
@@ -693,6 +695,8 @@ export function WhatsAppInboxPage() {
   const [contactPreferencesMessage, setContactPreferencesMessage] = useState<string | null>(null)
   const [contactListFeedback, setContactListFeedback] = useState<string | null>(null)
   const detailRequest = useRef(0)
+  const selectedIdRef = useRef(selectedId)
+  selectedIdRef.current = selectedId
   const messageHistoryRef = useRef<HTMLDivElement>(null)
   const connectionBannerRef = useRef<HTMLDivElement>(null)
   const disconnectDialogRef = useRef<HTMLElement>(null)
@@ -831,7 +835,7 @@ export function WhatsAppInboxPage() {
     const selectedDetailRequestId = detailRequest.current
     try {
       const selectedDetailPromise = selectedConversationId
-        ? invokeInbox<{ conversation?: Conversation }>({
+        ? invokeInbox<ConversationDetailResponse>({
           action: 'conversation', business_id: businessId, conversationId: selectedConversationId,
         }).catch(() => null)
         : Promise.resolve(null)
@@ -846,6 +850,16 @@ export function WhatsAppInboxPage() {
       const refreshedHasMore = result.meta?.has_more ?? pageRows.length >= 25
       setHistorySyncNotice(result.meta?.history_sync?.notice ?? null)
       setHistorySyncPending(result.meta?.history_sync?.status === 'syncing')
+      if (selectedConversationId && selectedId === selectedConversationId
+        && detailRequest.current === selectedDetailRequestId && selectedDetail?.meta?.recent_history_sync) {
+        const syncStatus = selectedDetail.meta.recent_history_sync
+        setDetailHistorySyncPending(syncStatus === 'syncing')
+        setDetailSyncNotice(syncStatus === 'not_found'
+          ? 'A Evolution não encontrou mensagens mais recentes. O histórico salvo continua disponível.'
+          : syncStatus === 'unavailable'
+            ? 'Não foi possível atualizar as mensagens agora. O histórico salvo continua disponível.'
+            : null)
+      }
       const pageIds = new Set(pageRows.map((conversation) => conversation.id))
       setConversations((current) => {
         const retainedRows = current.filter((conversation) => {
@@ -1043,6 +1057,55 @@ export function WhatsAppInboxPage() {
   }, [connectionState, configured, historySyncPending, refreshLoadedConversations])
 
   useEffect(() => {
+    if (detailLoading || !detailHistorySyncPending || !selectedId || !configured || !isWhatsAppConnected(connectionState)) return
+    let attempts = 0
+    let active = true
+    const conversationId = selectedId
+    const requestId = detailRequest.current
+    const generation = inboxGenerationRef.current
+    const refreshDetail = async () => {
+      if (!active || document.visibilityState !== 'visible') return
+      if (attempts >= 20) {
+        setDetailHistorySyncPending(false)
+        return
+      }
+      attempts += 1
+      try {
+        const result = await invokeInbox<ConversationDetailResponse>({
+          action: 'conversation', business_id: businessId, conversationId,
+        })
+        if (!active || selectedIdRef.current !== conversationId
+          || detailRequest.current !== requestId || inboxGenerationRef.current !== generation) return
+        const status = result.meta?.recent_history_sync ?? 'unavailable'
+        setDetailHistorySyncPending(status === 'syncing')
+        setDetailSyncNotice(status === 'not_found'
+          ? 'A Evolution não encontrou mensagens mais recentes. O histórico salvo continua disponível.'
+          : status === 'unavailable'
+            ? 'Não foi possível atualizar as mensagens agora. O histórico salvo continua disponível.'
+            : null)
+        if (result.conversation) {
+          setSelectedConversation(result.conversation)
+          setConversations((current) => current.map((item) => item.id === conversationId
+            ? { ...item, last_message: result.conversation?.last_message ?? item.last_message, last_activity_at: result.conversation?.last_activity_at ?? item.last_activity_at }
+            : item))
+        }
+      } catch {
+        if (active && selectedIdRef.current === conversationId && detailRequest.current === requestId) {
+          setDetailHistorySyncPending(false)
+          setDetailSyncNotice('Não foi possível atualizar as mensagens agora. O histórico salvo continua disponível.')
+        }
+      }
+    }
+    const interval = window.setInterval(() => { void refreshDetail() }, 3000)
+    document.addEventListener('visibilitychange', refreshDetail)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshDetail)
+    }
+  }, [businessId, connectionState, configured, detailHistorySyncPending, detailLoading, selectedId])
+
+  useEffect(() => {
     if (detailLoading || selectedConversation?.id !== selectedId) return
     const historyElement = messageHistoryRef.current
     if (historyElement) historyElement.scrollTop = historyElement.scrollHeight
@@ -1051,6 +1114,7 @@ export function WhatsAppInboxPage() {
   useEffect(() => {
     if (!selectedId || !configured) {
       setSelectedConversation(null)
+      setDetailHistorySyncPending(false)
       setHistoryHasMore(false)
       setOlderMessagesError(null)
       setOlderMessagesNotice(null)
@@ -1064,6 +1128,8 @@ export function WhatsAppInboxPage() {
       setSelectedConversation(null)
       setDetailLoading(true)
       setDetailError(null)
+      setDetailSyncNotice(null)
+      setDetailHistorySyncPending(false)
       setHistoryHasMore(false)
       setOlderMessagesError(null)
       setOlderMessagesNotice(null)
@@ -1072,6 +1138,12 @@ export function WhatsAppInboxPage() {
         if (!isCurrentRequest()) return
         let conversation = result.conversation ?? null
         setHistoryHasMore(result.meta?.has_more === true)
+        setDetailHistorySyncPending(result.meta?.recent_history_sync === 'syncing')
+        setDetailSyncNotice(result.meta?.recent_history_sync === 'not_found'
+          ? 'A Evolution não encontrou mensagens mais recentes. O histórico salvo continua disponível.'
+          : result.meta?.recent_history_sync === 'unavailable'
+            ? 'Não foi possível atualizar as mensagens agora. O histórico salvo continua disponível.'
+            : null)
         if (conversation && conversation.unread_count > 0) {
           try {
             const readResult = await invokeInbox<{ conversation?: Conversation }>({ action: 'mark_read', business_id: businessId, conversationId: selectedId })
@@ -1084,7 +1156,12 @@ export function WhatsAppInboxPage() {
             if (isCurrentRequest()) setActionError('A conversa abriu, mas não foi possível atualizar o estado de leitura.')
           }
         }
-        if (isCurrentRequest()) setSelectedConversation(conversation)
+        if (isCurrentRequest()) {
+          setSelectedConversation(conversation)
+          if (conversation) setConversations((current) => current.map((item) => item.id === selectedId
+            ? { ...item, last_message: conversation?.last_message ?? item.last_message, last_activity_at: conversation?.last_activity_at ?? item.last_activity_at, unread_count: conversation?.unread_count ?? item.unread_count }
+            : item))
+        }
       } catch {
         if (isCurrentRequest()) setDetailError('Não foi possível abrir esta conversa. Atualize a lista e tente novamente.')
       } finally {
@@ -1160,6 +1237,32 @@ export function WhatsAppInboxPage() {
   const currentConversation = selectedConversation?.id === selectedId
     ? selectedConversation
     : null
+
+  async function refreshSentConversation(conversationId: string, expectedDetailRequest: number, expectedGeneration: number) {
+    try {
+      const result = await invokeInbox<ConversationDetailResponse>({
+        action: 'conversation', business_id: businessId, conversationId,
+      })
+      if (selectedIdRef.current !== conversationId
+        || detailRequest.current !== expectedDetailRequest
+        || inboxGenerationRef.current !== expectedGeneration
+        || !result.conversation) return
+      const refreshed = result.conversation
+      setSelectedConversation(refreshed)
+      setHistoryHasMore(result.meta?.has_more === true)
+      setDetailHistorySyncPending(result.meta?.recent_history_sync === 'syncing')
+      setDetailSyncNotice(result.meta?.recent_history_sync === 'not_found'
+        ? 'A Evolution não encontrou mensagens mais recentes. O histórico salvo continua disponível.'
+        : result.meta?.recent_history_sync === 'unavailable'
+          ? 'Não foi possível atualizar as mensagens agora. O histórico salvo continua disponível.'
+          : null)
+      setConversations((current) => uniqueConversations(current.map((item) => item.id === conversationId
+        ? { ...item, last_message: refreshed.last_message, last_activity_at: refreshed.last_activity_at }
+        : item)))
+    } catch {
+      // Sending already succeeded; the next inbox refresh will pick up the saved row.
+    }
+  }
 
   useEffect(() => {
     setDisplayNameDraft(currentConversation?.display_name_override ?? '')
@@ -1356,12 +1459,19 @@ export function WhatsAppInboxPage() {
   async function handleSend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!currentConversation || !messageDraft.trim() || !currentConversation.can_reply) return
+    const conversationId = currentConversation.id
+    const expectedDetailRequest = detailRequest.current
+    const expectedGeneration = inboxGenerationRef.current
+    const sentDraft = messageDraft.trim()
     setSending(true)
     setActionError(null)
     try {
-      await invokeInbox({ action: 'send', business_id: businessId, conversationId: currentConversation.id, content: messageDraft.trim() })
-      setMessageDraft('')
-      await refreshLoadedConversations()
+      await invokeInbox({ action: 'send', business_id: businessId, conversationId, content: sentDraft })
+      if (selectedIdRef.current === conversationId
+        && detailRequest.current === expectedDetailRequest
+        && messageDraft.trim() === sentDraft) setMessageDraft('')
+      await refreshSentConversation(conversationId, expectedDetailRequest, expectedGeneration)
+      void refreshLoadedConversations()
     } catch {
       setActionError('A mensagem não foi enviada. Confira a conexão e tente novamente.')
     } finally {
@@ -1371,6 +1481,10 @@ export function WhatsAppInboxPage() {
 
   async function handleSendMedia(file: File | undefined) {
     if (!file || !currentConversation || !currentConversation.can_reply || mediaSending) return
+    const conversationId = currentConversation.id
+    const expectedDetailRequest = detailRequest.current
+    const expectedGeneration = inboxGenerationRef.current
+    const sentDraft = messageDraft.trim()
     const supportedTypes = new Set([
       'image/jpeg', 'image/png', 'image/webp', 'audio/aac', 'audio/mpeg', 'audio/mp4',
       'audio/ogg', 'audio/wav', 'audio/webm', 'video/mp4', 'application/pdf',
@@ -1388,11 +1502,14 @@ export function WhatsAppInboxPage() {
     try {
       const mediaBase64 = await fileToBase64(file)
       await invokeInbox({
-        action: 'send_media', business_id: businessId, conversationId: currentConversation.id,
-        mediaBase64, mimeType: file.type, fileName: file.name, caption: messageDraft.trim(),
+        action: 'send_media', business_id: businessId, conversationId,
+        mediaBase64, mimeType: file.type, fileName: file.name, caption: sentDraft,
       })
-      setMessageDraft('')
-      await refreshLoadedConversations()
+      if (selectedIdRef.current === conversationId
+        && detailRequest.current === expectedDetailRequest
+        && messageDraft.trim() === sentDraft) setMessageDraft('')
+      await refreshSentConversation(conversationId, expectedDetailRequest, expectedGeneration)
+      void refreshLoadedConversations()
     } catch {
       setActionError('O arquivo não foi enviado. Confira a conexão e tente novamente.')
     } finally {
@@ -1533,6 +1650,7 @@ export function WhatsAppInboxPage() {
     setSelectedConversation(null)
     setDetailLoading(false)
     setDetailError(null)
+    setDetailSyncNotice(null)
     setHistoryHasMore(false)
     setOlderMessagesLoading(false)
     setOlderMessagesError(null)
@@ -1911,6 +2029,7 @@ export function WhatsAppInboxPage() {
           {detailError && <div className="inline-state inline-state-error" role="alert">{detailError}</div>}
           <div className="whatsapp-message-history" aria-live="polite" aria-label="Histórico de mensagens" ref={messageHistoryRef}>
             {detailLoading && <p className="inline-state" role="status">Carregando histórico…</p>}
+            {detailSyncNotice && <p className="inline-state" role="status">{detailSyncNotice}</p>}
             {(historyHasMore || olderMessagesLoading || olderMessagesError || olderMessagesNotice) && <div className="whatsapp-older-messages">
               {historyHasMore && <button className="button button-secondary" disabled={olderMessagesLoading} onClick={() => void handleLoadOlderMessages()} type="button">{olderMessagesLoading ? 'Buscando mensagens…' : 'Buscar mensagens anteriores'}</button>}
               {olderMessagesError && <><p role="alert">{olderMessagesError}</p><button className="text-button" disabled={olderMessagesLoading} onClick={() => void handleLoadOlderMessages()} type="button">Tentar novamente</button></>}

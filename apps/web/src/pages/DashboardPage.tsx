@@ -53,6 +53,7 @@ type FinancialSummary = {
     sales_cents: string
     product_subtotal_cents: string
     customer_delivery_fee_cents: string
+    item_cost_cents: string | null
   }
 }
 
@@ -227,6 +228,9 @@ export function DashboardPage() {
   const financialSummary = currentFinancialSummary.data
   const financialGrossMoney = financialSummary ? formatDashboardMoney((BigInt(financialSummary.managerial_result.product_subtotal_cents) + BigInt(financialSummary.managerial_result.customer_delivery_fee_cents)).toString(), 'incoming', 'Faturamento bruto') : null
   const financialNetMoney = financialSummary ? formatDashboardMoney(financialSummary.managerial_result.sales_cents, 'incoming', 'Faturamento líquido') : null
+  const financialProductCostMoney = financialSummary?.managerial_result.item_cost_cents === null || financialSummary?.managerial_result.item_cost_cents === undefined
+    ? null
+    : formatDashboardMoney(financialSummary.managerial_result.item_cost_cents, 'outgoing', 'Custo dos produtos vendidos')
   const loadPriorities = useCallback(async (silent = false) => {
     const requestId = ++prioritiesRequestId.current
     if (!canManageBusiness(role)) {
@@ -302,7 +306,7 @@ export function DashboardPage() {
           scopeKey: financialSummaryScopeKey,
           loading: false,
           error: false,
-          data: { managerial_result: { completed_order_count: 1, sales_cents: '29600', product_subtotal_cents: '28000', customer_delivery_fee_cents: '1600' } },
+          data: { managerial_result: { completed_order_count: 1, sales_cents: '29600', product_subtotal_cents: '28000', customer_delivery_fee_cents: '1600', item_cost_cents: '14200' } },
         })
         return
       }
@@ -459,6 +463,25 @@ export function DashboardPage() {
         </Link>
       </nav>
 
+      <section className="surface-panel dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
+        <div className="section-heading dashboard-financial-heading">
+          <div>
+            <p className="eyebrow">FINANCEIRO</p>
+            <h2 id="dashboard-financial-title">Resumo do mês</h2>
+          </div>
+          <Link className="quiet-link" to="/financeiro">Ver gráficos <Icon name="arrow" /></Link>
+        </div>
+        {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando resumo…</p>}
+        {!currentFinancialSummary.loading && currentFinancialSummary.error && !financialSummary && <div className="inline-state inline-state-error" role="alert"><span>Não foi possível carregar o resumo financeiro.</span><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
+        {!currentFinancialSummary.loading && financialSummary && <div className="dashboard-financial-metrics" aria-label="Resumo financeiro deste mês">
+          <article><span>Faturamento líquido</span>{financialNetMoney && <DashboardMoneyValue amount={financialNetMoney} element="strong" />}</article>
+          <article><span>Custo dos produtos</span>{financialProductCostMoney ? <DashboardMoneyValue amount={financialProductCostMoney} element="strong" /> : <strong className="dashboard-financial-unavailable">A conferir</strong>}</article>
+          <article><span>Pedidos concluídos</span><strong>{financialSummary.managerial_result.completed_order_count}</strong></article>
+          <article><span>Faturamento bruto</span>{financialGrossMoney && <DashboardMoneyValue amount={financialGrossMoney} element="strong" />}</article>
+        </div>}
+        {currentFinancialSummary.error && financialSummary && <p className="section-footnote" role="status">Resumo desatualizado; a última informação carregada continua visível.</p>}
+      </section>
+
       <div className="dashboard-command-grid dashboard-command-priorities">
         <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
           <div className="section-heading">
@@ -574,25 +597,6 @@ export function DashboardPage() {
         </section>
 
       </div>
-
-        <section className="surface-panel dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
-          <div className="section-heading dashboard-financial-heading">
-            <div>
-              <p className="eyebrow">FINANCEIRO</p>
-              <h2 id="dashboard-financial-title">Dashboard</h2>
-              <p className="dashboard-financial-period">Resumo deste mês</p>
-            </div>
-            <Link className="quiet-link" to="/financeiro">Abrir Dashboard <Icon name="arrow" /></Link>
-          </div>
-          {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando resumo…</p>}
-          {!currentFinancialSummary.loading && currentFinancialSummary.error && !financialSummary && <div className="inline-state inline-state-error" role="alert"><span>Não foi possível carregar o resumo financeiro.</span><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
-          {!currentFinancialSummary.loading && financialSummary && <div className="dashboard-financial-metrics" aria-label="Resumo financeiro deste mês">
-            <article><span>Faturamento bruto</span>{financialGrossMoney && <DashboardMoneyValue amount={financialGrossMoney} element="strong" />}</article>
-            <article><span>Faturamento líquido</span>{financialNetMoney && <DashboardMoneyValue amount={financialNetMoney} element="strong" />}</article>
-            <article><span>Pedidos concluídos</span><strong>{financialSummary.managerial_result.completed_order_count}</strong></article>
-          </div>}
-          {currentFinancialSummary.error && financialSummary && <p className="section-footnote" role="status">Resumo desatualizado; a última informação carregada continua visível.</p>}
-        </section>
 
       <div className="dashboard-columns dashboard-operations-grid">
         <section className="surface-panel dashboard-recent-panel" aria-labelledby="dashboard-recent-orders-title">

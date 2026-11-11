@@ -13,5 +13,6 @@ export function nextArariboiaDueDate(today: string) {
 }
 
 export function isArariboiaPaymentMethod(value: string | null | undefined) {
-  return value?.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').includes('arariboia') ?? false
+  const normalized = value?.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR')
+  return normalized === 'arariboia' || normalized === 'cartao arariboia'
 }

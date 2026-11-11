@@ -33,6 +33,7 @@ export function ModulePage({ title, description, icon, nextStep }: ModulePagePro
 
 const secondaryModules: Array<{ group: string; to: string; title: string; description: string; icon: IconName }> = [
   { group: 'Vendas', to: '/clientes', title: 'Clientes', description: 'Cadastros e histórico', icon: 'people' },
+  { group: 'Vendas', to: '/clientes/arariboia', title: 'Arariboia', description: 'Limites e vencimentos', icon: 'coin' },
   { group: 'Vendas', to: '/catalogo', title: 'Catálogo', description: 'Produtos e combos', icon: 'tag' },
   { group: 'Operação', to: '/estoque', title: 'Estoque', description: 'Saldos e movimentações', icon: 'box' },
   { group: 'Operação', to: '/entregas', title: 'Entregas', description: 'Separação e acompanhamento', icon: 'truck' },

@@ -429,6 +429,7 @@ export function CustomersPage() {
           <p className="page-description">Cadastros e valores em aberto.</p>
         </div>
         <div className="record-heading-actions">
+          <Link className="button button-secondary" to="/clientes/arariboia"><Icon name="coin" /> Arariboia</Link>
           <button className="button button-primary" disabled={saving} onClick={() => { setShowForm((value) => !value); setIsArariboia(false); setArariboiaLimit(''); setSaveError(null); clearPhoneLookupState(); setPhone(''); setPhoneCountryIso('BR'); setCustomPhoneCallingCode(''); setPhoneIsWhatsApp(true); setShowDifferentWhatsapp(false); setWhatsappPhone(''); setWhatsappCountryIso('BR'); setCustomWhatsappCallingCode(''); setShowOptionalDetails(false); setCep(''); setCepStatus('idle'); setCepResultAddress(''); setDeliveryAddress(''); setAddressEdited(false); addressEditedRef.current = false }} type="button">
             <Icon name="plus" /> {showForm ? 'Fechar' : 'Novo cliente'}
           </button>

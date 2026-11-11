@@ -46,6 +46,8 @@ const recentContactNames = new Map<string, {
   contacts: JsonRecord[]
   identitiesPersisted: boolean
 }>()
+const pendingRecentHistorySync = new Map<string, Promise<'updated' | 'current' | 'not_found' | 'unavailable'>>()
+const recentHistorySyncResult = new Map<string, { at: number; status: 'updated' | 'current' | 'not_found' | 'unavailable' }>()
 const recentGroupMetadata = new Map<string, { at: number; subject: string | null; pictureUrl: string | null }>()
 const recentGroupMetadataLookups = new Map<string, number>()
 const recentGroupDirectory = new Map<string, { at: number; persistedAt?: number; directory: Map<string, GroupMetadata> }>()
@@ -307,14 +309,35 @@ async function verifiedProviderAlternateJid(
   if (!alternateJid) return null
   const { pairs } = contactIdentityAnalysis([{ remoteJid: primaryJid, remoteJidAlt: alternateJid }])
   const pair = pairs[0]
-  if (!pair) return alternateJid
-  await persistContactIdentityPairs(admin, businessId, instanceName, [{ remoteJid: primaryJid, remoteJidAlt: alternateJid }])
+  // Only keep an alternate when an independently imported contact record has
+  // already confirmed this LID ↔ phone pair. A chat/message payload alone is
+  // not independent evidence and must never seed its own identity mapping.
+  if (!pair) return null
   const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
     .select('phone_jid, identity_conflict')
     .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', pair.lid_jid)
     .maybeSingle()
   if (error) throw new RequestError(500, 'contact_identity_lookup_failed')
   return data?.identity_conflict === false && data.phone_jid === pair.phone_jid ? alternateJid : null
+}
+
+async function verifiedConversationAlternateJid(
+  admin: any,
+  businessId: string,
+  instanceName: string,
+  remoteJid: string,
+  remoteJidAlt: string | null,
+): Promise<string | null> {
+  if (!remoteJidAlt) return null
+  const { pairs } = contactIdentityAnalysis([{ remoteJid, remoteJidAlt }])
+  const pair = pairs[0]
+  if (!pair) return null
+  const { data, error } = await admin.from('whatsapp_contact_jid_mappings')
+    .select('phone_jid, identity_conflict')
+    .eq('business_id', businessId).eq('instance_name', instanceName).eq('lid_jid', pair.lid_jid)
+    .maybeSingle()
+  if (error) throw new RequestError(500, 'contact_identity_lookup_failed')
+  return data?.identity_conflict === false && data.phone_jid === pair.phone_jid ? remoteJidAlt : null
 }
 
 async function mappedContactPhoneJid(admin: any, businessId: string, instanceName: string, lidJid: string): Promise<string | null> {
@@ -707,7 +730,25 @@ async function loadSavedContactDirectory(
   }
 }
 
-async function loadSavedContactNames(config: EvolutionConfig, admin?: any, businessId?: string): Promise<ContactDirectory> {
+async function loadSavedContactNames(
+  config: EvolutionConfig,
+  admin?: any,
+  businessId?: string,
+  remoteJids?: string[],
+): Promise<ContactDirectory> {
+  if (admin && businessId) {
+    const cached = recentContactNames.get(`${config.businessId}:${config.instanceName}`)?.directory ?? new Map()
+    if (remoteJids !== undefined) {
+      if (remoteJids.length === 0) return cached
+      const persisted = await loadPersistedContactDirectory(admin, businessId, config.instanceName, remoteJids)
+      return mergeContactDirectories(persisted, cached)
+    }
+    if (cached.size) return cached
+    const persisted = await loadPersistedContactDirectory(admin, businessId, config.instanceName)
+    // Reading a conversation should use the saved directory and warm cache;
+    // a provider request here made opening chats wait on Evolution timeouts.
+    return mergeContactDirectories(persisted, cached)
+  }
   return loadSavedContactDirectory(config, undefined, undefined, admin, businessId)
 }
 
@@ -1073,7 +1114,7 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
     const phone = group ? null : identityLinked
       ? phoneFromWhatsAppJid(jidAlt ?? '') ?? phoneFromWhatsAppJid(jid) ?? directoryPhone
       : phoneFromWhatsAppJid(jid) ?? directoryPhone
-    const activity = providerTimestamp(chat.lastMessageRecvTimestamp ?? chat.conversationTimestamp ?? chat.updatedAt)
+    const activity = providerTimestamp(chat.lastMessageRecvTimestamp ?? chat.conversationTimestamp ?? chat.updatedAt ?? lastMessage?.provider_timestamp)
     const hasReportedUnreadCount = (typeof chat.unreadCount === 'number' && Number.isInteger(chat.unreadCount))
       || (typeof chat.unreadMessages === 'number' && Number.isInteger(chat.unreadMessages))
     const unread = typeof chat.unreadCount === 'number' && Number.isInteger(chat.unreadCount) ? Math.max(0, chat.unreadCount)
@@ -1145,7 +1186,10 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       if (error) throw new RequestError(500, 'history_sync_failed')
     }
 
-    if (lastMessage && lastMessage.remote_jid === jid) {
+    // Baileys can return the same direct chat using the verified phone JID
+    // while the message key uses its linked LID (or the reverse). Import only
+    // when the primary JID matches, or both sides match the verified alias pair.
+    if (lastMessage && providerMessageMatchesConversation(lastMessage, jid, jidAlt)) {
       const { error } = await admin.from('whatsapp_messages').upsert({
         business_id: businessId,
         conversation_id: conversationId,
@@ -1946,10 +1990,40 @@ async function resolvePhoneMatchForInbox(admin: any, businessId: string, phone: 
 }
 
 function providerMessageRecord(value: unknown): JsonRecord | null {
-  if (!isRecord(value)) return null
-  if (isRecord(value.key) && isRecord(value.message)) return value
-  if (isRecord(value.lastMessage)) return providerMessageRecord(value.lastMessage)
-  if (isRecord(value.message) && isRecord(value.message.key)) return value.message
+  const queue: unknown[] = [value]
+  const visited = new Set<JsonRecord>()
+  while (queue.length && visited.size < 32) {
+    const current = queue.shift()
+    if (!isRecord(current) || visited.has(current)) continue
+    visited.add(current)
+    const key = isRecord(current.key) ? current.key
+      : isRecord(current.messageKey) ? current.messageKey
+        : isRecord(current.message_key) ? current.message_key : null
+    const message = isRecord(current.message) ? current.message
+      : isRecord(current.messageData) ? current.messageData
+        : isRecord(current.message_data) ? current.message_data : null
+    if (key && message) {
+      return {
+        ...current,
+        key: {
+          ...key,
+          id: key.id ?? key.messageId ?? key.message_id,
+          remoteJid: key.remoteJid ?? key.remote_jid,
+          remoteJidAlt: key.remoteJidAlt ?? key.remote_jid_alt,
+          fromMe: key.fromMe ?? key.from_me,
+          participantAlt: key.participantAlt ?? key.participant_alt,
+        },
+        message,
+        pushName: current.pushName ?? current.push_name,
+        messageTimestamp: current.messageTimestamp ?? current.message_timestamp ?? current.timestamp,
+        status: current.status ?? current.messageStatus ?? current.message_status ?? current.ack,
+      }
+    }
+    for (const name of ['lastMessage', 'last_message', 'data', 'result', 'payload', 'record']) {
+      if (current[name] !== undefined && current[name] !== null) queue.push(current[name])
+    }
+    if (message && isRecord(message.key)) queue.push(message)
+  }
   return null
 }
 
@@ -1957,8 +2031,8 @@ function providerMessagePayload(value: unknown): JsonRecord | null {
   const record = providerMessageRecord(value)
   if (!record) return null
   const key = isRecord(record.key) ? record.key : {}
-  const messageId = text(key.id, 256)
-  const remoteJid = text(key.remoteJid, 256)
+  const messageId = text(key.id ?? key.messageId ?? key.message_id, 256)
+  const remoteJid = text(key.remoteJid ?? key.remote_jid, 256)
   if (!messageId || !remoteJid) return null
   const sourceMessage = isRecord(record.message) ? record.message : {}
   const nested = isRecord(sourceMessage.ephemeralMessage) && isRecord(sourceMessage.ephemeralMessage.message)
@@ -1989,12 +2063,12 @@ function providerMessagePayload(value: unknown): JsonRecord | null {
   if (fileName) metadata.file_name = fileName
   if (Number.isSafeInteger(fileLength) && fileLength >= 0) metadata.file_size = fileLength
   metadata.provider_remote_jid = remoteJid
-  const providerRemoteJidAlt = text(key.remoteJidAlt, 256)
+  const providerRemoteJidAlt = text(key.remoteJidAlt ?? key.remote_jid_alt, 256)
   if (providerRemoteJidAlt) metadata.provider_remote_jid_alt = providerRemoteJidAlt
   const senderName = displayableContactName(record.pushName, null)
-  const fromMe = key.fromMe === true
-  const participant = text(key.participant ?? key.participantAlt, 256)
-  const participantAlt = text(key.participantAlt, 256)
+  const fromMe = key.fromMe === true || key.fromMe === 'true' || key.fromMe === 1
+  const participant = text(key.participant ?? key.participantLid ?? key.participantAlt ?? key.participant_alt, 256)
+  const participantAlt = text(key.participantAlt ?? key.participantPn ?? key.senderPn ?? key.participant_alt, 256)
   if (group && senderName) metadata.sender_name = senderName
   if (participant) metadata.participant_jid = participant
   if (participantAlt) metadata.participant_alt_jid = participantAlt
@@ -2005,18 +2079,138 @@ function providerMessagePayload(value: unknown): JsonRecord | null {
   return {
     id: messageId,
     remote_jid: remoteJid,
-    remote_jid_alt: text(key.remoteJidAlt, 256),
+    remote_jid_alt: text(key.remoteJidAlt ?? key.remote_jid_alt, 256),
     // Prefer directory names in the inbox; keep an incoming profile name as fallback.
     contact_name: !group && !fromMe ? senderName : null,
-    contact_phone: group ? null : phoneFromWhatsAppJid(text(key.remoteJidAlt, 256) ?? remoteJid),
+    contact_phone: group ? null : phoneFromWhatsAppJid(text(key.remoteJidAlt ?? key.remote_jid_alt, 256) ?? remoteJid),
     direction: fromMe ? 'outgoing' : 'incoming',
     message_kind: kind,
     content,
-    delivery_status: messageDeliveryStatus(record.status ?? key.status)
+    delivery_status: messageDeliveryStatus(record.status ?? key.status ?? key.ack)
       ?? (fromMe ? 'sent' : null),
     media_metadata: metadata,
-    provider_timestamp: providerTimestamp(record.messageTimestamp ?? record.messageTimestampMs),
+    provider_timestamp: providerTimestamp(record.messageTimestamp ?? record.messageTimestampMs ?? record.message_timestamp_ms),
   }
+}
+
+function providerMessageMatchesConversation(message: JsonRecord, remoteJid: string, remoteJidAlt: string | null): boolean {
+  const primary = text(message.remote_jid, 256)
+  const alternate = text(message.remote_jid_alt, 256)
+  if (primary && sameDirectWhatsAppJid(primary, remoteJid)) return true
+  // remoteJidAlt on the conversation was independently verified against the
+  // persisted contact directory before this import starts. Evolution may omit
+  // the message's own alternate field, so exact match to that verified alias
+  // is sufficient here.
+  if (remoteJidAlt && primary && sameDirectWhatsAppJid(primary, remoteJidAlt)) return true
+  if (!remoteJidAlt || !primary || !alternate) return false
+  return (sameDirectWhatsAppJid(primary, remoteJidAlt) && sameDirectWhatsAppJid(alternate, remoteJid))
+    || (sameDirectWhatsAppJid(primary, remoteJid) && sameDirectWhatsAppJid(alternate, remoteJidAlt))
+}
+
+async function importRecentConversationMessages(
+  admin: any,
+  config: EvolutionConfig,
+  businessId: string,
+  conversation: JsonRecord,
+): Promise<{ imported: number; providerAvailable: boolean; latestTimestamp: string | null }> {
+  const remoteJid = text(conversation.remote_jid, 256)
+  if (!remoteJid) return { imported: 0, providerAvailable: false, latestTimestamp: null }
+  const savedAlternate = isGroupJid(remoteJid) ? null : text(conversation.remote_jid_alt, 256)
+  const remoteJidAlt = await verifiedConversationAlternateJid(
+    admin, businessId, config.instanceName, remoteJid, savedAlternate,
+  )
+  const jids = [...new Set([remoteJid, remoteJidAlt].filter((jid): jid is string => Boolean(jid)))]
+  const results = await Promise.all(jids.map(async (jid) => {
+    try {
+      return await evolutionRequest(config, `/chat/findMessages/${encodeURIComponent(config.instanceName)}`, {
+        method: 'POST',
+        body: JSON.stringify({ where: { key: { remoteJid: jid } }, offset: MESSAGE_HISTORY_LIMIT, page: 1 }),
+        signal: AbortSignal.timeout(5_000),
+      })
+    } catch {
+      return null
+    }
+  }))
+  const providerAvailable = results.some((result) => result !== null)
+  const messages = new Map<string, JsonRecord>()
+  for (const result of results) {
+    for (const record of historyRecords(result)) {
+      const message = providerMessagePayload(record)
+      if (message && providerMessageMatchesConversation(message, remoteJid, remoteJidAlt)) {
+        messages.set(String(message.id), message)
+      }
+    }
+  }
+  const rows = [...messages.values()]
+    .sort((left, right) => String(left.provider_timestamp).localeCompare(String(right.provider_timestamp)))
+    .slice(-MESSAGE_HISTORY_LIMIT)
+    .map((message) => ({
+      business_id: businessId,
+      conversation_id: conversation.id,
+      instance_name: config.instanceName,
+      provider_message_id: message.id,
+      direction: message.direction,
+      message_kind: message.message_kind,
+      content: message.content,
+      delivery_status: message.delivery_status,
+      count_as_unread: false,
+      media_metadata: message.media_metadata,
+      provider_timestamp: message.provider_timestamp,
+    }))
+  if (!rows.length) return { imported: 0, providerAvailable, latestTimestamp: null }
+  const { error } = await admin.from('whatsapp_messages').upsert(rows, {
+    onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true,
+  })
+  if (error) throw new RequestError(500, 'recent_history_import_failed')
+  return { imported: rows.length, providerAvailable, latestTimestamp: text(rows.at(-1)?.provider_timestamp, 64) }
+}
+
+async function scheduleRecentConversationHistorySync(
+  admin: any,
+  config: EvolutionConfig,
+  businessId: string,
+  conversation: JsonRecord,
+): Promise<'syncing' | 'updated' | 'current' | 'not_found' | 'unavailable'> {
+  const conversationId = text(conversation.id, 64)
+  if (!conversationId) return 'unavailable'
+  const activityAtStart = text(conversation.last_activity_at, 64) ?? 'no-activity'
+  const key = `${businessId}:${config.instanceName}:${conversationId}:${activityAtStart}`
+  const pending = pendingRecentHistorySync.get(key)
+  if (pending) return 'syncing'
+  const cached = recentHistorySyncResult.get(key)
+  if (cached && Date.now() - cached.at < 15_000) return cached.status
+
+  const task = (async () => {
+    try {
+      const imported = await importRecentConversationMessages(admin, config, businessId, conversation)
+      if (imported.latestTimestamp) {
+        const activity = text(conversation.last_activity_at, 64)
+        if (!activity || imported.latestTimestamp > activity) {
+          let update = admin.from('whatsapp_conversations').update({ last_activity_at: imported.latestTimestamp })
+            .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId)
+          update = activity ? update.eq('last_activity_at', activity) : update.is('last_activity_at', null)
+          const { error } = await update
+          if (error) throw new RequestError(500, 'conversation_activity_save_failed')
+        }
+      }
+      if (imported.imported > 0) return 'updated' as const
+      return imported.providerAvailable ? 'not_found' as const : 'unavailable' as const
+    } catch {
+      return 'unavailable' as const
+    }
+  })()
+  pendingRecentHistorySync.set(key, task)
+  void task.then((status) => recentHistorySyncResult.set(key, { at: Date.now(), status }))
+    .finally(() => { if (pendingRecentHistorySync.get(key) === task) pendingRecentHistorySync.delete(key) })
+
+  const runtime = (globalThis as typeof globalThis & {
+    EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void }
+  }).EdgeRuntime
+  if (runtime && typeof runtime.waitUntil === 'function') {
+    runtime.waitUntil(task)
+    return 'syncing'
+  }
+  return await task
 }
 
 function providerTimestamp(value: unknown): string {
@@ -2132,7 +2326,10 @@ async function profilePictureResponse(config: EvolutionConfig, conversation: Jso
     const metadata = await loadGroupMetadata(config, remoteJid, 'picture', admin, businessId)
     pictureUrl = metadata.pictureUrl
   } else {
-    const contactDirectory = await loadSavedContactNames(config, admin, businessId)
+    const contactDirectory = await loadSavedContactNames(config, admin, businessId, [
+      remoteJid,
+      text(conversation.remote_jid_alt, 256) ?? '',
+    ])
     pictureUrl = savedPictureForJids(
       contactDirectory,
       remoteJid,
@@ -2826,9 +3023,13 @@ export default {
             customersByPhone.set(phone, matchingIds)
           }
         }
-        const savedNames = await loadSavedContactNames(config, admin, businessId)
-        const groupedCalls = new Map<string, JsonRecord[]>()
         const activeCallRows = (callRows ?? []).filter((row: JsonRecord) => conversationMap.has(String(row.conversation_id)))
+        const callConversationJids = activeCallRows.flatMap((row: JsonRecord) => {
+          const conversation = conversationMap.get(String(row.conversation_id))
+          return conversation ? [conversation.remote_jid, conversation.remote_jid_alt].filter((jid): jid is string => typeof jid === 'string') : []
+        })
+        const savedNames = await loadSavedContactNames(config, admin, businessId, callConversationJids)
+        const groupedCalls = new Map<string, JsonRecord[]>()
         for (const row of activeCallRows) {
           const key = typeof row.provider_call_id === 'string' && row.provider_call_id
             ? `provider:${row.provider_call_id}`
@@ -3032,7 +3233,10 @@ export default {
       if (action === 'older_messages') {
         const beforeMessageId = body.beforeMessageId
         if (!isUuid(beforeMessageId)) return json({ error: 'invalid_history_cursor' }, 400)
-        const names = await loadSavedContactNames(config, admin, businessId)
+        const names = await loadSavedContactNames(config, admin, businessId, [
+          text(conversation.remote_jid, 256) ?? '',
+          text(conversation.remote_jid_alt, 256) ?? '',
+        ])
         return await olderMessagesResponse(admin, config, businessId, conversation as JsonRecord, beforeMessageId, names)
       }
 
@@ -3153,6 +3357,9 @@ export default {
         }, { onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true })
         if (insertError) throw new RequestError(500, 'message_persist_failed')
         await applyMessageDeliveryStatus(admin, businessId, config.instanceName, providerMessageId, 'sent')
+        const { error: activityError } = await admin.from('whatsapp_conversations').update({ last_activity_at: providerTimestamp })
+          .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId)
+        if (activityError) throw new RequestError(500, 'conversation_activity_save_failed')
         return json({ sent: true })
       } else if (action === 'send_media') {
         const mediaBase64 = text(body.mediaBase64, MAX_REQUEST_BYTES)
@@ -3190,6 +3397,7 @@ export default {
         const response = isRecord(result) ? result : {}
         const key = isRecord(response.key) ? response.key : isRecord(response.message) && isRecord(response.message.key) ? response.message.key : {}
         const providerMessageId = text(key.id, 256) ?? `sent-${crypto.randomUUID()}`
+        const providerTimestamp = new Date().toISOString()
         const { error: insertError } = await admin.from('whatsapp_messages').upsert({
           business_id: businessId,
           conversation_id: conversationId,
@@ -3200,22 +3408,52 @@ export default {
           content: caption || null,
           delivery_status: 'sent',
           media_metadata: { mime_type: mimeType, file_name: fileName, file_size: bytes.length },
-          provider_timestamp: new Date().toISOString(),
+          provider_timestamp: providerTimestamp,
         }, { onConflict: 'business_id,instance_name,provider_message_id', ignoreDuplicates: true })
         if (insertError) throw new RequestError(500, 'message_persist_failed')
         await applyMessageDeliveryStatus(admin, businessId, config.instanceName, providerMessageId, 'sent')
+        const { error: activityError } = await admin.from('whatsapp_conversations').update({ last_activity_at: providerTimestamp })
+          .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId)
+        if (activityError) throw new RequestError(500, 'conversation_activity_save_failed')
         return json({ sent: true })
       }
 
-      const { data: freshConversation, error: freshError } = await admin.from('whatsapp_conversations')
+      let { data: freshConversation, error: freshError } = await admin.from('whatsapp_conversations')
         .select('id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, display_name_override, contact_classification, hidden_from_inbox, status, unread_count, last_activity_at')
         .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId).single()
-      if (freshError) throw new RequestError(500, 'conversation_refresh_failed')
-      const { data: messageRows, error: messageError } = await admin.from('whatsapp_messages')
+      if (freshError || !freshConversation) throw new RequestError(500, 'conversation_refresh_failed')
+      const loadMessageRows = () => admin.from('whatsapp_messages')
         .select('id, provider_message_id, direction, message_kind, content, delivery_status, media_metadata, provider_timestamp, deleted_at')
         .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('conversation_id', conversationId)
         .order('provider_timestamp', { ascending: false }).limit(MESSAGE_HISTORY_LIMIT + 1)
-      if (messageError) throw new RequestError(500, 'message_history_failed')
+      let messageResult = await loadMessageRows()
+      if (messageResult.error) throw new RequestError(500, 'message_history_failed')
+      const latestStoredMessage = (messageResult.data ?? []).find((row: JsonRecord) => row.message_kind !== 'reaction')
+      const latestStoredAt = latestStoredMessage ? Date.parse(String(latestStoredMessage.provider_timestamp ?? '')) : Number.NaN
+      const conversationActivityAt = Date.parse(String(freshConversation.last_activity_at ?? ''))
+      const recentMessageMissing = !latestStoredMessage
+        || !Number.isFinite(latestStoredAt)
+        || (Number.isFinite(conversationActivityAt) && conversationActivityAt - latestStoredAt > 10_000)
+      let recentHistorySync: 'syncing' | 'current' | 'updated' | 'not_found' | 'unavailable' = 'current'
+      if (config.connectionStatus === 'active' && recentMessageMissing) {
+        recentHistorySync = await scheduleRecentConversationHistorySync(admin, config, businessId, freshConversation as JsonRecord)
+        if (recentHistorySync !== 'syncing') {
+          messageResult = await loadMessageRows()
+          if (messageResult.error) throw new RequestError(500, 'message_history_failed')
+          const latestAfterSync = (messageResult.data ?? []).find((row: JsonRecord) => row.message_kind !== 'reaction')
+          const latestAfterSyncAt = latestAfterSync ? Date.parse(String(latestAfterSync.provider_timestamp ?? '')) : Number.NaN
+          const latestConversationActivity = Date.parse(String(freshConversation.last_activity_at ?? ''))
+          const historyIsCurrent = Number.isFinite(latestAfterSyncAt)
+            && (!Number.isFinite(latestConversationActivity) || latestConversationActivity - latestAfterSyncAt <= 10_000)
+          if (historyIsCurrent && recentHistorySync === 'not_found') recentHistorySync = 'current'
+          const refreshed = await admin.from('whatsapp_conversations')
+            .select('id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, display_name_override, contact_classification, hidden_from_inbox, status, unread_count, last_activity_at')
+            .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('id', conversationId).single()
+          if (refreshed.error || !refreshed.data) throw new RequestError(500, 'conversation_refresh_failed')
+          freshConversation = refreshed.data
+        }
+      }
+      const messageRows = messageResult.data
       const hasLocalMore = (messageRows?.length ?? 0) > MESSAGE_HISTORY_LIMIT
       const initialRows = (messageRows ?? []).slice(0, MESSAGE_HISTORY_LIMIT).reverse()
       const { data: reactionRows, error: reactionError } = await admin.from('whatsapp_messages')
@@ -3223,8 +3461,23 @@ export default {
         .eq('business_id', businessId).eq('instance_name', config.instanceName).eq('conversation_id', conversationId).eq('message_kind', 'reaction')
         .order('provider_timestamp', { ascending: false }).order('id', { ascending: false }).limit(500)
       if (reactionError) throw new RequestError(500, 'message_history_failed')
-      const savedNames = await loadSavedContactNames(config, admin, businessId)
-      const groupDirectory = await loadGroupDirectory(config, admin, businessId)
+      const contactJids = [
+        text(freshConversation.remote_jid, 256),
+        text(freshConversation.remote_jid_alt, 256),
+        ...(messageRows ?? []).flatMap((row: JsonRecord) => {
+          const metadata = isRecord(row.media_metadata) ? row.media_metadata : {}
+          return [metadata.participant_jid, metadata.participant_alt_jid]
+        }),
+        ...(reactionRows ?? []).flatMap((row: JsonRecord) => {
+          const metadata = isRecord(row.media_metadata) ? row.media_metadata : {}
+          return [metadata.participant_jid, metadata.participant_alt_jid]
+        }),
+      ].filter((jid): jid is string => typeof jid === 'string' && jid.length > 0)
+      const savedNames = await loadSavedContactNames(config, admin, businessId, contactJids)
+      const conversationJid = text(freshConversation.remote_jid, 256)
+      const groupDirectory = conversationJid && isGroupJid(conversationJid)
+        ? await loadPersistedGroupDirectory(admin, businessId, config.instanceName, [conversationJid])
+        : new Map<string, GroupMetadata>()
       const messages = attachMessageReactions(initialRows, reactionRows ?? [], savedNames)
       const { data: callRows, error: callsError } = await admin.from('whatsapp_call_events')
         .select('id, call_state, is_video, occurred_at')
@@ -3244,7 +3497,7 @@ export default {
         last_message: messages.at(-1) ?? null,
         messages,
         calls,
-      }, meta: { has_more: hasLocalMore || messages.length > 0 } })
+      }, meta: { has_more: hasLocalMore || messages.length > 0, recent_history_sync: recentHistorySync } })
     } catch (error) {
       if (error instanceof RequestError) return json({ error: error.code }, error.status)
       // Provider error bodies may include credentials; keep them out of application logs.

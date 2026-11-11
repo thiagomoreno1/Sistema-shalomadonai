@@ -22,6 +22,7 @@ const desktopItems: NavItem[] = [
   { to: '/', label: 'Início', icon: 'home' },
   { to: '/financeiro', label: 'Dashboard', icon: 'coin' },
   { to: '/clientes', label: 'Clientes', icon: 'people' },
+  { to: '/clientes/arariboia', label: 'Arariboia', icon: 'coin' },
   { to: '/atendimento', label: 'Atendimento', icon: 'phone' },
   { to: '/whatsapp', label: 'WhatsApp', icon: 'message' },
   { to: '/pedidos', label: 'Pedidos', icon: 'bag' },
@@ -35,6 +36,7 @@ const desktopItems: NavItem[] = [
 const routeLabels: Record<string, string> = {
   '/': 'Início',
   '/clientes': 'Clientes',
+  '/clientes/arariboia': 'Arariboia',
   '/atendimento': 'Atendimento',
   '/whatsapp': 'WhatsApp',
   '/pedidos': 'Pedidos',
@@ -51,6 +53,7 @@ const routeLabels: Record<string, string> = {
 }
 
 function getRouteLabel(pathname: string) {
+  if (pathname === '/clientes/arariboia') return 'Arariboia'
   if (pathname.startsWith('/clientes/')) return 'Cliente'
   if (pathname.startsWith('/whatsapp/')) return 'WhatsApp'
   return routeLabels[pathname] ?? 'Operação'

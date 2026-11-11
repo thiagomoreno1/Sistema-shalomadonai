@@ -544,14 +544,50 @@ async function readBoundedBody(request: Request): Promise<string | null> {
 }
 
 function messagePayload(value: unknown): JsonRecord | null {
-  if (!isRecord(value)) return null
-  const key = isRecord(value.key) ? value.key : null
-  const messageId = stringValue(key?.id, 256)
-  const remoteJid = stringValue(key?.remoteJid, 256)
-  const remoteJidAlt = stringValue(key?.remoteJidAlt, 256)
+  const queue: unknown[] = [value]
+  const visited = new Set<JsonRecord>()
+  let record: JsonRecord | null = null
+  while (queue.length && visited.size < 32) {
+    const current = queue.shift()
+    if (!isRecord(current) || visited.has(current)) continue
+    visited.add(current)
+    const key = isRecord(current.key) ? current.key
+      : isRecord(current.messageKey) ? current.messageKey
+        : isRecord(current.message_key) ? current.message_key : null
+    const message = isRecord(current.message) ? current.message
+      : isRecord(current.messageData) ? current.messageData
+        : isRecord(current.message_data) ? current.message_data : null
+    if (key && message) {
+      record = {
+        ...current,
+        key: {
+          ...key,
+          id: key.id ?? key.messageId ?? key.message_id,
+          remoteJid: key.remoteJid ?? key.remote_jid,
+          remoteJidAlt: key.remoteJidAlt ?? key.remote_jid_alt,
+          fromMe: key.fromMe ?? key.from_me,
+          participantAlt: key.participantAlt ?? key.participant_alt,
+        },
+        message,
+        pushName: current.pushName ?? current.push_name,
+        messageTimestamp: current.messageTimestamp ?? current.message_timestamp ?? current.timestamp,
+        status: current.status ?? current.messageStatus ?? current.message_status ?? current.ack,
+      }
+      break
+    }
+    for (const name of ['data', 'result', 'payload', 'record', 'lastMessage', 'last_message']) {
+      if (current[name] !== undefined && current[name] !== null) queue.push(current[name])
+    }
+    if (message && isRecord(message.key)) queue.push(message)
+  }
+  if (!record) return null
+  const key = isRecord(record.key) ? record.key : null
+  const messageId = stringValue(key?.id ?? key?.messageId ?? key?.message_id, 256)
+  const remoteJid = stringValue(key?.remoteJid ?? key?.remote_jid, 256)
+  const remoteJidAlt = stringValue(key?.remoteJidAlt ?? key?.remote_jid_alt, 256)
   if (!messageId || !remoteJid) return null
 
-  const message = isRecord(value.message) ? value.message : {}
+  const message = isRecord(record.message) ? record.message : {}
   const nested = isRecord(message.ephemeralMessage) && isRecord(message.ephemeralMessage.message)
     ? message.ephemeralMessage.message
     : isRecord(message.viewOnceMessageV2) && isRecord(message.viewOnceMessageV2.message)
@@ -583,11 +619,11 @@ function messagePayload(value: unknown): JsonRecord | null {
   mediaMetadata.provider_remote_jid = remoteJid
   if (remoteJidAlt) mediaMetadata.provider_remote_jid_alt = remoteJidAlt
 
-  const fromMe = key?.fromMe === true
+  const fromMe = key?.fromMe === true || key?.fromMe === 'true' || key?.fromMe === 1
   const isGroup = isGroupJid(remoteJid)
-  const senderName = displayableContactName(value.pushName)
-  const participantJid = stringValue(key?.participant ?? key?.participantLid ?? key?.participantAlt, 256)
-  const participantAltJid = stringValue(key?.participantAlt ?? key?.participantPn ?? key?.senderPn, 256)
+  const senderName = displayableContactName(record.pushName)
+  const participantJid = stringValue(key?.participant ?? key?.participantLid ?? key?.participantAlt ?? key?.participant_alt, 256)
+  const participantAltJid = stringValue(key?.participantAlt ?? key?.participantPn ?? key?.senderPn ?? key?.participant_alt, 256)
   if (isGroup && senderName) mediaMetadata.sender_name = senderName
   if (participantJid) mediaMetadata.participant_jid = participantJid
   if (participantAltJid) mediaMetadata.participant_alt_jid = participantAltJid
@@ -596,7 +632,7 @@ function messagePayload(value: unknown): JsonRecord | null {
     const targetMessageId = stringValue(targetKey?.id, 256)
     if (targetMessageId) mediaMetadata.reaction_to_message_id = targetMessageId
   }
-  const validStatus = statusValue(value.status ?? key?.status)
+  const validStatus = statusValue(record.status ?? key?.status ?? key?.ack)
 
   return {
     id: messageId,
@@ -611,7 +647,7 @@ function messagePayload(value: unknown): JsonRecord | null {
     content,
     delivery_status: validStatus ?? (fromMe ? 'sent' : null),
     media_metadata: mediaMetadata,
-    provider_timestamp: isoTimestamp(value.messageTimestamp ?? value.messageTimestampMs),
+    provider_timestamp: isoTimestamp(record.messageTimestamp ?? record.messageTimestampMs ?? record.message_timestamp_ms),
   }
 }
 
@@ -798,14 +834,11 @@ async function processMessageEvent(
   const identityConflict = typeof messageLid === 'string'
     ? await isConflictedContactLid(admin, businessId, instanceName, messageLid)
     : false
-  const explicitIdentity = await saveContactIdentityMapping(
-    admin, businessId, instanceName,
-    identityValues,
-    payload.contact_name as string | null,
-  )
-  const mappedIdentity = explicitIdentity ?? (!identityConflict && typeof messageLid === 'string'
+  // A message key is not independent evidence for a LID ↔ phone mapping.
+  // Wait for CONTACTS_* sync (or an explicit call identity) before merging it.
+  const mappedIdentity = !identityConflict && typeof messageLid === 'string'
     ? await mappedPhoneIdentity(admin, businessId, instanceName, messageLid)
-    : null)
+    : null
   let identityLinked = hasIdentityPair || typeof messageLid === 'string'
     ? Boolean(mappedIdentity)
     : !identityConflict
@@ -820,6 +853,8 @@ async function processMessageEvent(
   const contactPhone = identityLinked
     ? phoneFromJid(mappedIdentity?.phoneJid ?? '') ?? (payload.contact_phone as string | null)
     : phoneFromJid(remoteJid)
+      ?? phoneFromJid(phoneJidFromProviderValue(payload.remote_jid_alt) ?? '')
+      ?? (typeof payload.contact_phone === 'string' ? payload.contact_phone : null)
   const conversationId = await upsertConversation(
     admin,
     businessId,
@@ -1066,7 +1101,7 @@ async function processChatOrContactEvent(
     const name = evolutionContactName(row, isGroup)
     directoryWrites.push(...contactDirectoryRowsFromProvider(businessId, instanceName, row, isGroup))
     const hasProviderSavedName = Boolean(name)
-    const identity = isGroup ? null : await saveContactIdentityMapping(admin, businessId, instanceName, [
+    const identity = isGroup || !isContactEvent ? null : await saveContactIdentityMapping(admin, businessId, instanceName, [
       jid, jidAlt, row.remoteJidLid, row.remote_jid_lid, row.phoneNumberJid, row.phone_number_jid,
       row.phoneJid, row.phone_jid, row.pnJid, row.pn_jid, row.lid, row.lidJid, row.lid_jid,
       row.wuid, row.id, row.contactId, row.contact_id, row.phoneNumber, row.phone_number,
