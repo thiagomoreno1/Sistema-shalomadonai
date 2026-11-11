@@ -156,6 +156,13 @@ select is((select changed_by from public.product_price_history
   where product_id = (select id from catalog_records where name = 'product') and event_kind = 'updated'),
   pg_temp.uid('catalog-owner'), 'Product history identifies the authenticated owner');
 
+insert into catalog_records values (
+  'opening', public.configure_product_inventory(
+    pg_temp.uid('catalog-business'),
+    (select id from catalog_records where name = 'product'),
+    'un', 0, null, pg_temp.uid('catalog-opening')
+  )
+);
 update public.customers set is_active = false
  where id = (select id from catalog_records where name = 'customer');
 select is((select is_active from public.customers where id = (select id from catalog_records where name = 'customer')),
