@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useBusiness } from '../business/BusinessContext'
+import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
+import { formatBRL } from '../lib/formatters'
 import { searchCustomers, toInternationalPhone } from '../lib/customer-search.mjs'
 import { supabaseClient } from '../lib/supabase'
 
@@ -94,7 +95,9 @@ type Customer = {
   delivery_address: string | null
   created_at: string
   is_active: boolean
+  open_balance_cents: number | null
 }
+type CustomerOpenBalance = { customer_id: string; balance_cents: number | string }
 type PhoneMatch = { id: string; name: string; matched_phone_masked: string }
 
 function getWhatsAppChatUrl(value: string) {
@@ -106,12 +109,14 @@ function getWhatsAppChatUrl(value: string) {
 }
 
 export function CustomersPage() {
-  const { id: businessId } = useBusiness()
+  const { id: businessId, role } = useBusiness()
+  const canViewBalances = canManageBusiness(role)
   const navigate = useNavigate()
   const [customers, setCustomers] = useState<Customer[]>([])
   const [search, setSearch] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [balancesUnavailable, setBalancesUnavailable] = useState(!canViewBalances)
   const [saving, setSaving] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -119,7 +124,7 @@ export function CustomersPage() {
   const [phone, setPhone] = useState('')
   const [phoneCountryIso, setPhoneCountryIso] = useState('BR')
   const [customPhoneCallingCode, setCustomPhoneCallingCode] = useState('')
-  const [phoneIsWhatsApp, setPhoneIsWhatsApp] = useState(false)
+  const [phoneIsWhatsApp, setPhoneIsWhatsApp] = useState(true)
   const [showDifferentWhatsapp, setShowDifferentWhatsapp] = useState(false)
   const [whatsappPhone, setWhatsappPhone] = useState('')
   const [whatsappCountryIso, setWhatsappCountryIso] = useState('BR')
@@ -217,29 +222,52 @@ export function CustomersPage() {
 
   const loadCustomers = useCallback(async () => {
     if (!supabaseClient) {
+      setError('Conexão indisponível. Tente novamente.')
+      setBalancesUnavailable(true)
       setLoading(false)
       return
     }
     try {
-      const { data, error: queryError } = await supabaseClient
-        .from('customers')
-        .select('id, name, phone, whatsapp_phone, delivery_address, created_at, is_active')
-        .eq('business_id', businessId)
-        .eq('is_active', !showArchived)
-        .order('name', { ascending: true })
+      const [customerResult, balanceResult] = await Promise.all([
+        supabaseClient
+          .from('customers')
+          .select('id, name, phone, whatsapp_phone, delivery_address, created_at, is_active')
+          .eq('business_id', businessId)
+          .eq('is_active', !showArchived)
+          .order('name', { ascending: true }),
+        canViewBalances
+          ? supabaseClient.rpc('get_customer_open_balances', { p_business_id: businessId })
+          : Promise.resolve({ data: null, error: null }),
+      ])
 
-      if (queryError) {
+      if (customerResult.error) {
         setError('Não foi possível carregar os clientes. Tente novamente.')
+        setBalancesUnavailable(true)
       } else {
-        setCustomers((data ?? []) as Customer[])
+        let nextBalancesUnavailable = !canViewBalances || Boolean(balanceResult.error)
+        const balanceByCustomer = new Map<string, number>()
+        for (const row of (balanceResult.data ?? []) as CustomerOpenBalance[]) {
+          const balance = Number(row.balance_cents)
+          if (!Number.isSafeInteger(balance) || balance < 0) {
+            nextBalancesUnavailable = true
+            break
+          }
+          balanceByCustomer.set(row.customer_id, balance)
+        }
+        setBalancesUnavailable(nextBalancesUnavailable)
+        setCustomers(((customerResult.data ?? []) as Omit<Customer, 'open_balance_cents'>[]).map((customer) => ({
+          ...customer,
+          open_balance_cents: nextBalancesUnavailable ? null : balanceByCustomer.get(customer.id) ?? 0,
+        })))
         setError(null)
       }
     } catch {
       setError('Não foi possível carregar os clientes. Tente novamente.')
+      setBalancesUnavailable(true)
     } finally {
       setLoading(false)
     }
-  }, [businessId, showArchived])
+  }, [businessId, canViewBalances, showArchived])
 
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void loadCustomers() }, [loadCustomers])
@@ -280,6 +308,11 @@ export function CustomersPage() {
   const filteredCustomers = useMemo(() => {
     return searchCustomers(customers, search, customers.length)
   }, [customers, search])
+  const displayedCustomers = useMemo(() => [...filteredCustomers].sort((left, right) =>
+    (right.open_balance_cents ?? -1) - (left.open_balance_cents ?? -1) || left.name.localeCompare(right.name, 'pt-BR'),
+  ), [filteredCustomers])
+  const totalOpenBalance = useMemo(() => customers.reduce((total, customer) => total + (customer.open_balance_cents ?? 0), 0), [customers])
+  const customersWithBalance = useMemo(() => customers.filter((customer) => (customer.open_balance_cents ?? 0) > 0).length, [customers])
   const phoneMatchSignature = phoneMatches.map((match) => match.id).sort().join('|')
 
   async function handleCreateCustomer(event: FormEvent<HTMLFormElement>) {
@@ -377,23 +410,77 @@ export function CustomersPage() {
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack customers-page">
       <header className="page-heading">
         <div>
           <p className="eyebrow">RELACIONAMENTO</p>
           <h1>Clientes</h1>
-          <p className="page-description">Cadastros, contatos e histórico de relacionamento. Inclua os registros manualmente, conforme combinado.</p>
+          <p className="page-description">Cadastros e valores em aberto.</p>
         </div>
         <div className="record-heading-actions">
-          <button className="button button-primary" disabled={saving} onClick={() => { setShowForm((value) => !value); setSaveError(null); clearPhoneLookupState(); setPhone(''); setPhoneCountryIso('BR'); setCustomPhoneCallingCode(''); setPhoneIsWhatsApp(false); setShowDifferentWhatsapp(false); setWhatsappPhone(''); setWhatsappCountryIso('BR'); setCustomWhatsappCallingCode(''); setShowOptionalDetails(false); setCep(''); setCepStatus('idle'); setCepResultAddress(''); setDeliveryAddress(''); setAddressEdited(false); addressEditedRef.current = false }} type="button">
+          <button className="button button-primary" disabled={saving} onClick={() => { setShowForm((value) => !value); setSaveError(null); clearPhoneLookupState(); setPhone(''); setPhoneCountryIso('BR'); setCustomPhoneCallingCode(''); setPhoneIsWhatsApp(true); setShowDifferentWhatsapp(false); setWhatsappPhone(''); setWhatsappCountryIso('BR'); setCustomWhatsappCallingCode(''); setShowOptionalDetails(false); setCep(''); setCepStatus('idle'); setCepResultAddress(''); setDeliveryAddress(''); setAddressEdited(false); addressEditedRef.current = false }} type="button">
             <Icon name="plus" /> {showForm ? 'Fechar' : 'Novo cliente'}
           </button>
         </div>
       </header>
 
 
+      <section className="surface-panel record-panel customer-list-panel" aria-labelledby="customer-list-title">
+        <div className="section-heading section-heading-compact">
+          <div><p className="eyebrow">CADASTROS</p><h2 id="customer-list-title">{showArchived ? 'Clientes arquivados' : 'Clientes ativos'}</h2></div>
+          <div className="record-heading-actions"><span className="neutral-status">{customers.length} {customers.length === 1 ? 'cadastro' : 'cadastros'}</span><button className="text-button" onClick={() => { setLoading(true); setError(null); setShowArchived((value) => !value) }} type="button">{showArchived ? 'Ver ativos' : 'Ver arquivados'}</button></div>
+        </div>
+        <div className="customer-debt-summary" aria-label="Resumo dos valores em aberto" aria-live="polite">
+          <div><span>Falta receber</span><strong>{loading || error || balancesUnavailable ? '—' : formatBRL(totalOpenBalance)}</strong></div>
+          <small>{loading ? 'Carregando saldos…' : error || balancesUnavailable ? 'Saldo indisponível' : `${customersWithBalance} ${customersWithBalance === 1 ? 'cliente deve' : 'clientes devem'}`}</small>
+        </div>
+        <label className="search-field">
+          <Icon name="search" />
+          <span className="visually-hidden">Buscar clientes por nome, telefone ou WhatsApp</span>
+          <input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nome, telefone ou WhatsApp" value={search} />
+        </label>
+
+        {loading ? <p className="inline-state" aria-live="polite">Carregando clientes…</p> : null}
+        {!loading && error && (
+          <div className="inline-state inline-state-error" role="alert">
+            <p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadCustomers() }} type="button">Tentar novamente</button>
+          </div>
+        )}
+        {!loading && !error && customers.length === 0 && (
+          <div className="module-empty-panel record-empty">
+            <span className="empty-icon"><Icon name="people" /></span>
+            <h2>{showArchived ? 'Nenhum cliente arquivado' : 'Nenhum cliente cadastrado'}</h2>
+            <p>{showArchived ? 'Os cadastros arquivados continuam disponíveis para consulta.' : 'Cadastre o primeiro cliente pelo nome.'}</p>
+            {!showArchived && <button className="button button-primary" onClick={() => setShowForm(true)} type="button">Cadastrar primeiro cliente</button>}
+          </div>
+        )}
+        {!loading && !error && customers.length > 0 && filteredCustomers.length === 0 && (
+          <div className="inline-state"><p>Nenhum cliente corresponde à busca.</p><button className="text-button" onClick={() => setSearch('')} type="button">Limpar busca</button></div>
+        )}
+        {!loading && !error && displayedCustomers.length > 0 && (
+          <div className="customer-debt-table-wrap">
+            <table className="customer-debt-table">
+              <caption className="visually-hidden">Saldo de cada cliente</caption>
+              <thead><tr><th scope="col">Cliente</th><th scope="col">Falta receber</th><th scope="col">Situação</th></tr></thead>
+              <tbody>{displayedCustomers.map((customer) => (
+                <tr key={customer.id}>
+                  <td data-label="Cliente">
+                    <Link className="customer-debt-customer" to={`/clientes/${customer.id}`}>
+                      <span className="record-avatar" aria-hidden="true">{customer.name.slice(0, 1).toLocaleUpperCase('pt-BR')}</span>
+                      <span><strong>{customer.name}</strong><small>{customer.phone || (customer.whatsapp_phone ? `WhatsApp: ${customer.whatsapp_phone}` : 'Telefone não informado')}</small></span>
+                    </Link>
+                  </td>
+                  <td className="customer-debt-amount" data-label="Falta receber">{customer.open_balance_cents === null ? '—' : formatBRL(customer.open_balance_cents)}</td>
+                  <td data-label="Situação"><span className={`customer-debt-status ${customer.open_balance_cents === null ? '' : customer.open_balance_cents > 0 ? 'customer-debt-status-open' : 'customer-debt-status-clear'}`}>{customer.open_balance_cents === null ? 'Indisponível' : customer.open_balance_cents > 0 ? 'Deve' : 'Não deve'}</span></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       {showForm && (
-        <form className="surface-panel record-form" onSubmit={handleCreateCustomer}>
+        <form className="surface-panel record-form customer-create-form" onSubmit={handleCreateCustomer}>
           <div className="section-heading section-heading-compact">
             <div><p className="eyebrow">CADASTRO RÁPIDO</p><h2>Novo cliente</h2></div>
           </div>
@@ -403,7 +490,7 @@ export function CustomersPage() {
               <input autoFocus className="text-input" disabled={saving} maxLength={160} name="name" required />
             </label>
             <div className="record-field record-field-wide">
-              <span className="field-label" id="customer-phone-label">Telefone <span className="field-optional">opcional</span></span>
+              <span className="field-label" id="customer-phone-label">Telefone ou WhatsApp <span className="field-optional">opcional</span></span>
               <div className={`customer-phone-row${phoneCountry.iso === 'OTHER' ? ' customer-phone-row-custom' : ''}`}>
                 <label className="visually-hidden" htmlFor="customer-phone-country">País do telefone</label>
                 <select className="text-input customer-country-select" disabled={saving} id="customer-phone-country" onChange={(event) => { setPhoneCountryIso(event.target.value); clearPhoneLookupState() }} value={phoneCountry.iso}>
@@ -413,10 +500,9 @@ export function CustomersPage() {
                 {phoneCountry.iso === 'OTHER' && <input aria-label="Código do país" className="text-input customer-calling-code" disabled={saving} inputMode="numeric" maxLength={3} onChange={(event) => { setCustomPhoneCallingCode(event.target.value); clearPhoneLookupState() }} placeholder="DDI" value={customPhoneCallingCode} />}
                 <input aria-labelledby="customer-phone-label" autoComplete="tel-national" className="text-input" disabled={saving} inputMode="tel" maxLength={32} onChange={(event) => { setPhone(event.target.value); clearPhoneLookupState() }} placeholder="DDD + número" type="tel" value={phone} />
               </div>
-              <span className="customer-whatsapp-hint">{phoneCountry.flag} +{phoneCountry.callingCode} · informe o DDD e o número.</span>
             </div>
-            <label className="record-checkbox record-field-wide customer-same-whatsapp"><input checked={phoneIsWhatsApp} disabled={saving || !phone.trim()} onChange={(event) => { setPhoneIsWhatsApp(event.target.checked); clearPhoneLookupState() }} type="checkbox" /><span><strong>Este telefone também é WhatsApp</strong><small>O mesmo número será salvo nos dois campos.</small></span></label>
-            {!phoneIsWhatsApp && !showDifferentWhatsapp && <div className="record-field record-field-wide"><button className="text-button customer-add-whatsapp" onClick={() => setShowDifferentWhatsapp(true)} type="button">Adicionar número de WhatsApp diferente</button></div>}
+            <label className="record-checkbox record-field-wide customer-same-whatsapp"><input checked={phoneIsWhatsApp} disabled={saving || !phone.trim()} onChange={(event) => { setPhoneIsWhatsApp(event.target.checked); clearPhoneLookupState() }} type="checkbox" /><span><strong>Usar também como WhatsApp</strong></span></label>
+            {!showDifferentWhatsapp && <div className="record-field record-field-wide"><button className="text-button customer-add-whatsapp" onClick={() => { setPhoneIsWhatsApp(false); setShowDifferentWhatsapp(true); clearPhoneLookupState() }} type="button">Adicionar outro WhatsApp</button></div>}
             {!phoneIsWhatsApp && showDifferentWhatsapp && <div className="record-field record-field-wide">
               <span className="field-label" id="customer-whatsapp-label">WhatsApp diferente <span className="field-optional">opcional</span></span>
               <div className={`customer-phone-row${whatsappCountry.iso === 'OTHER' ? ' customer-phone-row-custom' : ''}`}>
@@ -435,7 +521,7 @@ export function CustomersPage() {
                 <label className="record-field record-field-wide">
                   <span className="field-label">CEP <span className="field-optional">opcional</span></span>
                   <input autoComplete="postal-code" className="text-input" disabled={saving} inputMode="numeric" maxLength={9} onChange={(event) => { if (cepResultAddress && !addressEditedRef.current) { setDeliveryAddress(''); setAddressEdited(false) } setCep(event.target.value); setCepRetry(0); setCepStatus('idle'); setCepResultAddress('') }} placeholder="00000-000" value={cep} />
-                  <span className="customer-whatsapp-hint">Ao informar os 8 dígitos, buscamos rua, bairro e cidade. O CEP é enviado somente a serviços públicos de consulta.</span>
+                  <span className="customer-whatsapp-hint">Buscamos o endereço pelo CEP.</span>
                 </label>
                 {cepStatus === 'loading' && <p className="inline-state" aria-live="polite">Buscando endereço pelo CEP…</p>}
                 {cepStatus === 'error' && <div className="form-message form-message-warning" role="status"><span>Não foi possível localizar este CEP. {addressEdited ? 'Seu endereço digitado foi mantido.' : 'Você pode digitar o endereço normalmente.'}</span><button className="text-button" onClick={() => setCepRetry((value) => value + 1)} type="button">Tentar novamente</button></div>}
@@ -444,7 +530,6 @@ export function CustomersPage() {
                 <label className="record-field record-field-wide">
                   <span className="field-label">Endereço de entrega <span className="field-optional">opcional</span></span>
                   <textarea autoComplete="street-address" className="text-input record-textarea" disabled={saving} maxLength={1000} onChange={(event) => { setDeliveryAddress(event.target.value); setAddressEdited(true); addressEditedRef.current = true }} placeholder="Rua, número, bairro, cidade e complemento" rows={2} value={deliveryAddress} />
-                  <span className="customer-whatsapp-hint">Este será o endereço principal. Outros podem ser adicionados depois, no perfil do cliente.</span>
                 </label>
               </div>}
             </div>
@@ -463,53 +548,9 @@ export function CustomersPage() {
           {saveError && <p className="form-message form-message-error" role="alert">{saveError}</p>}
           <div className="record-form-actions">
             <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar cliente'}</button>
-            <p className="section-footnote">Nome obrigatório. Telefone e endereço podem ser preenchidos depois.</p>
           </div>
         </form>
       )}
-
-      <section className="surface-panel record-panel" aria-labelledby="customer-list-title">
-        <div className="section-heading section-heading-compact">
-          <div><p className="eyebrow">CADASTROS</p><h2 id="customer-list-title">{showArchived ? 'Clientes arquivados' : 'Clientes ativos'}</h2></div>
-          <div className="record-heading-actions"><span className="neutral-status">{customers.length} {customers.length === 1 ? 'cadastro' : 'cadastros'}</span><button className="text-button" onClick={() => { setLoading(true); setError(null); setShowArchived((value) => !value) }} type="button">{showArchived ? 'Ver ativos' : 'Ver arquivados'}</button></div>
-        </div>
-        <label className="search-field">
-          <Icon name="search" />
-          <span className="visually-hidden">Buscar clientes por nome, telefone ou WhatsApp</span>
-          <input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nome, telefone ou WhatsApp" value={search} />
-        </label>
-
-        {loading ? <p className="inline-state" aria-live="polite">Carregando clientes…</p> : null}
-        {!loading && error && (
-          <div className="inline-state inline-state-error" role="alert">
-            <p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadCustomers() }} type="button">Tentar novamente</button>
-          </div>
-        )}
-        {!loading && !error && customers.length === 0 && (
-          <div className="module-empty-panel record-empty">
-            <span className="empty-icon"><Icon name="people" /></span>
-            <h2>{showArchived ? 'Nenhum cliente arquivado' : 'Nenhum cliente cadastrado'}</h2>
-            <p>{showArchived ? 'Clientes arquivados preservam o histórico e podem ser reativados na ficha.' : 'Comece pelo nome. Telefone, endereço e observações podem ser adicionados depois.'}</p>
-            {!showArchived && <button className="button button-primary" onClick={() => setShowForm(true)} type="button">Cadastrar primeiro cliente</button>}
-          </div>
-        )}
-        {!loading && !error && customers.length > 0 && filteredCustomers.length === 0 && (
-          <div className="inline-state"><p>Nenhum cliente corresponde à busca.</p><button className="text-button" onClick={() => setSearch('')} type="button">Limpar busca</button></div>
-        )}
-        {!loading && !error && filteredCustomers.length > 0 && (
-          <ul className="record-list">
-            {filteredCustomers.map((customer) => (
-              <li key={customer.id}>
-                <Link className="record-list-link" to={`/clientes/${customer.id}`}>
-                  <span className="record-avatar" aria-hidden="true">{customer.name.slice(0, 1).toLocaleUpperCase('pt-BR')}</span>
-                  <span className="record-list-copy"><strong>{customer.name}</strong><small>{customer.phone || (customer.whatsapp_phone ? `WhatsApp: ${customer.whatsapp_phone}` : 'Telefone não informado')}{customer.is_active ? '' : ' · Arquivado'}</small></span>
-                  <Icon className="quick-link-arrow" name="arrow" />
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
     </div>
   )
 }
