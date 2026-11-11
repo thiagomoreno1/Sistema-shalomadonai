@@ -162,11 +162,22 @@ export function AppShell() {
 }
 
 function NavigationLink({ item, compact = false }: { item: NavItem; compact?: boolean }) {
+  const { pathname } = useLocation()
+
   return (
     <NavLink
       aria-label={compact ? item.label : undefined}
-      className={({ isActive }) => `nav-link${isActive ? ' is-active' : ''}${compact ? ' nav-link-compact' : ''}`}
-      end={item.to === '/'}
+      className={({ isActive }) => {
+        const isCustomerDetail = item.to === '/clientes'
+          && pathname.startsWith('/clientes/')
+          && pathname !== '/clientes/arariboia'
+        const active = item.to === '/clientes'
+          ? pathname === '/clientes' || isCustomerDetail
+          : isActive
+
+        return `nav-link${active ? ' is-active' : ''}${compact ? ' nav-link-compact' : ''}`
+      }}
+      end={item.to === '/' || item.to === '/clientes'}
       to={item.to}
       onPointerEnter={() => prefetchRoute(item.to)}
       onFocus={() => prefetchRoute(item.to)}
