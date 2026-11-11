@@ -443,7 +443,7 @@ export function CustomersPage() {
         </div>
         <div className={`customer-debt-summary${!loading && !error && !balancesUnavailable ? totalOpenBalance > 0 ? ' has-open-balance' : ' is-clear' : ''}`} aria-label="Resumo dos valores em aberto" aria-live="polite">
           <div><span>Falta receber</span><strong>{loading || error || balancesUnavailable ? '—' : formatBRL(totalOpenBalance)}</strong></div>
-          <small>{loading ? 'Carregando saldos…' : error || balancesUnavailable ? 'Saldo indisponível' : `${customersWithBalance} ${customersWithBalance === 1 ? 'cliente deve' : 'clientes devem'}`}</small>
+          <small>{loading ? 'Conferindo pagamentos…' : error || balancesUnavailable ? 'Não foi possível conferir' : `${customersWithBalance} ${customersWithBalance === 1 ? 'cliente deve' : 'clientes devem'}`}</small>
         </div>
         <label className="search-field">
           <Icon name="search" />
@@ -471,7 +471,7 @@ export function CustomersPage() {
         {!loading && !error && displayedCustomers.length > 0 && (
           <div className="customer-debt-table-wrap">
             <table className="customer-debt-table">
-              <caption className="visually-hidden">Saldo de cada cliente</caption>
+              <caption className="visually-hidden">Quanto cada cliente ainda deve</caption>
               <thead><tr><th scope="col">Cliente</th><th scope="col">Falta receber</th><th scope="col">Situação</th></tr></thead>
               <tbody>{displayedCustomers.map((customer) => (
                 <tr key={customer.id}>

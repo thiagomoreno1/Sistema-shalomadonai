@@ -489,7 +489,7 @@ export function NewOrderPage() {
       setComboDefaults(defaults)
       if (templatesUnavailable) {
         setScheduleTemplates([])
-        setScheduleTemplateLoadError('Os modelos de vencimentos ainda não estão disponíveis. Você pode informar as parcelas manualmente.')
+        setScheduleTemplateLoadError('Os modelos de parcelas ainda não estão disponíveis. Você pode informar as parcelas manualmente.')
       } else {
         setScheduleTemplates(loadedTemplates)
         setScheduleTemplateLoadError(null)
@@ -1005,7 +1005,7 @@ export function NewOrderPage() {
     const baseDate = businessDateForTimestamp(new Date(), timezone)
     const nextInstallments = installmentsFromSchedule(customerPaymentPattern, baseDate, totalCents)
     if (!nextInstallments) {
-      setScheduleTemplateError('O total atual não permite reaproveitar esta distribuição de parcelas. Ajuste o pedido ou as parcelas manualmente.')
+      setScheduleTemplateError('O total do pedido não permite usar essas parcelas. Ajuste o pedido ou as parcelas.')
       setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'incompatible' } : current)
       return
     }
@@ -1051,11 +1051,11 @@ export function NewOrderPage() {
       return
     }
     if (estimate.invalid || !Number.isSafeInteger(totalCents) || totalCents <= 0) {
-      if (!automatic) setScheduleTemplateError('Confira o total do pedido antes de calcular os vencimentos.')
+      if (!automatic) setScheduleTemplateError('Confira o total do pedido antes de calcular as parcelas.')
       return
     }
     if (template.schedule.length > totalCents) {
-      if (!automatic) setScheduleTemplateError('O total atual é menor que a quantidade de parcelas. Reduza as parcelas ou altere os percentuais do modelo.')
+      if (!automatic) setScheduleTemplateError('O total do pedido é menor que o número de parcelas. Diminua as parcelas ou ajuste o modelo.')
       return
     }
     const nextInstallments = installmentsFromSchedule(template.schedule, scheduleBaseDate, totalCents)
@@ -1068,8 +1068,8 @@ export function NewOrderPage() {
     setPaymentPlanMode('custom')
     setScheduleTemplateError(null)
     setScheduleTemplateMessage(automatic
-      ? `Modelo “${template.name}” preenchido automaticamente para o total atual. Confira os vencimentos; você pode editá-los.`
-      : `Modelo “${template.name}” aplicado sobre o total atual. Confira valores e datas; eles continuam editáveis.`)
+      ? `Modelo “${template.name}” preenchido automaticamente para o total atual. Confira as parcelas; você pode editá-las.`
+      : `Modelo “${template.name}” aplicado ao total do pedido. Confira os valores e as datas; você ainda pode mudar.`)
   }, [scheduleTemplates, selectedScheduleTemplateId, scheduleBaseDate, estimate.invalid, totalCents])
 
   // oxlint-disable-next-line react/set-state-in-effect
@@ -1138,18 +1138,18 @@ export function NewOrderPage() {
       return
     }
     if (paymentInstallments.length > 120) {
-      setScheduleTemplateError('Um modelo pode ter no máximo 120 vencimentos.')
+      setScheduleTemplateError('Um modelo pode ter no máximo 120 parcelas.')
       return
     }
     const amounts = paymentInstallments.map((installment) => parseBrazilianCurrency(installment.amount))
     if (amounts.some((amount) => amount === null || Number.isNaN(amount) || amount <= 0)
       || !Number.isSafeInteger(scheduleTotalCents) || scheduleTotalCents !== totalCents) {
-      setScheduleTemplateError('Confira os valores positivos e faça a soma dos vencimentos fechar exatamente o total atual antes de salvar o modelo.')
+      setScheduleTemplateError('Confira os valores e faça a soma das parcelas dar exatamente o total do pedido antes de salvar o modelo.')
       return
     }
     const basisPoints = scheduleBasisPoints(amounts as number[])
     if (!basisPoints) {
-      setScheduleTemplateError('Os valores não podem ser convertidos em percentuais positivos para um modelo. Ajuste as parcelas e tente novamente.')
+      setScheduleTemplateError('O modelo precisa ter valores acima de zero. Ajuste as parcelas e tente de novo.')
       return
     }
     const schedule = paymentInstallments.map((installment, index) => {
@@ -1160,7 +1160,7 @@ export function NewOrderPage() {
     })
     if (!isCalendarDate(scheduleBaseDate) || paymentInstallments.some((installment) => !isCalendarDate(installment.dueOn))
       || schedule.some((entry) => entry.days_after_base < 0 || entry.days_after_base > 36500)) {
-      setScheduleTemplateError('Para salvar um modelo, informe a data-base e vencimentos entre 0 e 36.500 dias depois dela.')
+      setScheduleTemplateError('Para salvar o modelo, escolha a data da primeira parcela e o intervalo entre as parcelas.')
       return
     }
     setTemplateSaving(true)
@@ -1169,7 +1169,7 @@ export function NewOrderPage() {
       const { data, error: insertError } = await supabaseClient.from('payment_schedule_templates')
         .insert({ business_id: businessId, name, schedule }).select('id, name, schedule').single()
       if (insertError || !data) {
-        setScheduleTemplateError('Não foi possível salvar o modelo. Você ainda pode continuar com os vencimentos atuais.')
+        setScheduleTemplateError('Não foi possível salvar o modelo. Você ainda pode continuar com as parcelas atuais.')
         return
       }
       setScheduleTemplates((current) => [...current, data as ScheduleTemplate].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR')))
@@ -1181,7 +1181,7 @@ export function NewOrderPage() {
       setNewTemplateName('')
       setScheduleTemplateMessage(`Modelo “${data.name}” salvo. Ele poderá ser aplicado a outro pedido depois.`)
     } catch {
-      setScheduleTemplateError('Não foi possível salvar o modelo. Você ainda pode continuar com os vencimentos atuais.')
+      setScheduleTemplateError('Não foi possível salvar o modelo. Você ainda pode continuar com as parcelas atuais.')
     } finally {
       setTemplateSaving(false)
     }
@@ -1276,7 +1276,7 @@ export function NewOrderPage() {
       return
     }
     if (paymentInstallments.length < 1 || paymentInstallments.length > 120) {
-      setFormError('O pedido precisa ter entre 1 e 120 vencimentos.')
+      setFormError('O pedido precisa ter entre 1 e 120 parcelas.')
       return
     }
     if (items.length === 0 || items.some((item) => !productById.has(item.productId))) {
@@ -1369,7 +1369,7 @@ export function NewOrderPage() {
     for (const installment of paymentInstallments) {
       const amountCents = parseBrazilianCurrency(installment.amount)
       if (amountCents === null || Number.isNaN(amountCents) || amountCents <= 0 || !isCalendarDate(installment.dueOn)) {
-        setFormError('Cada vencimento precisa ter um valor positivo e uma data válida.')
+        setFormError('Cada data de pagamento precisa ter um valor positivo e uma data válida.')
         return
       }
       installmentPayload.push({
@@ -1379,7 +1379,7 @@ export function NewOrderPage() {
       })
     }
     if (!Number.isSafeInteger(scheduleTotalCents) || scheduleTotalCents !== totalCents) {
-      setFormError('A soma dos vencimentos precisa ser exatamente igual ao total do pedido.')
+      setFormError('A soma das parcelas precisa ser igual ao total do pedido.')
       return
     }
 
@@ -1478,15 +1478,15 @@ export function NewOrderPage() {
   const installmentSuggestionMessage = (() => {
     switch (customerOrderSuggestion?.installmentStatus) {
       case 'applied':
-        return 'A distribuição e os intervalos do pedido anterior foram aplicados ao total atual, com vencimentos recalculados a partir de hoje.'
+        return 'Os valores e as datas do pedido anterior foram ajustados ao total atual. As parcelas começam a partir de hoje.'
       case 'preserved':
-        return 'Encontrei as parcelas anteriores, mas mantive os vencimentos que você já editou. Você pode reaplicar a sugestão abaixo.'
+        return 'Encontrei as parcelas anteriores, mas mantive as que você já editou. Você pode usar a sugestão abaixo.'
       case 'incompatible':
-        return `A distribuição anterior não cabe no total atual. Ajuste o total ou a quantidade/valores das parcelas antes de reaplicá-la.${customerOrderSuggestion.preservedFields.includes('parcelas') ? ' Suas edições foram preservadas.' : ''}`
+        return `As parcelas do pedido anterior não cabem no total atual. Ajuste o total ou as parcelas antes de usá-las de novo.${customerOrderSuggestion.preservedFields.includes('parcelas') ? ' Suas edições foram mantidas.' : ''}`
       case 'pending':
-        return 'Encontrei a distribuição de parcelas no pedido anterior. Os vencimentos ficam em branco até você escolher reaproveitá-la.'
+        return 'Encontrei as parcelas do pedido anterior. Elas só serão usadas se você escolher reaproveitá-las.'
       case 'chosen_other':
-        return 'A distribuição do pedido anterior não está sendo usada porque você escolheu outro modelo ou alterou o seletor.'
+        return 'As parcelas do pedido anterior não serão usadas porque você escolheu outro modelo ou mudou a quantidade.'
       default:
         return 'O pedido anterior não tinha parcelas para reaproveitar.'
     }
@@ -1514,7 +1514,7 @@ export function NewOrderPage() {
       {choiceError && <div className="inline-state inline-state-error" role="alert"><p>{choiceError}</p><button className="text-button" onClick={() => void loadChoices()} type="button">Tentar novamente</button></div>}
       {orderCopySummary && <div className="form-message form-message-success" role="status">
         <p>Rascunho baseado no pedido de <strong>{orderCopySummary.customerName}</strong>: {orderCopySummary.copiedItems} {orderCopySummary.copiedItems === 1 ? 'item carregado' : 'itens carregados'} com preços atuais.</p>
-        <p>Confira produtos, entrega e vencimentos antes de salvar. Nada foi registrado ainda.</p>
+        <p>Confira os produtos, a entrega e as datas de pagamento antes de salvar.</p>
         {orderCopySummary.customCompositionsCopied > 0 && <p>{orderCopySummary.customCompositionsCopied} {orderCopySummary.customCompositionsCopied === 1 ? 'cesta personalizada foi' : 'cestas personalizadas foram'} reaproveitadas com os produtos ainda disponíveis.</p>}
         {legacyCompositionReviewCount > 0 && <p className="delivery-stock-warning">{legacyCompositionReviewCount} cesta(s) antiga(s) não guardava(m) a quantidade por unidade. Estimei pela quantidade total arredondada; confira os componentes antes de salvar.</p>}
         {orderCopySummary.skippedItems > 0 && <p>{orderCopySummary.skippedItems} {orderCopySummary.skippedItems === 1 ? 'item não foi copiado' : 'itens não foram copiados'} porque o produto ou sua composição não está disponível no catálogo.</p>}
@@ -1524,7 +1524,7 @@ export function NewOrderPage() {
       {customerPrefillLoading && <p className="form-message" role="status">Buscando o pedido anterior deste cliente…</p>}
       {customerOrderSuggestion && <div className="form-message form-message-success" role="status">
         <p>Rascunho baseado no pedido de <strong>{customerOrderSuggestion.customerName}</strong>, de {formatBusinessDate(businessDateForTimestamp(customerOrderSuggestion.sourceCreatedAt, timezone))}. {customerOrderSuggestion.itemsApplied ? 'Itens e endereço foram carregados.' : 'Itens disponíveis para reaproveitar.'} <Link className="quiet-link" to={`/pedidos/${customerOrderSuggestion.sourceOrderId}`}>Ver pedido anterior</Link></p>
-        <p>Confira quantidades, preços, entrega, taxa de entrega e vencimentos. Nada foi salvo ainda. {installmentSuggestionMessage}</p>
+        <p>Confira quantidades, preços, entrega e datas de pagamento. Nada foi salvo ainda. {installmentSuggestionMessage}</p>
         {legacyCompositionReviewCount > 0 && <p className="delivery-stock-warning">{legacyCompositionReviewCount} cesta(s) antiga(s) não guardava(m) a quantidade por unidade. Estimei pela quantidade total arredondada; confira os componentes antes de salvar.</p>}
         {customerOrderSuggestion.skippedItems > 0 && <p>{customerOrderSuggestion.skippedItems} {customerOrderSuggestion.skippedItems === 1 ? 'item não foi copiado' : 'itens não foram copiados'} porque o produto ou sua composição não está disponível no catálogo.</p>}
         {customerOrderSuggestion.preservedFields.length > 0 && <p>Preservei suas alterações em: {customerOrderSuggestion.preservedFields.join(', ')}.</p>}
@@ -1586,7 +1586,7 @@ export function NewOrderPage() {
             </div>
             {hasComboOrderItems && customComboOrderCapability === 'unavailable' && <p className="section-footnote form-message-warning" role="status">A personalização por pedido ainda não está ativa neste servidor. Pedidos usarão as composições cadastradas no Catálogo.</p>}
             {hasComboOrderItems && customComboOrderCapability === 'unknown' && <div className="section-footnote form-message-warning" role="status">
-              <p>Não foi possível confirmar se o servidor aceita composições personalizadas. Para evitar baixa de estoque diferente do conteúdo exibido, os combos usarão a composição do Catálogo.</p>
+              <p>Não foi possível confirmar se dá para mudar os produtos deste combo. O pedido usará os produtos cadastrados no Catálogo.</p>
               <button className="text-button" disabled={customComboCapabilityChecking} onClick={() => void recheckCustomComboOrderCapability()} type="button">{customComboCapabilityChecking ? 'Verificando suporte…' : 'Verificar novamente'}</button>
             </div>}
             {products.length === 0 ? <p className="inline-state">Não há produtos ativos com preço de venda. <Link to="/catalogo">Abrir catálogo</Link></p> : (
@@ -1629,7 +1629,7 @@ export function NewOrderPage() {
                               ? <button aria-expanded={Boolean(item.compositionOpen)} className="text-button" disabled={disabled} onClick={() => toggleComboComposition(item)} type="button">{item.compositionOpen ? 'Ocultar composição' : customized ? 'Editar composição' : 'Personalizar cesta'}</button>
                               : <span className="neutral-status">Usar padrão do catálogo</span>}
                           </div>
-                          {compositionDiffersFromCatalog && customComboOrderCapability !== 'available' && <p className="section-footnote form-message-warning" role="alert">Este rascunho mostra uma composição diferente da cadastrada no Catálogo, e o servidor não confirmou que consegue salvar esse ajuste. Use “Descartar ajustes e voltar ao padrão” antes de salvar.</p>}
+                          {compositionDiffersFromCatalog && customComboOrderCapability !== 'available' && <p className="section-footnote form-message-warning" role="alert">Este pedido tem produtos diferentes dos cadastrados no Catálogo, e o sistema não confirmou se consegue salvar a mudança. Use “Descartar ajustes e voltar ao padrão” antes de salvar.</p>}
                           {customComboOrderCapability !== 'available' && compositionDiffersFromCatalog && !item.compositionOpen && <button className="text-button" disabled={disabled} onClick={() => resetComboComposition(item)} type="button">Descartar ajustes e voltar ao padrão</button>}
                           {!item.compositionOpen && <p className="section-footnote">{customized ? 'Composição personalizada neste pedido.' : composition.length > 0 ? `Usando a composição padrão com ${composition.length} ${composition.length === 1 ? 'produto' : 'produtos'}.` : 'Esta cesta ainda não tem composição padrão; adicione os produtos que farão parte dela.'}</p>}
                           {item.compositionOpen && <>
@@ -1692,7 +1692,7 @@ export function NewOrderPage() {
           </section>
 
           <section className="surface-panel record-form" aria-labelledby="order-installments-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO DO CLIENTE</p><h2 id="order-installments-heading">{paymentPlanMode === 'monthly' ? `${installmentCount || '—'} parcelas mensais` : paymentPlanMode === 'custom' ? 'Cronograma personalizado' : 'Pagamento único'}</h2></div></div>
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">03 · PAGAMENTO DO CLIENTE</p><h2 id="order-installments-heading">{paymentPlanMode === 'monthly' ? `${installmentCount || '—'} parcelas mensais` : paymentPlanMode === 'custom' ? 'Parcelas personalizadas' : 'Pagar de uma vez'}</h2></div></div>
             <div className="order-payment-mode-selector" role="group" aria-label="Como o cliente vai pagar">
               <button aria-pressed={paymentPlanMode === 'once'} className="order-payment-mode" disabled={disabled} onClick={() => {
                 if (paymentPlanMode === 'custom') {
@@ -1732,7 +1732,7 @@ export function NewOrderPage() {
               {paymentPlanMode === 'monthly' && <label className="record-field"><span className="field-label">Quantidade de parcelas</span>
                 <input className="text-input" disabled={disabled} inputMode="numeric" max="120" min="2" onChange={(event) => setInstallmentCount(event.target.value)} type="number" value={installmentCount} />
               </label>}
-              <label className="record-field"><span className="field-label">{paymentPlanMode === 'monthly' ? 'Vencimento da 1ª parcela' : 'Vencimento'}</span>
+              <label className="record-field"><span className="field-label">{paymentPlanMode === 'monthly' ? 'Data da 1ª parcela' : 'Data de pagamento'}</span>
                 <input className="text-input" disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.baseDate = true; setScheduleBaseDate(event.target.value); setScheduleTemplateMessage(null); setFormError(null) }} type="date" value={scheduleBaseDate} />
               </label>
               <label className="record-field"><span className="field-label">Forma de pagamento <span className="field-optional">opcional · vale para todas</span></span>
@@ -1743,15 +1743,15 @@ export function NewOrderPage() {
               ? `Valor automático: ${Number.isSafeInteger(totalCents) && totalCents > 0 ? formatBRL(totalCents) : 'o total do pedido'}. O pedido não será marcado como recebido.`
               : paymentPlanMode === 'monthly'
                 ? 'Os valores são divididos automaticamente pelo total; centavos restantes ficam na última parcela. Alterar itens ou total recalcula as parcelas.'
-                : 'Confira as parcelas e os vencimentos personalizados abaixo. A soma precisa fechar o total do pedido.'}</p>
+                : 'Confira as parcelas e as datas de pagamento abaixo. A soma precisa ser igual ao total do pedido.'}</p>
             {paymentPlanMode === 'monthly' && !automaticMonthlyInstallments && <p className="form-message form-message-error" role="alert">Informe de 2 a 120 parcelas, uma data válida e um total que cubra ao menos R$ 0,01 por parcela.</p>}
             {scheduleTemplateLoadError && <p className="form-message form-message-warning" role="status">{scheduleTemplateLoadError}</p>}
             {(paymentPlanMode === 'once' || paymentPlanMode === 'monthly') && <div className="order-payment-preview" aria-live="polite">
               <strong>{paymentPlanMode === 'once' ? Number.isSafeInteger(totalCents) && totalCents > 0 ? formatBRL(totalCents) : '—' : automaticMonthlyInstallments?.length === 1 ? formatBRL(parseBrazilianCurrency(automaticMonthlyInstallments[0].amount) ?? 0) : automaticMonthlyInstallments ? `${formatBRL(parseBrazilianCurrency(automaticMonthlyInstallments[0].amount) ?? 0)} por parcela` : '—'}</strong>
-              <span>{paymentPlanMode === 'once' ? `1 pagamento · vencimento ${isCalendarDate(scheduleBaseDate) ? formatBusinessDate(scheduleBaseDate) : 'a definir'}` : `${installmentCount || '—'} vencimentos mensais · total do pedido dividido automaticamente`}</span>
+              <span>{paymentPlanMode === 'once' ? `1 pagamento · ${isCalendarDate(scheduleBaseDate) ? formatBusinessDate(scheduleBaseDate) : 'data a definir'}` : `${installmentCount || '—'} parcelas mensais · total do pedido dividido automaticamente`}</span>
             </div>}
             <details className="order-payment-advanced">
-              <summary>Mais opções de vencimento</summary>
+              <summary>Mais opções de pagamento</summary>
               <div className="record-form-actions">
                 {paymentPlanMode !== 'custom' && <button className="button button-secondary" disabled={disabled} onClick={() => {
                   setInstallments(paymentInstallments.map((installment) => ({ ...installment })))
@@ -1760,7 +1760,7 @@ export function NewOrderPage() {
                   setSelectedScheduleTemplateId('')
                 }} type="button">Ajustar parcelas manualmente</button>}
               </div>
-              {scheduleTemplates.length > 0 && <div className="record-form-grid order-adjustments" aria-label="Aplicar modelo de vencimentos">
+              {scheduleTemplates.length > 0 && <div className="record-form-grid order-adjustments" aria-label="Aplicar modelo de pagamento">
                 <label className="record-field"><span className="field-label">Modelo salvo</span>
                   <select className="text-input" disabled={disabled} onChange={(event) => { const nextId = event.target.value; customerPrefillManualRef.current.installments = true; autoScheduleRef.current = Boolean(nextId); setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); setSelectedScheduleTemplateId(nextId); setScheduleTemplateError(null); setScheduleTemplateMessage(null) }} value={selectedScheduleTemplateId}>
                     <option value="">Selecione um modelo</option>
@@ -1769,12 +1769,12 @@ export function NewOrderPage() {
                 </label>
                 <div className="record-form-actions record-field-wide">
                   <button className="button button-secondary" disabled={disabled || !selectedScheduleTemplateId} onClick={() => { customerPrefillManualRef.current.installments = true; setCustomerPaymentPattern(null); setCustomerOrderSuggestion((current) => current ? { ...current, installmentStatus: 'chosen_other' } : current); applyScheduleTemplate() }} type="button">Aplicar modelo</button>
-                  <span className="section-footnote">Os vencimentos do modelo são recalculados para este pedido.</span>
+                  <span className="section-footnote">As datas e valores do modelo serão ajustados a este pedido.</span>
                 </div>
               </div>}
               {paymentPlanMode === 'custom' && <>
                 <div className="record-form-actions"><button className="text-button" disabled={disabled} onClick={() => setPaymentPlanMode('once')} type="button">Voltar para pagamento automático</button>
-                  <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: installmentPaymentMethod }])} type="button"><Icon name="plus" /> Adicionar vencimento</button>
+                  <button className="button button-secondary" disabled={disabled || installments.length >= 120} onClick={() => setInstallments((current) => [...current, { key: newKey(), amount: '', dueOn: '', paymentMethod: installmentPaymentMethod }])} type="button"><Icon name="plus" /> Adicionar parcela</button>
                 </div>
                 <div className="order-draft-list">
                   {installments.map((installment, index) => (
@@ -1782,23 +1782,23 @@ export function NewOrderPage() {
                       <label className="record-field order-money-field"><span className="field-label">Valor da parcela {index + 1} <span aria-hidden="true">*</span></span>
                         <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => updateInstallment(installment.key, { amount: event.target.value })} placeholder="0,00" value={installment.amount} />
                       </label>
-                      <label className="record-field order-date-field"><span className="field-label">Vencimento <span aria-hidden="true">*</span></span>
+                      <label className="record-field order-date-field"><span className="field-label">Data de pagamento <span aria-hidden="true">*</span></span>
                         <input className="text-input" disabled={disabled} onChange={(event) => updateInstallment(installment.key, { dueOn: event.target.value })} type="date" value={installment.dueOn} />
                       </label>
                       <label className="record-field order-method-field"><span className="field-label">Forma de pagamento <span className="field-optional">opcional</span></span>
                         <input className="text-input" disabled={disabled} maxLength={64} onChange={(event) => updateInstallment(installment.key, { paymentMethod: event.target.value })} placeholder="Ex.: Pix, dinheiro, boleto" value={installment.paymentMethod} />
                       </label>
-                      <button aria-label={`Remover vencimento ${index + 1}`} className="text-button order-remove-button" disabled={disabled || installments.length === 1} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setInstallments((current) => current.filter((row) => row.key !== installment.key)) }} type="button">Remover</button>
+                      <button aria-label={`Remover data de pagamento ${index + 1}`} className="text-button order-remove-button" disabled={disabled || installments.length === 1} onClick={() => { autoScheduleRef.current = false; customerPrefillManualRef.current.installments = true; setInstallments((current) => current.filter((row) => row.key !== installment.key)) }} type="button">Remover</button>
                     </div>
                   ))}
                 </div>
               </>}
               {!scheduleTemplateLoadError && <div className="record-form-grid order-adjustments">
-                <label className="record-field"><span className="field-label">Nome para salvar este cronograma</span>
-                  <input className="text-input" disabled={disabled || templateSaving} maxLength={80} onChange={(event) => setNewTemplateName(event.target.value)} placeholder="Ex.: entrada e saldo em 30 dias" value={newTemplateName} />
+                <label className="record-field"><span className="field-label">Nome deste modelo</span>
+                  <input className="text-input" disabled={disabled || templateSaving} maxLength={80} onChange={(event) => setNewTemplateName(event.target.value)} placeholder="Ex.: entrada e restante em 30 dias" value={newTemplateName} />
                 </label>
                 <div className="record-form-actions record-field-wide">
-                  <button className="button button-secondary" disabled={disabled || templateSaving || Boolean(scheduleTemplateLoadError) || !newTemplateName.trim()} onClick={() => void saveScheduleTemplate()} type="button">{templateSaving ? 'Salvando modelo…' : 'Salvar cronograma como modelo'}</button>
+                  <button className="button button-secondary" disabled={disabled || templateSaving || Boolean(scheduleTemplateLoadError) || !newTemplateName.trim()} onClick={() => void saveScheduleTemplate()} type="button">{templateSaving ? 'Salvando modelo…' : 'Salvar como modelo'}</button>
                 </div>
               </div>}
               {scheduleTemplateMessage && <p className="form-message form-message-success" role="status">{scheduleTemplateMessage}</p>}
@@ -1814,7 +1814,7 @@ export function NewOrderPage() {
             <button className="button button-primary" disabled={saving || customerPrefillLoading || customerSearchPending || (!uncertain && (customers.length === 0 || products.length === 0))} type="submit">
               {saving ? 'Salvando pedido…' : customerPrefillLoading ? 'Buscando pedido anterior…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Criar pedido'}
             </button>
-            <span className="section-footnote">O sistema registra os vencimentos, mas não cobra nem marca pagamentos como recebidos automaticamente.</span>
+            <span className="section-footnote">O sistema mostra as datas, mas não cobra nem confirma pagamentos sozinho.</span>
           </div>
         </form>
       )}

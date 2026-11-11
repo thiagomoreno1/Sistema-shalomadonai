@@ -403,7 +403,7 @@ export function SettingsPage() {
           <span className="neutral-status">1 ativa</span>
         </div>
         <ul className="settings-automation-list">
-          <li><span><strong>Baixa de estoque</strong><small>Automática no despacho ou na retirada confirmada.</small></span><span className="connected-status"><span className="connected-dot" /> Ativa</span></li>
+          <li><span><strong>Atualização do estoque</strong><small>Automática quando o pedido sai para entrega ou é retirado.</small></span><span className="connected-status"><span className="connected-dot" /> Ativa</span></li>
           <li><span><strong>Mensagens pelo WhatsApp</strong><small>Aguardando a conexão do canal.</small></span><span className="neutral-status">Pendente</span></li>
           <li><span><strong>Avisos e lembretes</strong><small>Regras serão definidas antes de ativar.</small></span><span className="neutral-status">Não configurado</span></li>
         </ul>

@@ -73,7 +73,7 @@ export function FollowUpsPage() {
 
       if (taskResult.error || customerResult.error) {
         setTaskLinksError(false)
-        setError('Não foi possível carregar os retornos. Tente novamente.')
+        setError('Não foi possível carregar os lembretes. Tente novamente.')
         return
       }
       const taskRows = (taskResult.data ?? []) as Omit<FollowUp, 'customerName' | 'relatedOrderId'>[]
@@ -118,7 +118,7 @@ export function FollowUpsPage() {
       }
     } catch {
       setTaskLinksError(false)
-      setError('Não foi possível carregar os retornos. Tente novamente.')
+      setError('Não foi possível carregar os lembretes. Tente novamente.')
     } finally {
       setLoading(false)
     }
@@ -201,7 +201,7 @@ export function FollowUpsPage() {
     const title = String(form.get('title') ?? '').trim()
     const dueOn = String(form.get('due_on') ?? '').trim()
     if (!title || !dueOn) {
-      setSaveError('Informe o próximo passo e a data do retorno.')
+      setSaveError('Diga o que precisa fazer e quando quer ser lembrado.')
       return
     }
     setSaving(true)
@@ -215,14 +215,14 @@ export function FollowUpsPage() {
         priority: String(form.get('priority') ?? 'normal'),
       })
       if (insertError) {
-        setSaveError('Não foi possível salvar o retorno. Seus dados continuam no formulário; tente novamente.')
+        setSaveError('Não foi possível salvar o lembrete. Os dados continuam no formulário; tente de novo.')
         return
       }
       formElement.reset()
       setShowForm(false)
       await loadTasks()
     } catch {
-      setSaveError('Não foi possível salvar o retorno. Seus dados continuam no formulário; tente novamente.')
+      setSaveError('Não foi possível salvar o lembrete. Os dados continuam no formulário; tente de novo.')
     } finally {
       setSaving(false)
     }
@@ -235,13 +235,13 @@ export function FollowUpsPage() {
         .update({ status, closed_at: currentTimestamp() })
         .eq('business_id', businessId).eq('id', taskId)
       if (updateError) {
-        setActionError('Não foi possível atualizar o retorno. A fila continua disponível; tente novamente.')
+        setActionError('Não foi possível atualizar o lembrete. Tente de novo.')
         return
       }
       setTasks((current) => current.filter((task) => task.id !== taskId))
       setActionError(null)
     } catch {
-      setActionError('Não foi possível atualizar o retorno. A fila continua disponível; tente novamente.')
+      setActionError('Não foi possível atualizar o lembrete. Tente de novo.')
     }
   }
 
@@ -297,8 +297,8 @@ export function FollowUpsPage() {
   return (
     <div className="page-stack">
       <header className="page-heading">
-        <div><p className="eyebrow">ATENDIMENTO</p><h1>Atendimento</h1><p className="page-description">Ligações registradas manualmente e próximos passos.</p></div>
-        <div className="record-heading-actions"><button className="button button-secondary" onClick={() => { setShowCallForm((value) => !value); setCallError(null) }} type="button"><Icon name="phone" /> {showCallForm ? 'Fechar ligação' : 'Registrar ligação'}</button><button className="button button-primary" onClick={() => { setShowForm((value) => !value); setSaveError(null) }} type="button"><Icon name="plus" /> {showForm ? 'Fechar' : 'Novo retorno'}</button></div>
+        <div><p className="eyebrow">ATENDIMENTO</p><h1>Atendimento</h1><p className="page-description">Ligações e lembretes para falar com os clientes.</p></div>
+        <div className="record-heading-actions"><button className="button button-secondary" onClick={() => { setShowCallForm((value) => !value); setCallError(null) }} type="button"><Icon name="phone" /> {showCallForm ? 'Fechar ligação' : 'Registrar ligação'}</button><button className="button button-primary" onClick={() => { setShowForm((value) => !value); setSaveError(null) }} type="button"><Icon name="plus" /> {showForm ? 'Fechar' : 'Novo lembrete'}</button></div>
       </header>
 
       {showCallForm && (
@@ -309,11 +309,11 @@ export function FollowUpsPage() {
             <label className="record-field"><span className="field-label">Direção</span><select className="text-input" name="direction"><option value="outgoing">Realizada pelo negócio</option><option value="incoming">Recebida do cliente</option></select></label>
             <label className="record-field"><span className="field-label">Resultado da ligação</span><select className="text-input" defaultValue="answered" name="call_outcome" required><option value="answered">Atendida</option><option value="missed">Não atendida</option><option value="other">Outro resultado</option></select></label>
             <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">padrão: agora · horário de Brasília · alterável</span></span><input className="text-input" defaultValue={businessDateTimeInputValue()} name="occurred_at" type="datetime-local" /></label>
-            <label className="record-field record-field-wide"><span className="field-label">Próximo passo <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" /></label>
-            <label className="record-field"><span className="field-label">Data do retorno <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="follow_up_due_on" type="date" /></label>
-            <label className="record-field"><span className="field-label">Prioridade do retorno</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
+            <label className="record-field record-field-wide"><span className="field-label">O que fazer <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" /></label>
+            <label className="record-field"><span className="field-label">Lembrar em <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="follow_up_due_on" type="date" /></label>
+            <label className="record-field"><span className="field-label">Prioridade do lembrete</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
           </div>
-          <p className="section-footnote">Chamadas não são importadas do celular. Uma ligação não atendida cria automaticamente um retorno para hoje, com prioridade alta.</p>
+          <p className="section-footnote">Chamadas não são importadas do celular. Uma ligação não atendida cria um lembrete para hoje.</p>
           {callError && <p className="form-message form-message-error" role="alert">{callError}</p>}
           <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar ligação'}</button>
         </form>
@@ -321,29 +321,29 @@ export function FollowUpsPage() {
 
       {showForm && (
         <form className="surface-panel record-form" onSubmit={handleCreateTask}>
-          <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETE MANUAL</p><h2>Novo retorno</h2></div></div>
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETE</p><h2>Novo lembrete</h2></div></div>
           <div className="record-form-grid">
-            <label className="record-field record-field-wide"><span className="field-label">Próximo passo *</span><input autoFocus className="text-input" maxLength={240} name="title" required /></label>
-            <label className="record-field"><span className="field-label">Data do retorno * <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="due_on" required type="date" /></label>
+            <label className="record-field record-field-wide"><span className="field-label">O que fazer *</span><input autoFocus className="text-input" maxLength={240} name="title" required /></label>
+            <label className="record-field"><span className="field-label">Lembrar em * <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="due_on" required type="date" /></label>
             <label className="record-field"><span className="field-label">Prioridade</span><select className="text-input" name="priority"><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
-            <label className="record-field record-field-wide"><span className="field-label">Cliente <span className="field-optional">opcional</span></span><select className="text-input" defaultValue="" name="customer_id"><option value="">Sem cliente vinculado</option>{customers.filter((customer) => customer.is_active).map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
+            <label className="record-field record-field-wide"><span className="field-label">Cliente <span className="field-optional">opcional</span></span><select className="text-input" defaultValue="" name="customer_id"><option value="">Nenhum cliente escolhido</option>{customers.filter((customer) => customer.is_active).map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
           </div>
           {saveError && <p className="form-message form-message-error" role="alert">{saveError}</p>}
-          <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar retorno'}</button>
+          <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar lembrete'}</button>
         </form>
       )}
 
       <WhatsAppCallEventsCard />
 
       <section className="surface-panel record-panel" aria-labelledby="follow-up-list-title">
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">FILA DE ATENDIMENTO</p><h2 id="follow-up-list-title">Pendentes</h2></div><span className="neutral-status">{tasks.length} {tasks.length === 1 ? 'retorno' : 'retornos'}</span></div>
-        {overdueCount > 0 && <p className="form-message form-message-warning" role="status">{overdueCount} {overdueCount === 1 ? 'retorno está' : 'retornos estão'} atrasado(s).</p>}
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETES</p><h2 id="follow-up-list-title">Pendentes</h2></div><span className="neutral-status">{tasks.length} {tasks.length === 1 ? 'lembrete' : 'lembretes'}</span></div>
+        {overdueCount > 0 && <p className="form-message form-message-warning" role="status">{overdueCount} {overdueCount === 1 ? 'lembrete está' : 'lembretes estão'} atrasado(s).</p>}
         {actionError && <p className="form-message form-message-error" role="alert">{actionError}</p>}
-        {taskLinksError && <div className="inline-state inline-state-error" role="alert"><p>A fila foi carregada, mas alguns links de pedido não puderam ser carregados. Os retornos continuam disponíveis; tente atualizar os vínculos.</p><button className="text-button" disabled={retryingTaskLinks} onClick={() => void retryTaskLinks()} type="button">{retryingTaskLinks ? 'Atualizando vínculos…' : 'Tentar carregar links de pedido'}</button></div>}
-        {loading && <p className="inline-state" aria-live="polite">Carregando retornos…</p>}
+        {taskLinksError && <div className="inline-state inline-state-error" role="alert"><p>A fila abriu, mas alguns pedidos relacionados não apareceram. Tente atualizar os pedidos.</p><button className="text-button" disabled={retryingTaskLinks} onClick={() => void retryTaskLinks()} type="button">{retryingTaskLinks ? 'Atualizando…' : 'Atualizar pedidos'}</button></div>}
+        {loading && <p className="inline-state" aria-live="polite">Carregando lembretes…</p>}
         {!loading && error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => { setLoading(true); void loadTasks() }} type="button">Tentar novamente</button></div>}
         {!loading && !error && tasks.length === 0 && (
-          <div className="module-empty-panel record-empty"><span className="empty-icon"><Icon name="check" /></span><h2>Nenhum retorno pendente</h2><p>Registre contatos e próximos passos nos cadastros de clientes ou crie um lembrete manual.</p><Link className="button button-secondary" to="/clientes">Abrir clientes</Link></div>
+          <div className="module-empty-panel record-empty"><span className="empty-icon"><Icon name="check" /></span><h2>Nenhum lembrete pendente</h2><p>Crie um lembrete para falar com um cliente depois.</p><Link className="button button-secondary" to="/clientes">Ver clientes</Link></div>
         )}
         {!loading && !error && tasks.length > 0 && (
           <ul className="follow-up-list">
@@ -352,7 +352,7 @@ export function FollowUpsPage() {
               return (
                 <li className={overdue ? 'follow-up-item is-overdue' : 'follow-up-item'} key={task.id}>
                   <span className="follow-up-date"><Icon name="clock" /><strong>{formatBusinessDate(task.due_on)}</strong><small>{overdue ? 'Atrasado' : task.due_on === today ? 'Hoje' : 'Agendado'}</small></span>
-                  <span className="follow-up-copy"><strong>{task.title}</strong><small>{task.customerName ? <Link to={`/clientes/${task.customer_id}`}>{task.customerName}</Link> : 'Sem cliente vinculado'} · Prioridade {task.priority === 'high' ? 'alta' : task.priority === 'low' ? 'baixa' : 'normal'}{task.relatedOrderId && <> · <Link to={`/pedidos/${task.relatedOrderId}`}>Abrir pedido</Link></>}</small></span>
+                  <span className="follow-up-copy"><strong>{task.title}</strong><small>{task.customerName ? <Link to={`/clientes/${task.customer_id}`}>{task.customerName}</Link> : 'Nenhum cliente escolhido'} · Prioridade {task.priority === 'high' ? 'alta' : task.priority === 'low' ? 'baixa' : 'normal'}{task.relatedOrderId && <> · <Link to={`/pedidos/${task.relatedOrderId}`}>Abrir pedido</Link></>}</small></span>
                   <span className="follow-up-actions"><button className="text-button" onClick={() => void closeTask(task.id, 'completed')} type="button">Concluir</button><button className="text-button follow-up-cancel" onClick={() => void closeTask(task.id, 'cancelled')} type="button">Cancelar</button></span>
                 </li>
               )

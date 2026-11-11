@@ -56,7 +56,7 @@ type LocationState = { successMessage?: string } | null
 
 const deliveryStatusLabels: Record<DeliveryStatus, string> = {
   awaiting_separation: 'Aguardando separação',
-  ready: 'Pronta para despacho',
+  ready: 'Pronta para sair',
   dispatched: 'Em rota',
   delivered: 'Entregue',
   attempted: 'Entrega não concluída',
@@ -172,7 +172,7 @@ export function OrderDetailPage() {
       ])
       const failedRead = [
         { label: 'os produtos do pedido', error: linesResult.error },
-        { label: 'o cronograma de pagamento do pedido', error: installmentsResult.error },
+        { label: 'as parcelas do pedido', error: installmentsResult.error },
         { label: 'os pagamentos recebidos', error: paymentsResult.error },
         { label: 'o histórico do pedido', error: eventsResult.error },
         { label: 'os itens das cestas', error: componentsResult.error },
@@ -341,7 +341,7 @@ export function OrderDetailPage() {
           .eq('business_id', businessId)
           .in('product_id', productIds)
         if (balanceError) {
-          setPickupError('Não foi possível conferir os saldos atuais. Tente conferir novamente antes de confirmar a retirada.')
+          setPickupError('Não foi possível conferir as quantidades no estoque. Tente de novo antes de confirmar a retirada.')
           return
         }
         balances = (data ?? []) as Array<{ product_id: string; quantity_on_hand: number }>
@@ -365,7 +365,7 @@ export function OrderDetailPage() {
       setPickupWarnings(previewItems.filter((item) => item.projected < 0))
       setPickupPreviewReady(true)
     } catch {
-      setPickupError('Não foi possível conferir os saldos atuais. Tente conferir novamente antes de confirmar a retirada.')
+      setPickupError('Não foi possível conferir as quantidades no estoque. Tente de novo antes de confirmar a retirada.')
     } finally {
       setPickupPreviewLoading(false)
     }
@@ -406,7 +406,7 @@ export function OrderDetailPage() {
         if (status >= 400 && status < 500) {
           pickupRequestIdRef.current = newRequestId()
           setPickupUncertain(false)
-          setPickupError('A retirada não foi registrada. Atualize o pedido e confira se ele continua elegível antes de tentar novamente.')
+          setPickupError('A retirada não foi registrada. Atualize o pedido e confira se ainda está aberto antes de tentar de novo.')
           await loadDetail(false)
         } else {
           setPickupUncertain(true)
@@ -444,14 +444,14 @@ export function OrderDetailPage() {
       return
     }
     if (selectedAllocations.length === 0 || selectedAllocationTotal !== parsedPaymentAmount) {
-      setPaymentError('Distribua o valor recebido manualmente. A soma das destinações deve ser igual ao recebimento.')
+      setPaymentError('Informe quanto deste pagamento vai para cada parcela. A soma deve ser igual ao valor recebido.')
       return
     }
     for (const allocation of selectedAllocations) {
       const installment = installments.find((candidate) => candidate.id === allocation.installment_id)
       const balance = installment ? installment.amount_cents - (paidByInstallment.get(installment.id) ?? 0) : 0
       if (!installment || allocation.amount_cents > balance) {
-        setPaymentError('Uma destinação excede o saldo do vencimento. Confira os valores atuais e tente novamente.')
+        setPaymentError('O valor informado é maior do que falta pagar nesta parcela. Confira e tente de novo.')
         return
       }
     }
@@ -481,7 +481,7 @@ export function OrderDetailPage() {
         if (rpcStatus >= 400 && rpcStatus < 500) {
           paymentRequestIdRef.current = newRequestId()
           setPaymentUncertain(false)
-          setPaymentError('O recebimento não foi registrado. Confira os saldos atuais e os dados informados; depois tente novamente.')
+          setPaymentError('O pagamento não foi salvo. Confira os valores e tente de novo.')
           await loadDetail(false)
         } else {
           setPaymentUncertain(true)
@@ -547,7 +547,7 @@ export function OrderDetailPage() {
       })
       if (rpcError) {
         setActionError(rpcError.message.includes('order_delete_has_side_effects')
-          ? 'Este pedido já tem pagamento, movimentação de estoque, entrega avançada ou vínculo com atendimento. Ele foi preservado; use o cancelamento quando permitido.'
+          ? 'Este pedido já tem pagamento, saída de produto ou entrega em andamento. Para encerrar, use Cancelar pedido.'
           : 'Não foi possível excluir o pedido. Atualize o histórico e tente novamente.')
         await loadDetail(false)
         return
@@ -608,7 +608,7 @@ export function OrderDetailPage() {
       {showDeleteForm && deleteEligible && (
         <form className="surface-panel record-form order-delete-form" onSubmit={handleDeleteSubmit}>
           <p className="eyebrow">EXCLUSÃO DEFINITIVA</p><h2>Apagar este pedido?</h2>
-          <p className="section-footnote">O pedido e os registros de planejamento serão removidos. Só é permitido apagar antes de haver pagamento, baixa de estoque, retirada, entrega avançada ou vínculo com atendimento/WhatsApp.</p>
+          <p className="section-footnote">Só dá para apagar antes de receber pagamentos, retirar produtos ou começar a entrega.</p>
           <div className="record-form-actions"><button className="button button-secondary order-delete-confirm" disabled={deleteSaving} type="submit">{deleteSaving ? 'Excluindo…' : 'Apagar pedido definitivamente'}</button><button className="text-button" disabled={deleteSaving} onClick={() => setShowDeleteForm(false)} type="button">Manter pedido</button></div>
         </form>
       )}
@@ -623,14 +623,14 @@ export function OrderDetailPage() {
             <label className="record-field"><span className="field-label">Forma informada <span className="field-optional">texto opcional</span></span><input className="text-input" disabled={paymentSaving || paymentUncertain} maxLength={64} onChange={(event) => setPaymentMethod(event.target.value)} placeholder="Ex.: Pix, dinheiro, transferência" value={paymentMethod} /></label>
           </div>
           <div className="order-allocation-panel">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">DESTINAÇÃO DO RECEBIMENTO</p><h3>Como o valor se distribui</h3></div><span className="neutral-status">{formatBRL(selectedAllocationTotal)}</span></div>
-          <button className="button button-secondary" disabled={paymentSaving || paymentUncertain} onClick={suggestOldestFirstAllocation} type="button">Sugerir por vencimento, mais antigas primeiro</button>
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">PAGAMENTOS</p><h3>Como o cliente pagou</h3></div><span className="neutral-status">{formatBRL(selectedAllocationTotal)}</span></div>
+          <button className="button button-secondary" disabled={paymentSaving || paymentUncertain} onClick={suggestOldestFirstAllocation} type="button">Pagar primeiro as parcelas mais antigas</button>
             {installments.map((installment) => {
               const balance = installment.amount_cents - (paidByInstallment.get(installment.id) ?? 0)
               if (balance <= 0) return null
               return <label className="order-allocation-row" key={installment.id}>
-                <span><strong>Vencimento {installment.installment_number}</strong><small>{formatBusinessDate(installment.due_on)} · saldo {formatBRL(balance)}</small></span>
-                <span className="order-allocation-input"><span className="visually-hidden">Valor destinado ao vencimento {installment.installment_number}</span><input className="text-input" disabled={paymentSaving || paymentUncertain} inputMode="decimal" onChange={(event) => setAllocationDraft((current) => ({ ...current, [installment.id]: event.target.value }))} placeholder="0,00" value={allocationDraft[installment.id] ?? ''} /></span>
+                <span><strong>Parcela {installment.installment_number}</strong><small>{formatBusinessDate(installment.due_on)} · falta pagar {formatBRL(balance)}</small></span>
+                <span className="order-allocation-input"><span className="visually-hidden">Valor pago nesta parcela {installment.installment_number}</span><input className="text-input" disabled={paymentSaving || paymentUncertain} inputMode="decimal" onChange={(event) => setAllocationDraft((current) => ({ ...current, [installment.id]: event.target.value }))} placeholder="0,00" value={allocationDraft[installment.id] ?? ''} /></span>
               </label>
             })}
             <p className={`order-schedule-total ${allocationComplete ? 'order-schedule-match' : ''}`} aria-live="polite">
@@ -660,14 +660,14 @@ export function OrderDetailPage() {
 
       {showPickupForm && order.status === 'open' && !order.requires_delivery && !pickupEvent && <form className="surface-panel record-form" onSubmit={(event) => void handlePickupSubmit(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">CONFIRMAÇÃO DE ENTREGA</p><h2 ref={pickupHeadingRef} tabIndex={-1}>Registrar retirada pelo cliente</h2></div><button className="text-button" disabled={pickupSaving || pickupPreviewLoading} onClick={closePickupForm} type="button">Fechar</button></div>
-        <p className="section-footnote">A confirmação baixa do estoque somente os itens com controle configurado. Confira as quantidades e os saldos atuais antes de concluir.</p>
-        {pickupPreviewLoading ? <p className="inline-state" aria-live="polite">Conferindo saldo atual…</p> : null}
-        {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length === 0 && <p className="section-footnote">Este pedido não contém itens com estoque configurado. A retirada será registrada no histórico sem movimentação de estoque.</p>}
-        {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length > 0 && <ul className="pickup-stock-preview" aria-label="Itens controlados e saldos previstos">
+        <p className="section-footnote">Ao confirmar, os produtos saem do estoque. Confira as quantidades antes de concluir.</p>
+        {pickupPreviewLoading ? <p className="inline-state" aria-live="polite">Conferindo estoque…</p> : null}
+        {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length === 0 && <p className="section-footnote">Este pedido não tem produtos no estoque. A retirada ficará no histórico.</p>}
+        {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length > 0 && <ul className="pickup-stock-preview" aria-label="Produtos e quantidades no estoque">
           {pickupPreviewItems.map((item) => <li className={item.projected < 0 ? 'pickup-stock-short' : ''} key={item.product_id}><span><strong>{item.product_name}</strong><small>Disponível {formatQuantity(item.available)} {item.inventory_unit} · quantidade do pedido {formatQuantity(item.needed)} {item.inventory_unit}</small></span><span><small>Após a retirada</small><strong>{formatQuantity(item.projected)} {item.inventory_unit}</strong></span></li>)}
         </ul>}
-        {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length > 0 && pickupWarnings.length === 0 && <p className="form-message form-message-success" role="status">Os saldos consultados cobrem as quantidades controladas. A operação final será conferida novamente e ficará no histórico.</p>}
-        {!pickupPreviewLoading && pickupPreviewReady && pickupWarnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Não há estoque suficiente para esta retirada.</strong><span>A retirada pode continuar; a quantidade ficará abaixo de zero e o aviso será registrado. O estoque pode mudar antes da confirmação.</span></div>}
+        {!pickupPreviewLoading && pickupPreviewReady && pickupPreviewItems.length > 0 && pickupWarnings.length === 0 && <p className="form-message form-message-success" role="status">Há produtos suficientes. O estoque será conferido novamente ao confirmar.</p>}
+        {!pickupPreviewLoading && pickupPreviewReady && pickupWarnings.length > 0 && <div className="form-message form-message-warning" role="status"><strong>Não há produtos suficientes no estoque.</strong><span>A retirada pode continuar e a quantidade ficará abaixo de zero.</span></div>}
         {pickupError && <p className="form-message form-message-error" role="alert">{pickupError}</p>}
         <div className="record-form-actions">{!pickupPreviewReady && !pickupPreviewLoading && <button className="button button-secondary" disabled={pickupSaving} onClick={() => void previewPickupStock()} type="button">Conferir estoque novamente</button>}<button className="button button-primary" disabled={pickupSaving || pickupPreviewLoading || !pickupPreviewReady} type="submit">{pickupSaving ? 'Registrando…' : pickupUncertain ? 'Tentar novamente sem alterar a ação' : pickupWarnings.length > 0 ? 'Confirmar retirada mesmo sem estoque suficiente' : 'Confirmar retirada e atualizar estoque'}</button><button className="text-button" disabled={pickupSaving || pickupPreviewLoading} onClick={closePickupForm} type="button">Manter pedido</button></div>
       </form>}
@@ -675,21 +675,21 @@ export function OrderDetailPage() {
       {order.requires_delivery && <section className="surface-panel record-panel order-delivery-panel" aria-labelledby="order-delivery-heading">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">LOGÍSTICA</p><h2 id="order-delivery-heading">Entrega vinculada</h2></div>{delivery && <span className="delivery-status">{delivery.canceled_at ? 'Cancelada com o pedido' : deliveryStatusLabels[delivery.status]}</span>}</div>
         {!delivery ? <p className="form-message form-message-warning" role="status">Este pedido foi marcado para entrega, mas não há registro de entrega carregado. Atualize o histórico antes de continuar.</p> : <>
-          <dl className="customer-facts order-address-facts"><div><dt>Endereço</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div><div><dt>Entregador</dt><dd>{deliveryWorkerName || 'Sem atribuição'}</dd></div><div><dt>Agendamento</dt><dd>{delivery.scheduled_on ? formatBusinessDate(delivery.scheduled_on) + (delivery.time_window ? ' · ' + delivery.time_window : '') : 'Sem data ou horário definido'}</dd></div><div><dt>Instruções para entrega</dt><dd>{delivery.notes || 'Nenhuma'}</dd></div></dl>
+          <dl className="customer-facts order-address-facts"><div><dt>Endereço</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div><div><dt>Entregador</dt><dd>{deliveryWorkerName || 'Ninguém escolhido'}</dd></div><div><dt>Quando</dt><dd>{delivery.scheduled_on ? formatBusinessDate(delivery.scheduled_on) + (delivery.time_window ? ' · ' + delivery.time_window : '') : 'Sem data ou horário definido'}</dd></div><div><dt>Instruções</dt><dd>{delivery.notes || 'Nenhuma'}</dd></div></dl>
           <div className="record-form-actions"><Link className="button button-secondary" to="/entregas">Abrir fila de entregas</Link>{delivery.dispatched_at && <span className="section-footnote">Despachado em {formatOrderTimestamp(delivery.dispatched_at, true)}</span>}{delivery.delivered_at && <span className="section-footnote">Concluído em {formatOrderTimestamp(delivery.delivered_at, true)}</span>}</div>
-          {deliveryEvents.length > 0 && <ul className="timeline-list order-delivery-history">{deliveryEvents.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Entrega criada' : event.event_type === 'plan_updated' ? 'Horário ou entregador atualizado' : (event.from_status ? deliveryStatusLabels[event.from_status] + ' → ' : '') + deliveryStatusLabels[event.to_status]}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.note && <p>{event.note}</p>}{event.next_step && <p>Próximo passo: {event.next_step}</p>}{event.stock_warnings.length > 0 && <p className="delivery-stock-warning">Estoque abaixo de zero após o despacho: {event.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(warning.quantity_on_hand) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}</ul>}
+          {deliveryEvents.length > 0 && <ul className="timeline-list order-delivery-history">{deliveryEvents.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Entrega criada' : event.event_type === 'plan_updated' ? 'Horário ou entregador atualizado' : (event.from_status ? deliveryStatusLabels[event.from_status] + ' → ' : '') + deliveryStatusLabels[event.to_status]}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.note && <p>{event.note}</p>}{event.next_step && <p>Próximo passo: {event.next_step}</p>}{event.stock_warnings.length > 0 && <p className="delivery-stock-warning">A quantidade ficou abaixo de zero depois que o pedido saiu: {event.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(warning.quantity_on_hand) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}</ul>}
         </>}
       </section>}
 
       <div className="record-detail-grid order-detail-grid">
         <section className="surface-panel record-panel" aria-labelledby="order-lines-heading">
-          <div className="section-heading section-heading-compact"><div><p className="eyebrow">FOTOGRAFIA DO PEDIDO</p><h2 id="order-lines-heading">Produtos registrados</h2></div></div>
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">RESUMO DO PEDIDO</p><h2 id="order-lines-heading">Produtos</h2></div></div>
           {lines.length === 0 ? <p className="inline-state">Nenhum item foi encontrado neste pedido.</p> : <ul className="order-detail-lines">
             {lines.map((line) => {
               const components = componentsByLine.get(line.id) ?? []
               const comboComponents = components.filter((component) => component.product_id !== line.product_id)
               return <li key={line.id}>
-              <span><strong>{line.product_name_snapshot}</strong><small>{formatQuantity(line.quantity)}{line.inventory_unit_snapshot ? ` ${line.inventory_unit_snapshot}` : ''} × {formatBRL(line.unit_price_snapshot_cents)}</small>{comboComponents.length > 0 && <small>Composição registrada: {comboComponents.map((component) => formatQuantity(component.quantity_snapshot) + (component.inventory_unit_snapshot ? ' ' + component.inventory_unit_snapshot : '') + ' ' + component.product_name_snapshot).join(' · ')}</small>}</span>
+              <span><strong>{line.product_name_snapshot}</strong><small>{formatQuantity(line.quantity)}{line.inventory_unit_snapshot ? ` ${line.inventory_unit_snapshot}` : ''} × {formatBRL(line.unit_price_snapshot_cents)}</small>{comboComponents.length > 0 && <small>Inclui: {comboComponents.map((component) => formatQuantity(component.quantity_snapshot) + (component.inventory_unit_snapshot ? ' ' + component.inventory_unit_snapshot : '') + ' ' + component.product_name_snapshot).join(' · ')}</small>}</span>
               <strong>{formatBRL(line.line_total_cents)}</strong>
             </li>
             })}
@@ -704,8 +704,8 @@ export function OrderDetailPage() {
         </section>
 
         <section className="surface-panel record-panel" aria-labelledby="order-installments-detail-heading">
-          <div className="section-heading section-heading-compact"><div><p className="eyebrow">PRAZOS INFORMADOS</p><h2 id="order-installments-detail-heading">Vencimentos</h2></div></div>
-          {installments.length === 0 ? <p className="inline-state">Nenhum vencimento registrado.</p> : <ul className="order-installment-list">
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">PAGAMENTO COMBINADO</p><h2 id="order-installments-detail-heading">Datas de pagamento</h2></div></div>
+          {installments.length === 0 ? <p className="inline-state">Nenhuma data de pagamento registrada.</p> : <ul className="order-installment-list">
             {installments.map((installment) => {
               const paid = paidByInstallment.get(installment.id) ?? 0
               const balance = order.status === 'cancelled' ? 0 : installment.amount_cents - paid
@@ -728,10 +728,10 @@ export function OrderDetailPage() {
             return <li key={payment.id}><span className="timeline-dot" /><div>
               <strong>{formatBRL(payment.amount_cents)} · {formatOrderTimestamp(payment.received_at, true)}</strong>
               <p>{payment.payment_method || 'Forma não informada'}</p>
-              <p>Destinado: {paymentAllocations.map((allocation) => {
+              <p>Usado para pagar: {paymentAllocations.map((allocation) => {
                 const installment = installments.find((candidate) => candidate.id === allocation.installment_id)
-                return `${installment ? `vencimento ${installment.installment_number}` : 'vencimento'} ${formatBRL(allocation.amount_cents)}`
-              }).join(' · ') || 'Nenhuma destinação encontrada'}</p>
+                return `${installment ? `parcela ${installment.installment_number}` : 'parcela'} ${formatBRL(allocation.amount_cents)}`
+              }).join(' · ') || 'Nenhuma parcela encontrada'}</p>
             </div></li>
           })}
         </ul>}

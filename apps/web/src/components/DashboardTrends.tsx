@@ -225,20 +225,20 @@ function RevenueCompositionPanel({ days, loading, error, onRetry, dateRange }: {
 
   return (
     <figure className="surface-panel dashboard-trend-panel dashboard-composition-panel" aria-labelledby={headingId}>
-      <div className="dashboard-trend-heading"><h3 id={headingId}>Composição do faturamento líquido</h3><span>Após descontos</span></div>
-      {loading ? <div className="dashboard-composition-state" role="status"><Icon name="clock" /><p>Carregando a composição…</p></div> : error ? <div className="dashboard-composition-state" role="alert"><Icon name="chart" /><p>Não foi possível carregar a composição do faturamento.</p><button className="text-button" onClick={onRetry} type="button">Tentar novamente</button></div> : missingCostCount > 0 || returnedOrderCount > 0 || productCost === null || grossProfit === null ? <div className="dashboard-composition-state" role="status"><Icon name="chart" /><p>{missingCostCount > 0 ? `Falta informar o custo de ${missingCostCount} item(ns). ` : ''}{returnedOrderCount > 0 ? `${returnedOrderCount} pedido(s) têm devolução sem ajuste financeiro. ` : ''}A divisão entre custo dos produtos e lucro bruto ficará disponível quando os dados forem conferidos.</p></div> : netSales === 0n ? <div className="dashboard-composition-state" role="status"><Icon name="chart" /><p>Nenhuma venda concluída neste período para dividir.</p></div> : grossProfit < 0n ? <div className="dashboard-composition-state" role="status"><Icon name="chart" /><p>O custo dos produtos superou o faturamento líquido em {formatBRLExact(-grossProfit)}. O gráfico de pizza não representa valores negativos.</p></div> : <>
+      <div className="dashboard-trend-heading"><h3 id={headingId}>Como o valor da venda se divide</h3><span>Após descontos</span></div>
+      {loading ? <div className="dashboard-composition-state" role="status"><Icon name="clock" /><p>Carregando valores…</p></div> : error ? <div className="dashboard-composition-state" role="alert"><Icon name="chart" /><p>Não foi possível carregar os valores.</p><button className="text-button" onClick={onRetry} type="button">Tentar novamente</button></div> : missingCostCount > 0 || returnedOrderCount > 0 || productCost === null || grossProfit === null ? <div className="dashboard-composition-state" role="status"><Icon name="chart" /><p>{missingCostCount > 0 ? `Falta informar o custo de ${missingCostCount} item(ns). ` : ''}{returnedOrderCount > 0 ? `${returnedOrderCount} pedido(s) têm devolução sem ajuste financeiro. ` : ''}Informe os custos para ver quanto sobrou.</p></div> : netSales === 0n ? <div className="dashboard-composition-state" role="status"><Icon name="chart" /><p>Nenhuma venda concluída neste período.</p></div> : grossProfit < 0n ? <div className="dashboard-composition-state" role="status"><Icon name="chart" /><p>O custo dos produtos passou o valor da venda em {formatBRLExact(-grossProfit)}. Este gráfico não mostra valores abaixo de zero.</p></div> : <>
         <p className="dashboard-composition-range">{dateRange}</p>
         <div className="dashboard-composition-layout">
           <div className="dashboard-composition-donut" role="img" aria-label={`Composição do faturamento líquido em ${dateRange}: custo dos produtos vendidos ${formatBRLExact(productCost)} (${percentageFormatter.format(costPercentage)} por cento); lucro bruto ${formatBRLExact(grossProfit)} (${percentageFormatter.format(netPercentage)} por cento).`} style={{ background: `conic-gradient(var(--muted) 0 ${costPercentage}%, var(--accent) ${costPercentage}% 100%)` }}>
-            <div><span>Divisão</span><strong>100%</strong><span>do faturamento líquido</span></div>
+            <div><span>Valor da venda</span><strong>100%</strong><span>depois dos descontos</span></div>
           </div>
           <ul className="dashboard-composition-legend">
-            <li><span className="dashboard-composition-key is-cost" aria-hidden="true" /><span><strong>Custo dos produtos vendidos</strong><small>{percentageFormatter.format(costPercentage)}% do faturamento líquido</small></span></li>
-            <li><span className="dashboard-composition-key is-net" aria-hidden="true" /><span><strong>Lucro bruto</strong><small>{percentageFormatter.format(netPercentage)}% do faturamento líquido</small></span></li>
+            <li><span className="dashboard-composition-key is-cost" aria-hidden="true" /><span><strong>Custo dos produtos</strong><small>{percentageFormatter.format(costPercentage)}% do valor da venda</small></span></li>
+            <li><span className="dashboard-composition-key is-net" aria-hidden="true" /><span><strong>Sobra antes das despesas</strong><small>{percentageFormatter.format(netPercentage)}% do valor da venda</small></span></li>
           </ul>
         </div>
       </>}
-      <figcaption className="dashboard-composition-caption">Faturamento líquido = custo dos produtos vendidos + lucro bruto.</figcaption>
+      <figcaption className="dashboard-composition-caption">Valor da venda = custo dos produtos + sobra antes das despesas.</figcaption>
     </figure>
   )
 }
@@ -299,12 +299,12 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
 
       <div className={`dashboard-trends-grid${embedded ? ' is-financial-embedded' : ' is-dashboard-overview'}`} aria-busy={loading}>
         <figure className="surface-panel dashboard-trend-panel" aria-labelledby={salesHeadingId}>
-          <div className="dashboard-trend-heading"><h3 id={salesHeadingId}>Faturamento e custo</h3><span>{revenueUnitLabel}</span></div>
+          <div className="dashboard-trend-heading"><h3 id={salesHeadingId}>Vendas e custo</h3><span>{revenueUnitLabel}</span></div>
           {revenueLoading ? <ChartState loading onRetry={onRetryRevenue} errorMessage="Não foi possível carregar as vendas deste período." /> : revenueError ? <ChartState loading={false} onRetry={onRetryRevenue} errorMessage="Não foi possível carregar as vendas deste período." /> : <>
-            <ul className="dashboard-revenue-legend" aria-label="Legenda do gráfico de faturamento e custo">
-              <li><span className="dashboard-chart-key is-gross-sale" aria-hidden="true" />Faturamento bruto</li>
-              <li><span className="dashboard-chart-key is-sale" aria-hidden="true" />Faturamento líquido</li>
-              <li><span className="dashboard-chart-key is-cost" aria-hidden="true" />Custo dos produtos vendidos</li>
+            <ul className="dashboard-revenue-legend" aria-label="Legenda do gráfico de vendas e custo">
+              <li><span className="dashboard-chart-key is-gross-sale" aria-hidden="true" />Total cobrado</li>
+              <li><span className="dashboard-chart-key is-sale" aria-hidden="true" />Total após descontos</li>
+              <li><span className="dashboard-chart-key is-cost" aria-hidden="true" />Custo dos produtos</li>
             </ul>
             <RevenueLineChart days={revenueChartDays} monthly={monthly} dateRange={dateRange} />
             {(missingCostCount > 0 || returnedOrderCount > 0) && <p className="dashboard-trend-warning" role="status">{missingCostCount > 0 ? `Falta informar o custo de ${missingCostCount} item(ns). ` : ''}{returnedOrderCount > 0 ? `${returnedOrderCount} pedido(s) têm devolução sem ajuste financeiro.` : ''} O lucro bruto ficará indisponível até os dados serem conferidos.</p>}
@@ -313,13 +313,13 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
               <div className="dashboard-trend-table-wrap" role="region" aria-label="Vendas e custos diários" tabIndex={0}>
                 <table className="dashboard-trend-table">
                   <caption>Valores das vendas concluídas ou retiradas em {dateRange}.</caption>
-                  <thead><tr><th scope="col">Data</th><th scope="col">Faturamento bruto</th><th scope="col">Descontos</th><th scope="col">Faturamento líquido</th><th scope="col">Custo dos produtos vendidos</th><th scope="col">Lucro bruto</th></tr></thead>
+                  <thead><tr><th scope="col">Data</th><th scope="col">Total cobrado</th><th scope="col">Descontos</th><th scope="col">Valor da venda</th><th scope="col">Custo dos produtos</th><th scope="col">Sobra antes das despesas</th></tr></thead>
                   <tbody>{revenueDays.map((day) => <tr key={day.business_date}><th scope="row">{formatBusinessDate(day.business_date)}</th><td>{formatBRLExact(day.gross_sales_cents)}</td><td>{formatBRLExact(day.discount_cents)}</td><td>{formatBRLExact(day.net_sales_cents)}</td><td>{day.item_cost_cents === null ? 'Indisponível' : formatBRLExact(day.item_cost_cents)}</td><td>{day.gross_profit_cents === null ? 'Indisponível' : formatBRLExact(day.gross_profit_cents)}</td></tr>)}</tbody>
                 </table>
               </div>
             </details>
           </>}
-          <figcaption className="dashboard-trend-footer"><p>O bruto inclui taxa de entrega; combo usa o custo do catálogo.</p><Link className="quiet-link" to="/relatorios/financeiro">Ver relatório financeiro <Icon name="arrow" /></Link></figcaption>
+          <figcaption className="dashboard-trend-footer"><p>O total cobrado inclui a entrega. Combos usam o custo cadastrado no Catálogo.</p><Link className="quiet-link" to="/relatorios/financeiro">Ver relatório <Icon name="arrow" /></Link></figcaption>
         </figure>
 
         <RevenueCompositionPanel days={revenueDays} error={revenueError} loading={revenueLoading} onRetry={onRetryRevenue} dateRange={dateRange} />
@@ -341,9 +341,9 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
         </figure>
 
         <details className="surface-panel dashboard-trend-panel dashboard-cash-panel">
-          <summary className="dashboard-cash-summary"><span><strong id={moneyHeadingId}>Caixa informado</strong><small>Opcional · só use se quiser acompanhar os valores registrados</small></span><span>Ver caixa <span aria-hidden="true">＋</span></span></summary>
+          <summary className="dashboard-cash-summary"><span><strong id={moneyHeadingId}>Pagamentos e despesas</strong><small>Opcional · valores informados pela equipe</small></span><span>Ver detalhes <span aria-hidden="true">＋</span></span></summary>
           <div className="dashboard-cash-content">
-          <div className="dashboard-trend-heading"><span>{revenueUnitLabel}</span><Link className="quiet-link" to="/financeiro">Abrir financeiro <Icon name="arrow" /></Link></div>
+          <div className="dashboard-trend-heading"><span>{revenueUnitLabel}</span><Link className="quiet-link" to="/financeiro">Abrir Dashboard <Icon name="arrow" /></Link></div>
           {ready ? <>
             <dl className="dashboard-trend-totals">
               <div><dt><span className="dashboard-chart-key is-receipt" aria-hidden="true" />Pagamentos recebidos</dt><dd>{formatBRLExact(receipts)}</dd></div>
@@ -353,7 +353,7 @@ export function DashboardTrends({ days, revenueDays, startOn, endOn, period, per
               days={chartDays}
               series={moneySeries}
               label={`Pagamentos recebidos e despesas e entregas pagas ${chartPeriodDescription}. Totais: ${formatBRLExact(receipts)} recebidos e ${formatBRLExact(outflows)} pagos. O detalhamento diário está na tabela abaixo.`}
-              emptyMessage="Nenhuma movimentação neste período"
+              emptyMessage="Nenhum pagamento ou despesa neste período"
               formatValue={formatBRLExact}
               formatAxisValue={(value) => moneyAxisFormatter.format(Number(value) / 100)}
               monthly={monthly}

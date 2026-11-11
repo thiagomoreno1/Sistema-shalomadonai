@@ -391,8 +391,8 @@ export function CustomerDetailPage() {
         setPurchaseOrdersScope(requestScope)
         setOrderPageOffset(recentOrders.length)
         setHasMoreOrders(recentOrdersLoaded && recentOrders.length === customerOrderPageSize)
-        setOrderError(orderLoadFailed ? 'Não foi possível carregar todos os pedidos. Você ainda pode registrar o contato sem vínculo ou tentar carregar novamente.' : null)
-        setOrderHistoryError(orderHistoryFailed ? 'Não foi possível carregar pedidos, parcelas e saldos completos. Os valores indisponíveis não serão tratados como zero.' : null)
+        setOrderError(orderLoadFailed ? 'Não foi possível carregar todos os pedidos. Você ainda pode salvar o contato ou tentar de novo.' : null)
+        setOrderHistoryError(orderHistoryFailed ? 'Não foi possível carregar todos os pedidos e pagamentos. Alguns valores podem estar faltando.' : null)
         setMoreOrdersError(null)
       }
     } catch {
@@ -482,7 +482,7 @@ export function CustomerDetailPage() {
         nextOrderHistory = await loadCustomerOrderHistory(client, businessId, nextOrders, today)
       } catch {
         if (activeCustomerScopeRef.current === requestScope) {
-          setOrderHistoryError('Não foi possível carregar pedidos, parcelas e saldos completos. Os valores indisponíveis não serão tratados como zero.')
+          setOrderHistoryError('Não foi possível carregar todos os pedidos e pagamentos. Alguns valores podem estar faltando.')
         }
       }
       if (activeCustomerScopeRef.current !== requestScope) return
@@ -784,17 +784,17 @@ export function CustomerDetailPage() {
         insertError = (await supabaseClient.rpc('record_customer_interaction_with_order', requestArgs)).error
       }
       if (insertError) {
-        setInteractionError('Não foi possível registrar o contato e o retorno. Seus dados continuam no formulário; tente novamente.')
+        setInteractionError('Não foi possível salvar o contato e o lembrete. Seus dados continuam no formulário; tente de novo.')
         return
       }
       interactionRequestRef.current = null
       setInteractionNotice(interactionFormMode === 'missed_call'
-        ? 'Ligação não atendida registrada. O retorno de hoje, com prioridade alta, entrou na fila.'
+        ? 'Ligação não atendida registrada. Um lembrete para hoje entrou na fila.'
         : 'Contato registrado.')
       setInteractionOpen(false)
       await loadCustomer()
     } catch {
-      setInteractionError('Não foi possível registrar o contato e o retorno. Seus dados continuam no formulário; tente novamente.')
+      setInteractionError('Não foi possível salvar o contato e o lembrete. Seus dados continuam no formulário; tente de novo.')
     } finally {
       setSaving(false)
     }
@@ -905,13 +905,13 @@ export function CustomerDetailPage() {
             {displayedMoreOrdersError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{displayedMoreOrdersError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadMoreOrders()} type="button">Tentar novamente</button></div>}
             {interactionFormMode === 'general' && <>
               <label className="record-field record-field-wide"><span className="field-label">Próximo passo <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" placeholder="Ex.: confirmar entrega" /></label>
-              <label className="record-field"><span className="field-label">Data do retorno <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="follow_up_due_on" type="date" /></label>
-              <label className="record-field"><span className="field-label">Prioridade do retorno</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
+              <label className="record-field"><span className="field-label">Lembrar em <span className="field-optional">padrão: hoje</span></span><input className="text-input" defaultValue={businessToday()} name="follow_up_due_on" type="date" /></label>
+              <label className="record-field"><span className="field-label">Importância</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
             </>}
           </div>
-          <p className="section-footnote">{interactionFormMode === 'missed_call' ? 'Ao salvar, o retorno será incluído na fila para hoje com prioridade alta. O registro da ligação é manual.' : 'O registro é manual. Uma ligação não atendida cria um retorno para hoje, com prioridade alta. O atalho abre uma conversa no WhatsApp, mas não envia mensagens nem conecta a API do WhatsApp.'}</p>
+          <p className="section-footnote">{interactionFormMode === 'missed_call' ? 'Ao salvar, um lembrete para hoje entra na fila. A ligação é registrada manualmente.' : 'Uma ligação não atendida cria um lembrete para hoje. O atalho abre o WhatsApp, mas não envia mensagens.'}</p>
           {interactionError && <p className="form-message form-message-error" role="alert">{interactionError}</p>}
-          <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : interactionFormMode === 'missed_call' ? 'Registrar ligação e retorno' : 'Salvar contato'}</button>
+          <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : interactionFormMode === 'missed_call' ? 'Salvar ligação e lembrete' : 'Salvar contato'}</button>
         </form>
       )}
 
@@ -919,8 +919,8 @@ export function CustomerDetailPage() {
 
       <div className="record-detail-grid">
         <section className="surface-panel record-panel" aria-labelledby="follow-up-title">
-          <div className="section-heading section-heading-compact"><div><p className="eyebrow">PRÓXIMAS AÇÕES</p><h2 id="follow-up-title">Retornos pendentes</h2></div></div>
-          {followUps.length === 0 ? <p className="inline-state">Nenhum retorno agendado para este cliente.</p> : (
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">PRÓXIMAS AÇÕES</p><h2 id="follow-up-title">Lembretes</h2></div></div>
+          {followUps.length === 0 ? <p className="inline-state">Nenhum lembrete para este cliente.</p> : (
             <ul className="timeline-list">
               {followUps.map((task) => <li key={task.id}><span className="timeline-dot" /><div><strong>{task.title}</strong><p>Até {formatBusinessDate(task.due_on)} · Prioridade {task.priority === 'high' ? 'alta' : task.priority === 'low' ? 'baixa' : 'normal'}</p></div></li>)}
             </ul>

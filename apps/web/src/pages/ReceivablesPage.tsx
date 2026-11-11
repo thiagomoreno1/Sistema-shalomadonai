@@ -99,7 +99,7 @@ function isDateOnly(value: unknown): value is string {
 
 function followUpNote(draft: Pick<FollowUpDraft, 'orderId' | 'installmentNumber' | 'originalDueOn' | 'balanceCents'>) {
   const orderReference = draft.orderId.slice(0, 8).toUpperCase()
-  return `Retorno manual programado para a parcela ${draft.installmentNumber} do pedido #${orderReference}. Vencimento original: ${formatBusinessDate(draft.originalDueOn)}. Saldo exibido ao abrir o retorno: ${formatBRL(draft.balanceCents)}. Nenhum contato foi realizado por este registro.`
+  return `Lembrete para a parcela ${draft.installmentNumber} do pedido #${orderReference}. Data combinada: ${formatBusinessDate(draft.originalDueOn)}. Falta receber: ${formatBRL(draft.balanceCents)}. Nenhum contato foi feito ainda.`
 }
 
 function readPendingFollowUp(businessId: string): { attempt: StoredFollowUpAttempt | null; error: string | null } {
@@ -112,12 +112,12 @@ function readPendingFollowUp(businessId: string): { attempt: StoredFollowUpAttem
       const installmentId = key.slice(prefix.length)
       const raw = sessionStorage.getItem(key)
       if (!raw || !isUuid(installmentId)) {
-        return { attempt: null, error: 'O rascunho pendente desta aba está inválido. Nenhuma nova tentativa será enviada até ele poder ser conferido.' }
+        return { attempt: null, error: 'Não foi possível ler o lembrete guardado nesta tela. Nenhum novo lembrete foi enviado.' }
       }
 
       const value: unknown = JSON.parse(raw)
       if (!isRecord(value) || !isRecord(value.requestArgs)) {
-        return { attempt: null, error: 'O rascunho pendente desta aba não pôde ser validado. Nenhuma nova tentativa será enviada.' }
+        return { attempt: null, error: 'Não foi possível conferir o lembrete guardado nesta tela. Nenhum novo lembrete foi enviado.' }
       }
       const args = value.requestArgs
       const candidate = value as unknown as StoredFollowUpAttempt
@@ -136,17 +136,17 @@ function readPendingFollowUp(businessId: string): { attempt: StoredFollowUpAttem
           !isDateOnly(candidate.originalDueOn) || !isDateOnly(candidate.dueOn) ||
           !Number.isSafeInteger(candidate.balanceCents) || candidate.balanceCents < 0 ||
           !validPriority || !validTitle || !occurredAt || !validArgs) {
-        return { attempt: null, error: 'O rascunho pendente desta aba não pôde ser validado. Nenhuma nova tentativa será enviada.' }
+        return { attempt: null, error: 'Não foi possível conferir o lembrete guardado nesta tela. Nenhum novo lembrete foi enviado.' }
       }
 
       if (pendingAttempt) {
-        return { attempt: null, error: 'Há mais de uma tentativa pendente nesta aba. Nenhuma nova gravação será enviada até que os rascunhos possam ser conferidos.' }
+        return { attempt: null, error: 'Há mais de um lembrete aguardando confirmação. Atualize a tela antes de tentar de novo.' }
       }
       pendingAttempt = candidate
     }
     return { attempt: pendingAttempt, error: null }
   } catch {
-    return { attempt: null, error: 'Não foi possível acessar o armazenamento desta aba. Nenhuma gravação será enviada até que o rascunho possa ser lido.' }
+    return { attempt: null, error: 'Não foi possível conferir os dados guardados nesta tela. Atualize a página antes de tentar de novo.' }
   }
 }
 
@@ -237,7 +237,7 @@ export function ReceivablesPage() {
         occurredAt: attempt.occurredAt,
         requestArgs: attempt.requestArgs,
       })
-      setFollowUpError('Uma tentativa anterior teve resposta inconclusiva. Confira ou reenvie com o mesmo identificador para evitar duplicidade.')
+      setFollowUpError('Não foi possível confirmar se o lembrete foi salvo. Confira a lista antes de tentar de novo para não repetir.')
     }
     setFollowUpStorageBusinessId(businessId)
   }, [businessId, businessRole])
@@ -290,7 +290,7 @@ export function ReceivablesPage() {
             .range(from, to)),
         ])
         if (installmentsResult.error || allocationsResult.error) {
-          setError('Não foi possível carregar todos os vencimentos e seus saldos. Tente novamente.')
+          setError('Não foi possível carregar todas as parcelas e os valores que faltam pagar. Tente de novo.')
           return
         }
         loadedInstallments.push(...(installmentsResult.data ?? []))
@@ -362,7 +362,7 @@ export function ReceivablesPage() {
       installmentNumber: item.installment_number,
       originalDueOn: item.due_on,
       balanceCents: item.balance_cents,
-      title: `Cobrar parcela ${item.installment_number} · pedido #${orderReference} · venc. ${formatBusinessDate(item.due_on)} · saldo ${formatBRL(item.balance_cents)}`,
+      title: `Lembrar de cobrar parcela ${item.installment_number} · pedido #${orderReference} · ${formatBusinessDate(item.due_on)} · falta ${formatBRL(item.balance_cents)}`,
       dueOn: today,
       priority: 'normal',
       pending: false,
@@ -399,32 +399,32 @@ export function ReceivablesPage() {
               ...current, pending: false, requestId: null, occurredAt: null, requestArgs: null,
             } : current)
             setFollowUpError(insertError.code === 'PGRST202'
-              ? 'A função idempotente ainda não está disponível no Supabase. Nenhuma anotação ou retorno foi criado; os campos foram liberados para uma nova tentativa após a atualização.'
-              : 'O Supabase rejeitou esta solicitação sem gravar o retorno. Confira os dados e tente novamente.')
+              ? 'Não foi possível salvar o lembrete. Nenhum dado foi perdido; tente de novo após atualizar a tela.'
+              : 'O lembrete não foi salvo. Confira os dados e tente de novo.')
           } else {
-            setFollowUpStorageError('O armazenamento desta aba não conseguiu remover a tentativa rejeitada. Ela continua bloqueada e pode ser reenviada com o mesmo identificador.')
-            setFollowUpError('O Supabase rejeitou a solicitação sem gravar o retorno, mas não foi possível limpar o rascunho. Reenvie este mesmo retorno para manter a proteção contra duplicidade.')
+            setFollowUpStorageError('Não foi possível limpar os dados desta tela. Atualize a página antes de tentar de novo.')
+            setFollowUpError('O lembrete não foi salvo e o rascunho continua aberto. Tente de novo por esta tela.')
           }
           return
         }
-        setFollowUpError('A resposta do Supabase foi inconclusiva. A tentativa foi preservada; reenvie com o mesmo identificador para verificar sem criar duplicidade.')
+        setFollowUpError('Não foi possível confirmar se o lembrete foi salvo. Confira a lista antes de tentar de novo para não repetir.')
         return
       }
 
       const cleared = clearPendingFollowUp(businessId, draft.installmentId)
       const orderReference = draft.orderId.slice(0, 8).toUpperCase()
-      setFollowUpNotice(`Retorno manual criado para ${draft.customerName}, com anotação ligada ao pedido #${orderReference}. Nenhuma mensagem foi enviada.`)
+      setFollowUpNotice(`Lembrete salvo para ${draft.customerName}, junto ao pedido #${orderReference}. Nenhuma mensagem foi enviada.`)
       if (cleared) {
         setFollowUpStorageError(null)
         setFollowUpDraft(null)
         setFollowUpError(null)
         requestAnimationFrame(() => followUpTriggerRef.current?.focus())
       } else {
-        setFollowUpStorageError('O retorno foi confirmado, mas o rascunho desta aba não pôde ser removido. Reenviar a mesma tentativa continuará protegido contra duplicidade.')
-        setFollowUpError('O retorno foi criado. O rascunho de recuperação permanece bloqueado; se necessário, reenvie com o mesmo identificador.')
+        setFollowUpStorageError('O lembrete foi salvo, mas a tela não conseguiu limpar os dados antigos. Atualize a página antes de tentar de novo.')
+        setFollowUpError('O lembrete foi salvo. Atualize a tela antes de fazer outra tentativa.')
       }
     } catch {
-      setFollowUpError('A conexão caiu antes da confirmação. A tentativa foi salva nesta aba; reenvie com o mesmo identificador para verificar sem criar duplicidade.')
+      setFollowUpError('A conexão caiu antes da confirmação. Confira se o lembrete apareceu na lista antes de tentar de novo.')
     } finally {
       setFollowUpSavingId(null)
     }
@@ -435,7 +435,7 @@ export function ReceivablesPage() {
     if (!draft?.pending || followUpSavingId) return
     const attempt = storedAttemptFromDraft(businessId, draft)
     if (!attempt) {
-      setFollowUpStorageError('O rascunho pendente desta aba está incompleto. Nenhuma nova tentativa será enviada.')
+      setFollowUpStorageError('O lembrete guardado nesta tela está incompleto. Nenhum novo lembrete foi enviado.')
       return
     }
     const receivable = receivables.find((item) => item.id === draft.installmentId)
@@ -453,17 +453,17 @@ export function ReceivablesPage() {
     }
 
     if (!followUpStorageReady) {
-      setFollowUpError(followUpStorageError ?? 'Aguarde a verificação do rascunho desta aba. Nenhuma gravação foi enviada.')
+      setFollowUpError(followUpStorageError ?? 'Aguarde a conferência do lembrete. Nenhum novo lembrete foi enviado.')
       return
     }
 
     const title = draft.title.trim()
     if (!draft.customerId) {
-      setFollowUpError('Este pedido não tem um cliente vinculado; não foi possível criar o retorno.')
+      setFollowUpError('Escolha um cliente para criar o lembrete deste pedido.')
       return
     }
     if (!title || title.length > 240 || !isDateOnly(draft.dueOn) || !['low', 'normal', 'high'].includes(draft.priority)) {
-      setFollowUpError('Confira o texto e a data do retorno.')
+      setFollowUpError('Confira a mensagem e a data do lembrete.')
       return
     }
 
@@ -501,7 +501,7 @@ export function ReceivablesPage() {
     }
 
     if (!storePendingFollowUp(attempt)) {
-      setFollowUpError('Não foi possível guardar a tentativa nesta aba. Nenhuma anotação ou retorno foi enviado; tente novamente quando o armazenamento estiver disponível.')
+      setFollowUpError('Não foi possível salvar seus dados nesta tela. Tente de novo.')
       return
     }
     setFollowUpStorageError(null)
@@ -522,33 +522,33 @@ export function ReceivablesPage() {
                   <strong>{formatBusinessDate(item.due_on)}</strong>
                   <small>Parcela {item.installment_number}</small>
                 </span>
-                <span className="receivable-customer"><strong>{item.customer_name}</strong><small className={item.overdue ? 'receivable-overdue-label' : undefined}>{item.overdue ? 'Atrasado' : item.due_on === today ? 'Vence hoje' : 'Próximo vencimento'}</small></span>
-                <span className="receivable-balance"><small>Saldo do vencimento</small><strong>{formatBRL(item.balance_cents)}</strong></span>
+                <span className="receivable-customer"><strong>{item.customer_name}</strong><small className={item.overdue ? 'receivable-overdue-label' : undefined}>{item.overdue ? 'Atrasado' : item.due_on === today ? 'Hoje' : 'A receber'}</small></span>
+                <span className="receivable-balance"><small>Falta receber</small><strong>{formatBRL(item.balance_cents)}</strong></span>
               </Link>
               <div className="receivable-actions">
                 {item.customer_id && businessRole === 'owner' ? <button
                   aria-controls={followUpDraft?.installmentId === item.id ? `receivable-follow-up-${item.id}` : undefined}
                   aria-expanded={followUpDraft?.installmentId === item.id}
-                  aria-label={`Criar retorno para ${item.customer_name}, parcela ${item.installment_number} do pedido #${item.order_id.slice(0, 8).toUpperCase()}`}
+                  aria-label={`Criar lembrete para ${item.customer_name}, parcela ${item.installment_number} do pedido #${item.order_id.slice(0, 8).toUpperCase()}`}
                   className="text-button receivable-follow-up-toggle"
                   disabled={!followUpStorageReady || Boolean(followUpSavingId) || Boolean(followUpDraft?.pending) || Boolean(followUpDraft && followUpDraft.installmentId !== item.id)}
                   onClick={(event) => openFollowUp(item, event.currentTarget)}
                   type="button"
-                >{followUpDraft?.installmentId === item.id && followUpDraft.pending ? 'Tentativa pendente' : followUpDraft?.installmentId === item.id ? 'Fechar retorno' : 'Criar retorno'}</button> : <span className="receivable-action-note">{item.customer_id ? 'Apenas o responsável pode criar retornos' : 'Sem cliente vinculado'}</span>}
+                >{followUpDraft?.installmentId === item.id && followUpDraft.pending ? 'Salvando…' : followUpDraft?.installmentId === item.id ? 'Fechar lembrete' : 'Criar lembrete'}</button> : <span className="receivable-action-note">{item.customer_id ? 'Só o responsável pode criar lembretes' : 'Sem cliente escolhido'}</span>}
               </div>
             </div>
             {followUpDraft?.installmentId === item.id && <form aria-labelledby={`receivable-follow-up-title-${item.id}`} className="receivable-follow-up-form" id={`receivable-follow-up-${item.id}`} onSubmit={(event) => void saveFollowUp(event)}>
-              <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETE INTERNO</p><h3 id={`receivable-follow-up-title-${item.id}`} ref={followUpHeadingRef} tabIndex={-1}>Criar retorno manual</h3></div></div>
-              <p className="section-footnote">{followUpDraft.pending && followUpDraft.customerName !== 'Cliente' ? followUpDraft.customerName : item.customer_name} · Parcela {followUpDraft.pending ? followUpDraft.installmentNumber : item.installment_number} · Pedido #{(followUpDraft.pending ? followUpDraft.orderId : item.order_id).slice(0, 8).toUpperCase()} · vencimento {formatBusinessDate(followUpDraft.pending ? followUpDraft.originalDueOn : item.due_on)} · saldo {formatBRL(followUpDraft.pending ? followUpDraft.balanceCents : item.balance_cents)}.</p>
-              <p className="section-footnote">Este retorno aparecerá na fila de Atendimento. Nenhuma mensagem será enviada.</p>
-              {followUpDraft.pending && <p className="form-message form-message-warning" role="status">Os campos estão bloqueados para preservar a tentativa original. Reenviar usa o mesmo identificador e não deve criar uma duplicidade.</p>}
+              <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETE</p><h3 id={`receivable-follow-up-title-${item.id}`} ref={followUpHeadingRef} tabIndex={-1}>Criar lembrete</h3></div></div>
+              <p className="section-footnote">{followUpDraft.pending && followUpDraft.customerName !== 'Cliente' ? followUpDraft.customerName : item.customer_name} · Parcela {followUpDraft.pending ? followUpDraft.installmentNumber : item.installment_number} · Pedido #{(followUpDraft.pending ? followUpDraft.orderId : item.order_id).slice(0, 8).toUpperCase()} · data combinada {formatBusinessDate(followUpDraft.pending ? followUpDraft.originalDueOn : item.due_on)} · falta receber {formatBRL(followUpDraft.pending ? followUpDraft.balanceCents : item.balance_cents)}.</p>
+              <p className="section-footnote">O lembrete aparecerá em Atendimento. Nenhuma mensagem será enviada.</p>
+              {followUpDraft.pending && <p className="form-message form-message-warning" role="status">Os campos estão bloqueados enquanto conferimos se o lembrete foi salvo. Confira a lista antes de tentar de novo.</p>}
               <div className="record-form-grid">
-                <label className="record-field record-field-wide" htmlFor={`receivable-follow-up-text-${item.id}`}><span className="field-label">Texto do retorno</span><input className="text-input" disabled={followUpSavingId === item.id || followUpDraft.pending} id={`receivable-follow-up-text-${item.id}`} maxLength={240} onChange={(event) => setFollowUpDraft((current) => current?.installmentId === item.id && !current.pending ? { ...current, title: event.target.value } : current)} required value={followUpDraft.title} /></label>
-                <label className="record-field" htmlFor={`receivable-follow-up-date-${item.id}`}><span className="field-label">Data do retorno</span><input className="text-input" disabled={followUpSavingId === item.id || followUpDraft.pending} id={`receivable-follow-up-date-${item.id}`} onChange={(event) => setFollowUpDraft((current) => current?.installmentId === item.id && !current.pending ? { ...current, dueOn: event.target.value } : current)} required type="date" value={followUpDraft.dueOn} /></label>
+                <label className="record-field record-field-wide" htmlFor={`receivable-follow-up-text-${item.id}`}><span className="field-label">O que lembrar</span><input className="text-input" disabled={followUpSavingId === item.id || followUpDraft.pending} id={`receivable-follow-up-text-${item.id}`} maxLength={240} onChange={(event) => setFollowUpDraft((current) => current?.installmentId === item.id && !current.pending ? { ...current, title: event.target.value } : current)} required value={followUpDraft.title} /></label>
+                <label className="record-field" htmlFor={`receivable-follow-up-date-${item.id}`}><span className="field-label">Lembrar em</span><input className="text-input" disabled={followUpSavingId === item.id || followUpDraft.pending} id={`receivable-follow-up-date-${item.id}`} onChange={(event) => setFollowUpDraft((current) => current?.installmentId === item.id && !current.pending ? { ...current, dueOn: event.target.value } : current)} required type="date" value={followUpDraft.dueOn} /></label>
                 <label className="record-field" htmlFor={`receivable-follow-up-priority-${item.id}`}><span className="field-label">Prioridade</span><select className="text-input" disabled={followUpSavingId === item.id || followUpDraft.pending} id={`receivable-follow-up-priority-${item.id}`} onChange={(event) => setFollowUpDraft((current) => current?.installmentId === item.id && !current.pending ? { ...current, priority: event.target.value as FollowUpPriority } : current)} value={followUpDraft.priority}><option value="low">Baixa</option><option value="normal">Normal</option><option value="high">Alta</option></select></label>
               </div>
               {followUpError && <p className="form-message form-message-error" role="alert">{followUpError}</p>}
-              <div className="record-form-actions"><button className="button button-primary" disabled={followUpSavingId === item.id} type="submit">{followUpSavingId === item.id ? 'Salvando…' : followUpDraft.pending ? 'Reenviar com segurança' : 'Salvar retorno'}</button><button className="text-button" disabled={Boolean(followUpSavingId) || followUpDraft.pending} onClick={closeFollowUp} type="button">Cancelar</button></div>
+              <div className="record-form-actions"><button className="button button-primary" disabled={followUpSavingId === item.id} type="submit">{followUpSavingId === item.id ? 'Salvando…' : followUpDraft.pending ? 'Tentar de novo' : 'Salvar lembrete'}</button><button className="text-button" disabled={Boolean(followUpSavingId) || followUpDraft.pending} onClick={closeFollowUp} type="button">Cancelar</button></div>
             </form>}
           </li>
         ))}
@@ -561,20 +561,20 @@ export function ReceivablesPage() {
       <header className="page-heading receivables-page-heading">
         <div>
           <p className="eyebrow">FINANCEIRO</p>
-          <h1>Pagamentos a receber</h1>
-          <p className="page-description">Parcelas pendentes e próximos vencimentos.</p>
+          <h1>Falta receber</h1>
+          <p className="page-description">Pagamentos que os clientes ainda precisam fazer.</p>
         </div>
         <Link className="button button-secondary" to="/pedidos">Ver pedidos</Link>
       </header>
       <FinanceNavigation active="receivables" />
 
-      <div className="section-heading receivables-section-heading"><h2>Pagamentos a receber</h2></div>
-      <p className="section-footnote order-policy-note">Atrasado = ainda há saldo e a data de vencimento já passou.</p>
+      <div className="section-heading receivables-section-heading"><h2>Falta receber</h2></div>
+      <p className="section-footnote order-policy-note">Atrasado = ainda falta receber do cliente e a data combinada já passou.</p>
 
       {followUpStorageError && <p className="form-message form-message-error" role="alert">{followUpStorageError}</p>}
       {followUpDraft?.pending && !loading && !receivables.some((item) => item.id === followUpDraft.installmentId) && <section className="surface-panel record-panel" aria-labelledby="pending-follow-up-heading">
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">TENTATIVA PRESERVADA</p><h2 id="pending-follow-up-heading">Confirmar retorno pendente</h2></div></div>
-        <p className="section-footnote">Parcela {followUpDraft.installmentNumber} · Pedido #{followUpDraft.orderId.slice(0, 8).toUpperCase()}. O pedido não aparece mais na lista de saldos em aberto, mas a tentativa original pode ser consultada com segurança.</p>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETE NÃO CONFIRMADO</p><h2 id="pending-follow-up-heading">Conferir lembrete</h2></div></div>
+        <p className="section-footnote">Parcela {followUpDraft.installmentNumber} · Pedido #{followUpDraft.orderId.slice(0, 8).toUpperCase()}. O pedido já saiu da lista. Você ainda pode tentar salvar o lembrete de novo.</p>
         {followUpError && <p className="form-message form-message-error" role="alert">{followUpError}</p>}
         <button className="button button-primary" disabled={Boolean(followUpSavingId)} onClick={() => void retryPendingFollowUp()} type="button">{followUpSavingId ? 'Verificando…' : 'Reenviar tentativa preservada'}</button>
       </section>}
@@ -583,17 +583,17 @@ export function ReceivablesPage() {
 
       {!loading && !error && <section className="receivable-summary-grid" aria-label="Resumo dos pagamentos a receber">
         {arariboiaCycle.length > 0 && <article className="surface-panel receivable-summary-card"><span>Arariboia · ciclo do dia 6</span><strong>{formatBRL(groupTotal(arariboiaCycle))}</strong><small>{arariboiaCustomerCount} clientes · vence {formatBusinessDate(arariboiaDueDate)}</small></article>}
-        <article className="surface-panel receivable-summary-card"><span>Parcelas de clientes atrasadas</span><strong>{formatBRL(groupTotal(overdue))}</strong><small>{overdue.length} parcelas passaram da data</small></article>
-        <article className="surface-panel receivable-summary-card"><span>Parcelas de clientes vencendo hoje</span><strong>{formatBRL(groupTotal(dueToday))}</strong><small>{dueToday.length} parcelas ainda sem pagamento</small></article>
-        <article className="surface-panel receivable-summary-card"><span>Próximos vencimentos</span><strong>{formatBRL(groupTotal(upcoming))}</strong><small>{upcoming.length} parcelas ainda sem pagamento</small></article>
+        <article className="surface-panel receivable-summary-card"><span>Parcelas atrasadas</span><strong>{formatBRL(groupTotal(overdue))}</strong><small>{overdue.length} pagamentos passaram da data</small></article>
+        <article className="surface-panel receivable-summary-card"><span>Parcelas para hoje</span><strong>{formatBRL(groupTotal(dueToday))}</strong><small>{dueToday.length} pagamentos ainda faltam</small></article>
+        <article className="surface-panel receivable-summary-card"><span>Próximas datas</span><strong>{formatBRL(groupTotal(upcoming))}</strong><small>{upcoming.length} pagamentos ainda faltam</small></article>
       </section>}
 
       {error && <div className="inline-state inline-state-error" role="alert"><p>{error}</p><button className="text-button" onClick={() => void loadReceivables()} type="button">Tentar novamente</button></div>}
 
-      {loading ? <p className="inline-state" aria-live="polite">Carregando vencimentos…</p> : !error && (
+      {loading ? <p className="inline-state" aria-live="polite">Carregando pagamentos…</p> : !error && (
         <div className="page-stack receivable-groups">
           {arariboiaCycle.length > 0 && <section className="surface-panel record-panel" aria-labelledby="receivable-arariboia-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">CARTÃO ARARIBOIA</p><h2 id="receivable-arariboia-heading">Ciclo com vencimento em {formatBusinessDate(arariboiaDueDate)}</h2></div><span className="neutral-status">{arariboiaCycle.length}</span></div>
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">CARTÃO ARARIBOIA</p><h2 id="receivable-arariboia-heading">Pagamento do dia 6 · {formatBusinessDate(arariboiaDueDate)}</h2></div><span className="neutral-status">{arariboiaCycle.length}</span></div>
             {renderGroup(arariboiaCycle, 'Nenhum pagamento pendente neste ciclo.')}
           </section>}
           <section className="surface-panel record-panel" aria-labelledby="receivable-overdue-heading">
@@ -605,8 +605,8 @@ export function ReceivablesPage() {
             {renderGroup(dueToday, 'Nenhuma parcela vence hoje.')}
           </section>
           <section className="surface-panel record-panel" aria-labelledby="receivable-upcoming-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">AGENDA</p><h2 id="receivable-upcoming-heading">Próximos vencimentos</h2></div><span className="neutral-status">{upcoming.length}</span></div>
-            {renderGroup(upcoming, 'Nenhum pagamento com vencimento futuro.')}
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">AGENDA</p><h2 id="receivable-upcoming-heading">Próximas datas de pagamento</h2></div><span className="neutral-status">{upcoming.length}</span></div>
+            {renderGroup(upcoming, 'Nenhum pagamento futuro.')}
           </section>
           {receivables.length === 0 && <p className="section-footnote">Nenhum pagamento pendente neste período.</p>}
         </div>

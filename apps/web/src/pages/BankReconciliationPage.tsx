@@ -661,7 +661,7 @@ export function BankReconciliationPage() {
       })
       if (request === candidateRequestRef.current) setCandidates(possibleCandidates)
     } catch {
-      if (request === candidateRequestRef.current) setCandidateError('Não foi possível carregar os lançamentos elegíveis. A conciliação não foi gravada.')
+      if (request === candidateRequestRef.current) setCandidateError('Não foi possível carregar os itens para conferir. Nada foi salvo.')
     } finally {
       if (request === candidateRequestRef.current) setCandidatesLoading(false)
     }
@@ -699,11 +699,11 @@ export function BankReconciliationPage() {
         error = result.error
       }
       if (error) throw error
-      setNotice('Conciliação registrada e vinculada ao lançamento financeiro.')
+      setNotice('Extrato conferido com sucesso.')
       closeActionForms()
       await refreshBankData(page)
     } catch {
-      setActionError('Não foi possível confirmar a conciliação. Tente novamente com a mesma seleção para reutilizar o identificador do envio. Se um lançamento foi alterado ou conciliado por outra pessoa, feche e atualize a lista.')
+      setActionError('Não foi possível conferir este movimento. Tente de novo sem mudar os itens escolhidos. Se outra pessoa já conferiu, atualize a lista.')
     } finally {
       setActionSaving(false)
     }
@@ -712,7 +712,7 @@ export function BankReconciliationPage() {
   async function confirmUnmatch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!supabaseClient || !unmatchTarget || !unmatchReason.trim()) {
-      setActionError('Informe o motivo para desfazer a conciliação.')
+      setActionError('Informe por que está desfazendo a conferência.')
       return
     }
     setActionSaving(true)
@@ -731,11 +731,11 @@ export function BankReconciliationPage() {
       })
       if (error) throw error
       actionRequestRef.current = newRequestId()
-      setNotice('Conciliação desfeita. O motivo permanece no histórico.')
+      setNotice('Conferência desfeita. O motivo continua no histórico.')
       closeActionForms()
       await refreshBankData(page)
     } catch {
-      setActionError('Não foi possível desfazer a conciliação. Atualize os dados e tente novamente.')
+      setActionError('Não foi possível desfazer a conferência. Atualize a lista e tente de novo.')
     } finally {
       setActionSaving(false)
     }
@@ -744,7 +744,7 @@ export function BankReconciliationPage() {
   async function confirmDuplicate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!supabaseClient || !duplicateTarget || !duplicateOriginalId || !duplicateReason.trim()) {
-      setActionError('Escolha o movimento original e informe por que este lançamento é duplicado.')
+      setActionError('Escolha o movimento original e informe por que este item está repetido.')
       return
     }
     setActionSaving(true)
@@ -759,7 +759,7 @@ export function BankReconciliationPage() {
       })
       if (error) throw error
       setDuplicateRequestId(newRequestId())
-      setNotice('Lançamento sinalizado como duplicado e retirado das sugestões de conciliação.')
+      setNotice('Item marcado como repetido e retirado das sugestões.')
       closeActionForms()
       await refreshBankData(page)
     } catch {
@@ -786,7 +786,7 @@ export function BankReconciliationPage() {
       })
       if (error) throw error
       setClearDuplicateRequestId(newRequestId())
-      setNotice('Sinalização removida. O movimento voltou à fila de conciliação.')
+      setNotice('Aviso removido. O movimento voltou para a lista de conferência.')
       closeActionForms()
       await refreshBankData(page)
     } catch {
@@ -853,20 +853,20 @@ export function BankReconciliationPage() {
           <div><p className="eyebrow">MOVIMENTOS</p><h2 id="bank-movements-heading">Movimentos do extrato</h2></div>
           <button className="button button-primary" disabled={activeAccounts.length === 0 || loading || Boolean(loadError)} onClick={() => { setAccountId(activeAccounts[0]?.id ?? ''); setMovementFormOpen((value) => !value); setFormError(null) }} ref={movementTriggerRef} type="button">{movementFormOpen ? 'Fechar' : 'Registrar movimento'}</button>
         </div>
-        <p className="section-footnote">Associe manualmente um ou mais lançamentos; a soma deve igualar o valor do extrato. Isso não altera pagamentos, gastos ou lucro.</p>
+        <p className="section-footnote">Escolha um ou mais registros que somem o mesmo valor do extrato. Isso não altera pagamentos, despesas ou lucro.</p>
 
         {(summaryBusinessId !== businessId || summaryLoading) && <p className="inline-state bank-summary-loading" aria-live="polite">Carregando resumo de todos os movimentos…</p>}
         {summaryBusinessId === businessId && !summaryLoading && summaryError && <div className="bank-summary-error" role="alert"><p>{summaryError}</p><button className="text-button" onClick={() => void loadReconciliationSummary()} type="button">Tentar novamente</button></div>}
         {summaryBusinessId === businessId && !summaryLoading && !summaryError && reconciliationSummary && <section className="bank-reconciliation-summary" aria-labelledby="bank-reconciliation-summary-title">
           <div className="bank-reconciliation-summary-heading">
-            <div><p className="eyebrow">RESUMO GLOBAL</p><h3 id="bank-reconciliation-summary-title">Todos os movimentos</h3></div>
+          <div><p className="eyebrow">RESUMO DO EXTRATO</p><h3 id="bank-reconciliation-summary-title">Todos os movimentos</h3></div>
             <span>{reconciliationSummary.movement_count} {reconciliationSummary.movement_count === '1' ? 'movimento' : 'movimentos'}</span>
           </div>
           <p className="bank-reconciliation-summary-note">Total bruto dos movimentos; entradas e saídas não se compensam.</p>
           <dl className="bank-reconciliation-summary-grid">
-            <div className="bank-reconciliation-summary-card"><dt>Conciliados</dt><dd><strong>{reconciliationSummary.reconciled.count}</strong><span>{formatAmount(reconciliationSummary.reconciled.gross_cents)}</span></dd></div>
-            <div className="bank-reconciliation-summary-card"><dt>Pendentes</dt><dd><strong>{reconciliationSummary.pending.count}</strong><span>{formatAmount(reconciliationSummary.pending.gross_cents)}</span></dd></div>
-            <div className="bank-reconciliation-summary-card"><dt>Duplicados</dt><dd><strong>{reconciliationSummary.duplicate.count}</strong><span>{formatAmount(reconciliationSummary.duplicate.gross_cents)}</span></dd></div>
+            <div className="bank-reconciliation-summary-card"><dt>Conferidos</dt><dd><strong>{reconciliationSummary.reconciled.count}</strong><span>{formatAmount(reconciliationSummary.reconciled.gross_cents)}</span></dd></div>
+            <div className="bank-reconciliation-summary-card"><dt>Por conferir</dt><dd><strong>{reconciliationSummary.pending.count}</strong><span>{formatAmount(reconciliationSummary.pending.gross_cents)}</span></dd></div>
+            <div className="bank-reconciliation-summary-card"><dt>Repetidos</dt><dd><strong>{reconciliationSummary.duplicate.count}</strong><span>{formatAmount(reconciliationSummary.duplicate.gross_cents)}</span></dd></div>
           </dl>
         </section>}
 
@@ -875,11 +875,11 @@ export function BankReconciliationPage() {
           {movementUncertain && <p className="form-message form-message-warning" role="status">A tentativa anterior pode ter sido concluída. Repita com os mesmos dados para consultar o mesmo identificador de operação, ou cancele o formulário para começar outro registro.</p>}
           <div className="record-form-grid">
             <label className="record-field"><span className="field-label">Conta</span><select className="text-input" disabled={movementUncertain} onChange={(event) => setAccountId(event.target.value)} required value={accountId}><option value="">Selecione</option>{activeAccounts.map((account) => <option key={account.id} value={account.id}>{account.institution_name} · {account.account_label}{account.account_last_four ? ` · final ${account.account_last_four}` : ''}</option>)}</select></label>
-            <label className="record-field"><span className="field-label">Tipo de movimento</span><select className="text-input" disabled={movementUncertain} onChange={(event) => setDirection(event.target.value as 'credit' | 'debit')} value={direction}><option value="credit">Entrada</option><option value="debit">Saída</option></select></label>
+            <label className="record-field"><span className="field-label">Entrada ou saída</span><select className="text-input" disabled={movementUncertain} onChange={(event) => setDirection(event.target.value as 'credit' | 'debit')} value={direction}><option value="credit">Entrada</option><option value="debit">Saída</option></select></label>
             <label className="record-field"><span className="field-label">Data no extrato</span><input className="text-input" disabled={movementUncertain} max={today} onChange={(event) => setTransactionDate(event.target.value)} required type="date" value={transactionDate} /></label>
             <label className="record-field"><span className="field-label">Valor</span><input className="text-input" disabled={movementUncertain} inputMode="decimal" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" required value={amount} /></label>
             <label className="record-field record-field-wide"><span className="field-label">Descrição</span><input className="text-input" disabled={movementUncertain} maxLength={200} onChange={(event) => setDescription(event.target.value)} required value={description} /></label>
-            <label className="record-field"><span className="field-label">Contraparte <span className="field-optional">(opcional)</span></span><input className="text-input" disabled={movementUncertain} maxLength={160} onChange={(event) => setCounterpartyName(event.target.value)} value={counterpartyName} /></label>
+            <label className="record-field"><span className="field-label">Pessoa ou empresa <span className="field-optional">(opcional)</span></span><input className="text-input" disabled={movementUncertain} maxLength={160} onChange={(event) => setCounterpartyName(event.target.value)} value={counterpartyName} /></label>
           </div>
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
           <div className="record-form-actions"><button className="button button-primary" disabled={savingMovement || loading || Boolean(loadError)} type="submit">{savingMovement ? 'Registrando…' : movementUncertain ? 'Tentar novamente' : 'Registrar movimento'}</button><button className="text-button" onClick={() => { setMovementFormOpen(false); setMovementUncertain(false); setMovementRequestId(newRequestId()); setFormError(null) }} type="button">Cancelar</button></div>
@@ -887,7 +887,7 @@ export function BankReconciliationPage() {
 
         {!loading && activeAccounts.length === 0 && <p className="inline-state">Cadastre uma conta bancária ativa para começar a registrar os movimentos.</p>}
         {loading && transactions.length === 0 && !loadError && <p className="inline-state" aria-live="polite">Carregando movimentos…</p>}
-        {!loading && !loadError && transactions.length === 0 && <div className="empty-state"><span className="empty-icon"><Icon name="check" /></span><div><h3>Nenhum movimento registrado</h3><p>Quando a integração ou o registro manual do extrato for usado, os lançamentos aparecerão aqui. Nada será conciliado automaticamente.</p></div></div>}
+        {!loading && !loadError && transactions.length === 0 && <div className="empty-state"><span className="empty-icon"><Icon name="check" /></span><div><h3>Nenhum movimento registrado</h3><p>Quando você importar ou adicionar um movimento do extrato, ele aparecerá aqui. O sistema não confere nada sozinho.</p></div></div>}
 
         {transactions.length > 0 && !loadError && <>
           <ul className="bank-movement-list" aria-label="Movimentos bancários">
@@ -901,7 +901,7 @@ export function BankReconciliationPage() {
               const duplicateOriginals = transactions.filter((candidate) => candidate.id !== movement.id && candidate.bank_account_id === movement.bank_account_id && candidate.transaction_date === movement.transaction_date && String(candidate.amount_cents) === String(movement.amount_cents) && !activeDuplicateByTransaction.has(candidate.id) && !activeDuplicateOriginalIds.has(candidate.id))
               const account = accountById.get(movement.bank_account_id)
               const linkedId = match?.order_payment_id ?? match?.financial_outflow_id ?? ''
-              const linkedLabel = linkedId ? matchLabels[linkedId] ?? `Lançamento ${shortId(linkedId)}` : ''
+              const linkedLabel = linkedId ? matchLabels[linkedId] ?? `Registro ${shortId(linkedId)}` : ''
               const original = duplicate ? transactions.find((row) => row.id === duplicate.original_transaction_id) : null
               return <li className="bank-movement-card" key={movement.id}>
                 <div className="bank-movement-main">
@@ -909,18 +909,18 @@ export function BankReconciliationPage() {
                     <div className="bank-movement-title"><strong id={`bank-movement-title-${movement.id}`} tabIndex={-1}>{movement.description}</strong><span className={duplicate ? 'bank-status bank-status-duplicate' : match ? 'bank-status bank-status-matched' : 'bank-status'}>{duplicate ? 'Duplicado' : match ? 'Conciliado' : 'Pendente'}</span></div>
                     <small>{account ? `${account.institution_name} · ${account.account_label}` : 'Conta sem identificação'} · {formatBusinessDate(movement.transaction_date)} · {sourceLabel(movement.source)}</small>
                     {movement.counterparty_name && <small>Contraparte: {movement.counterparty_name}</small>}
-                    {match?.match_group_id ? <div className="bank-match-summary"><p>Conciliação agrupada · {activeLinks.length} {activeLinks.length === 1 ? 'lançamento' : 'lançamentos'}</p><ul>{activeLinks.map((link) => {
+                    {match?.match_group_id ? <div className="bank-match-summary"><p>Conferência em grupo · {activeLinks.length} {activeLinks.length === 1 ? 'registro' : 'registros'}</p><ul>{activeLinks.map((link) => {
                       const id = link.order_payment_id ?? link.financial_outflow_id ?? ''
-                      return <li key={link.id}>{matchLabels[id] ?? `Lançamento ${shortId(id)}`}</li>
+                      return <li key={link.id}>{matchLabels[id] ?? `Registro ${shortId(id)}`}</li>
                     })}</ul></div> : linkedLabel && <p className="bank-match-summary">Vinculado a {linkedLabel}</p>}
                     {duplicate && <p className="bank-match-summary">Duplicado do movimento “{original?.description ?? `#${shortId(duplicate.original_transaction_id)}`}” · {duplicate.reason}</p>}
-                    {previousMatches.filter((row) => !row.match_group_id).map((previous) => <p className="bank-history-note" key={previous.id}>Conciliação desfeita: {matchReversals.find((row) => row.match_id === previous.id)?.reason}</p>)}
+                    {previousMatches.filter((row) => !row.match_group_id).map((previous) => <p className="bank-history-note" key={previous.id}>Conferência desfeita: {matchReversals.find((row) => row.match_id === previous.id)?.reason}</p>)}
                     {previousGroups.map((groupId) => {
                       const links = previousMatches.filter((row) => row.match_group_id === groupId)
                       const reversal = groupReversals.find((row) => row.match_group_id === groupId) ?? matchReversals.find((row) => row.match_id === links[0].id)
-                      return <div className="bank-history-note" key={groupId}><p>Conciliação agrupada desfeita · {links.length} lançamentos · {reversal && formatBusinessDate(reversal.created_at.slice(0, 10))}: {reversal?.reason}</p><ul>{links.map((link) => {
+                      return <div className="bank-history-note" key={groupId}><p>Conferência em grupo desfeita · {links.length} registros · {reversal && formatBusinessDate(reversal.created_at.slice(0, 10))}: {reversal?.reason}</p><ul>{links.map((link) => {
                         const id = link.order_payment_id ?? link.financial_outflow_id ?? ''
-                        return <li key={link.id}>{matchLabels[id] ?? `Lançamento ${shortId(id)}`}</li>
+                        return <li key={link.id}>{matchLabels[id] ?? `Registro ${shortId(id)}`}</li>
                       })}</ul></div>
                     })}
                     {previousDuplicates.map((previous) => <p className="bank-history-note" key={previous.id}>Sinalização de duplicidade removida: {duplicateClears.find((row) => row.duplicate_id === previous.id)?.reason}</p>)}
@@ -929,43 +929,43 @@ export function BankReconciliationPage() {
                 </div>
                 {!loading && !loadError && <div className="bank-row-actions">
                   {!match && !duplicate && <button className="button button-secondary" disabled={actionSaving} onClick={() => void loadCandidates(movement)} type="button">Conciliar</button>}
-                  {match && <button className="button button-secondary" disabled={actionSaving} onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setUnmatchTarget(match); setUnmatchReason(''); actionRequestRef.current = newRequestId() }} type="button">Desfazer conciliação</button>}
+                  {match && <button className="button button-secondary" disabled={actionSaving} onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setUnmatchTarget(match); setUnmatchReason(''); actionRequestRef.current = newRequestId() }} type="button">Desfazer conferência</button>}
                   {!match && duplicate && <button className="button button-secondary" disabled={actionSaving} onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setClearDuplicateTarget(duplicate); setClearDuplicateReason(''); setClearDuplicateRequestId(newRequestId()) }} type="button">Restaurar movimento</button>}
                   {!match && !duplicate && duplicateOriginals.length > 0 && <button className="text-button" disabled={actionSaving} onClick={() => { clearActionForms(); returnFocusIdRef.current = `bank-movement-title-${movement.id}`; setDuplicateTarget(movement); setDuplicateOriginalId(duplicateOriginals[0].id); setDuplicateReason(''); setDuplicateRequestId(newRequestId()) }} type="button">Sinalizar duplicado</button>}
                 </div>}
 
                 {candidateTarget?.id === movement.id && <section className="bank-action-panel" aria-labelledby={`candidate-title-${movement.id}`}>
-                  <div className="section-heading"><div><p className="eyebrow">CONFERÊNCIA MANUAL</p><h3 id={`candidate-title-${movement.id}`} ref={candidateHeadingRef} tabIndex={-1}>Selecione os lançamentos correspondentes</h3></div><button className="text-button" disabled={actionSaving} onClick={closeActionForms} type="button">Fechar</button></div>
-                  <p className="section-footnote">Lançamentos da mesma direção, de valor igual ou menor, até 45 dias antes ou depois da data bancária. Selecione até 50 itens; a soma precisa ser igual ao movimento.</p>
-                  {!groupingAvailable && <p className="form-message" role="status">A conciliação com vários lançamentos precisa da atualização do banco de dados. Você ainda pode confirmar um único lançamento de valor igual ao movimento.</p>}
-                  {candidatesLoading && <p className="inline-state" aria-live="polite">Buscando lançamentos elegíveis…</p>}
+                  <div className="section-heading"><div><p className="eyebrow">CONFERIR MOVIMENTO</p><h3 id={`candidate-title-${movement.id}`} ref={candidateHeadingRef} tabIndex={-1}>Escolha os registros deste movimento</h3></div><button className="text-button" disabled={actionSaving} onClick={closeActionForms} type="button">Fechar</button></div>
+                  <p className="section-footnote">Escolha itens com a mesma entrada ou saída, em até 45 dias da data do banco. A soma precisa dar o mesmo valor.</p>
+                  {!groupingAvailable && <p className="form-message" role="status">Não é possível conferir vários itens agora. Você ainda pode escolher um item com o mesmo valor.</p>}
+                  {candidatesLoading && <p className="inline-state" aria-live="polite">Buscando registros…</p>}
                   {candidateError && <p className="form-message form-message-error" role="alert">{candidateError}</p>}
                   {candidateError && <button className="button button-secondary" onClick={() => void loadCandidates(movement)} type="button">Tentar novamente</button>}
-                  {!candidatesLoading && !candidateError && candidates.length === 0 && <p className="inline-state">Nenhum lançamento elegível foi encontrado nesta janela de datas.</p>}
+                  {!candidatesLoading && !candidateError && candidates.length === 0 && <p className="inline-state">Nenhum registro encontrado neste período.</p>}
                   {!candidatesLoading && candidates.length > 0 && <>
                     <p className="section-footnote" role="status">Exibindo {Math.min(candidateLimit, candidates.length)} de {candidates.length} sugestões.</p>
-                    <fieldset className="bank-candidate-fieldset" disabled={actionSaving || loading || Boolean(loadError)} aria-describedby={`bank-selection-total-${movement.id}`}><legend>Selecionar lançamentos</legend>
+                    <fieldset className="bank-candidate-fieldset" disabled={actionSaving || loading || Boolean(loadError)} aria-describedby={`bank-selection-total-${movement.id}`}><legend>Escolher registros</legend>
                     <ul className="bank-candidate-list">{candidates.slice(0, candidateLimit).map((candidate) => {
                       const selected = matchSelection.items.some((item) => item.kind === candidate.kind && item.id === candidate.id)
                       const sameAmount = BigInt(candidate.amount_cents) === (signedAmount(movement.amount_cents) < 0n ? -signedAmount(movement.amount_cents) : signedAmount(movement.amount_cents))
                       return <li key={`${candidate.kind}-${candidate.id}`}><label className="bank-candidate-option"><input type="checkbox" checked={selected} disabled={!selected && matchSelection.items.length >= 50} onChange={() => toggleCandidate(candidate)} /><span><strong>{candidate.title}</strong><small>{candidate.detail} · {formatBusinessDate(candidate.date)} · {candidate.kind === 'receipt' ? 'Recebimento' : 'Saída paga'}{sameAmount ? ' · Valor igual ao extrato' : ''}</small></span><strong className="bank-candidate-value">{formatAmount(candidate.amount_cents)}</strong></label></li>
                     })}</ul></fieldset>
                     {candidates.length > candidateLimit && <button className="button button-secondary" disabled={actionSaving || loading || Boolean(loadError)} onClick={() => setCandidateLimit((limit) => limit + 20)} type="button">Mostrar mais sugestões</button>}
-                    <div className="bank-selection-total" id={`bank-selection-total-${movement.id}`} role="status" aria-live="polite" aria-atomic="true"><p>{selectedCandidates.length} de 50 selecionados · Movimento: {formatAmount((signedAmount(movement.amount_cents) < 0n ? -signedAmount(movement.amount_cents) : signedAmount(movement.amount_cents)).toString())}</p><p><strong>Selecionado: {formatAmount(selectionSummary.total.toString())}</strong> · {selectionSummary.difference === 0n ? 'Soma exata' : selectionSummary.difference > 0n ? `Faltam ${formatAmount(selectionSummary.difference.toString())}` : `Excede em ${formatAmount((-selectionSummary.difference).toString())}`}</p>{selectedCandidates.length === 50 && <p>Limite de 50 itens atingido. Desmarque um item para selecionar outro.</p>}</div>
-                    <div className="record-form-actions"><button className="button button-primary" disabled={actionSaving || loading || Boolean(loadError) || !selectionSummary.canConfirm || (!groupingAvailable && selectedCandidates.length !== 1)} onClick={() => void confirmMatch()} type="button">{actionSaving ? 'Salvando…' : actionError ? 'Tentar confirmar novamente' : 'Confirmar conciliação'}</button></div>
+                    <div className="bank-selection-total" id={`bank-selection-total-${movement.id}`} role="status" aria-live="polite" aria-atomic="true"><p>{selectedCandidates.length} de 50 itens escolhidos · Valor do banco: {formatAmount((signedAmount(movement.amount_cents) < 0n ? -signedAmount(movement.amount_cents) : signedAmount(movement.amount_cents)).toString())}</p><p><strong>Valor dos itens: {formatAmount(selectionSummary.total.toString())}</strong> · {selectionSummary.difference === 0n ? 'Valor igual' : selectionSummary.difference > 0n ? `Faltam ${formatAmount(selectionSummary.difference.toString())}` : `Passou ${formatAmount((-selectionSummary.difference).toString())}`}</p>{selectedCandidates.length === 50 && <p>Você escolheu 50 itens. Tire um item para escolher outro.</p>}</div>
+                    <div className="record-form-actions"><button className="button button-primary" disabled={actionSaving || loading || Boolean(loadError) || !selectionSummary.canConfirm || (!groupingAvailable && selectedCandidates.length !== 1)} onClick={() => void confirmMatch()} type="button">{actionSaving ? 'Salvando…' : actionError ? 'Tentar de novo' : 'Conferir seleção'}</button></div>
                   </>}
                   {actionError && <p className="form-message form-message-error" role="alert">{actionError}</p>}
                 </section>}
 
                 {unmatchTarget && unmatchTarget.id === match?.id && <form className="bank-action-panel bank-reason-form" onSubmit={(event) => void confirmUnmatch(event)}>
-                  <h3 ref={unmatchHeadingRef} tabIndex={-1}>Desfazer conciliação</h3><p className="section-footnote">{match?.match_group_id ? `Todos os ${activeLinks.length} vínculos do grupo serão encerrados` : 'O vínculo será encerrado'} e o motivo ficará no histórico.</p>
+                  <h3 ref={unmatchHeadingRef} tabIndex={-1}>Desfazer conferência</h3><p className="section-footnote">{match?.match_group_id ? `Todos os ${activeLinks.length} registros escolhidos serão desfeitos` : 'O registro escolhido será desfeito'} e o motivo ficará no histórico.</p>
                   <label className="record-field"><span className="field-label">Motivo</span><textarea className="text-input record-textarea" disabled={actionSaving} maxLength={500} onChange={(event) => { setUnmatchReason(event.target.value); actionRequestRef.current = newRequestId() }} required value={unmatchReason} /></label>
                   {actionError && <p className="form-message form-message-error" role="alert">{actionError}</p>}
                   <div className="record-form-actions"><button className="button button-primary" disabled={actionSaving || loading || Boolean(loadError)} type="submit">{actionSaving ? 'Salvando…' : 'Confirmar e desfazer'}</button><button className="text-button" disabled={actionSaving} onClick={closeActionForms} type="button">Cancelar</button></div>
                 </form>}
 
                 {duplicateTarget?.id === movement.id && <form className="bank-action-panel bank-reason-form" onSubmit={(event) => void confirmDuplicate(event)}>
-                  <h3 ref={duplicateHeadingRef} tabIndex={-1}>Sinalizar lançamento duplicado</h3><p className="section-footnote">A comparação inicial considera mesma conta, data e valor. Confira antes de retirar o movimento das sugestões.</p>
+                  <h3 ref={duplicateHeadingRef} tabIndex={-1}>Marcar movimento repetido</h3><p className="section-footnote">A comparação olha conta, data e valor. Confira antes de tirar o item das sugestões.</p>
                   <label className="record-field"><span className="field-label">Movimento original</span><select className="text-input" onChange={(event) => setDuplicateOriginalId(event.target.value)} required value={duplicateOriginalId}>{duplicateOriginals.map((row) => <option key={row.id} value={row.id}>{row.description} · {formatBusinessDate(row.transaction_date)} · {formatAmount(row.amount_cents)}</option>)}</select></label>
                   <label className="record-field"><span className="field-label">Motivo</span><textarea className="text-input record-textarea" maxLength={500} onChange={(event) => setDuplicateReason(event.target.value)} required value={duplicateReason} /></label>
                   {actionError && <p className="form-message form-message-error" role="alert">{actionError}</p>}
@@ -987,7 +987,7 @@ export function BankReconciliationPage() {
           </div>
         </>}
 
-        {loadError && transactions.length > 0 && <p className="inline-state inline-state-error">A lista anterior está desatualizada e as ações de conciliação estão suspensas.</p>}
+        {loadError && transactions.length > 0 && <p className="inline-state inline-state-error">A lista está desatualizada. Atualize antes de conferir os movimentos.</p>}
       </section>
 
     </div>

@@ -59,7 +59,7 @@ function formatTimestamp(value: string) {
 }
 
 function movementLabel(type: Movement['movement_type']) {
-  return ({ opening: 'Contagem inicial', receipt: 'Recebimento de compra', adjustment: 'Ajuste', loss: 'Perda ou avaria', dispatch: 'Despacho de pedido', return: 'Retorno conferido' })[type]
+  return ({ opening: 'Quantidade inicial', receipt: 'Compra recebida', adjustment: 'Quantidade corrigida', loss: 'Perda ou produto danificado', dispatch: 'Pedido saiu para entrega', return: 'Produto devolvido' })[type]
 }
 
 function newLine(productId = '', unitCost = ''): ReceiptLineDraft { return { key: newRequestId(), productId, quantity: '', unitCost } }
@@ -140,7 +140,7 @@ export function InventoryPage() {
           .eq('business_id', businessId).eq('kind', 'inventory_purchase').order('is_active', { ascending: false }).order('next_due_on', { ascending: true }),
       ])
       if (productsResult.error || balancesResult.error || movementsResult.error || receiptsResult.error) {
-        setError('Não foi possível carregar os saldos e o histórico. Tente novamente.')
+        setError('Não foi possível carregar as quantidades e o histórico. Tente novamente.')
         return false
       }
       setProducts((productsResult.data ?? []) as Product[])
@@ -160,7 +160,7 @@ export function InventoryPage() {
       setError(null)
       return true
     } catch {
-      setError('Não foi possível carregar os saldos e o histórico. Tente novamente.')
+      setError('Não foi possível carregar as quantidades e o histórico. Tente novamente.')
       return false
     } finally {
       setLoading(false)
@@ -217,7 +217,7 @@ export function InventoryPage() {
       setError(null)
       return true
     } catch {
-      setError('A alteração foi salva, mas a tela não atualizou. Tente atualizar os saldos.')
+      setError('A alteração foi salva, mas a tela não atualizou. Atualize o estoque.')
       return false
     }
   }, [businessId])
@@ -535,7 +535,7 @@ export function InventoryPage() {
         if (status >= 400 && status < 500) {
           receiptRequestIdRef.current = newRequestId()
           setFormError(rpcError.message.includes('Existing positive stock requires a baseline unit cost')
-            ? 'Este produto já tem saldo sem custo cadastrado. Informe o custo atual no Catálogo antes de receber uma nova compra.'
+            ? 'Este produto está sem custo cadastrado. Informe o custo atual no Catálogo antes de receber uma nova compra.'
             : 'O recebimento não foi registrado. Confira produtos, quantidades e custo por unidade e tente novamente.')
         } else {
           setUncertain(true)
@@ -605,13 +605,13 @@ export function InventoryPage() {
           setFormError('A quantidade não foi atualizada. Confira o produto e tente novamente.')
         } else {
           setUncertain(true)
-          setFormError('Não foi possível confirmar se a movimentação foi registrada. Tente novamente sem alterar os dados.')
+          setFormError('Não foi possível confirmar se a quantidade foi atualizada. Tente novamente sem mudar os dados.')
         }
         return
       }
       if (typeof data !== 'string') {
         setUncertain(true)
-        setFormError('A resposta da movimentação não chegou completa. Tente novamente sem alterar o formulário.')
+        setFormError('A resposta não chegou completa. Tente novamente sem mudar o formulário.')
         return
       }
       setShowMovementForm(false)
@@ -621,7 +621,7 @@ export function InventoryPage() {
       await refreshStockActivity()
     } catch {
       setUncertain(true)
-      setFormError('Não foi possível confirmar se a movimentação foi registrada. Tente novamente sem alterar os dados.')
+      setFormError('Não foi possível confirmar se a quantidade foi atualizada. Tente novamente sem mudar os dados.')
     } finally {
       setSaving(false)
     }
@@ -636,14 +636,14 @@ export function InventoryPage() {
         .eq('business_id', businessId).order('occurred_at', { ascending: false }).order('id', { ascending: false })
         .range(movementOffset, movementOffset + PAGE_SIZE - 1)
       if (queryError) {
-        setError('Não foi possível carregar mais movimentações.')
+        setError('Não foi possível carregar mais alterações do estoque.')
         return
       }
       setMovements((current) => [...current, ...((data ?? []) as Movement[])])
       setMovementOffset((current) => current + (data?.length ?? 0))
       setMovementTotal(count ?? movementTotal)
     } catch {
-      setError('Não foi possível carregar mais movimentações.')
+      setError('Não foi possível carregar mais alterações do estoque.')
     } finally {
       setLoadingMore(false)
     }
@@ -656,7 +656,7 @@ export function InventoryPage() {
   return (
     <div className="page-stack">
       <header className="page-heading">
-        <div><p className="eyebrow">OPERAÇÃO · ESTOQUE</p><h1>Estoque</h1><p className="page-description">Receba produtos, corrija o saldo ou crie um lembrete.</p></div>
+        <div><p className="eyebrow">ESTOQUE</p><h1>Estoque</h1><p className="page-description">Receba compras ou corrija a quantidade.</p></div>
         <div className="record-heading-actions"><button className="button button-secondary" disabled={repeatingReceipt || showReceiptForm || showMovementForm} onClick={() => openPurchaseScheduleForm()} type="button">Criar lembrete</button><button className="button button-secondary" disabled={repeatingReceipt || showPurchaseScheduleForm || showMovementForm || showReceiptForm} onClick={startMovement} ref={movementTriggerRef} type="button"><Icon name="plus" /> Corrigir quantidade</button><button className="button button-primary" disabled={repeatingReceipt || showPurchaseScheduleForm || showReceiptForm || showMovementForm} onClick={() => startReceipt()} ref={receiptTriggerRef} type="button"><Icon name="file" /> Receber compra</button></div>
       </header>
 
@@ -693,24 +693,24 @@ export function InventoryPage() {
       </details>}
 
       <section className="order-balance-grid inventory-summary" aria-label="Resumo do estoque">
-        <article className="surface-panel order-balance-card"><span>Produtos com saldo no sistema</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>Atualizado em despachos, retiradas e recebimentos.</small></article>
-        <article className="surface-panel order-balance-card"><span>Estoque em atenção</span><strong>{loading ? '—' : belowMinimum.length}</strong><small>Saldo zero ou abaixo do mínimo informado.</small>{!loading && belowMinimum.length > 0 && <button className="text-button" onClick={() => setShowReplenishmentList((value) => !value)} type="button">{showReplenishmentList ? 'Fechar lista' : 'Ver produtos'}</button>}</article>
-        <article className="surface-panel order-balance-card"><span>Estoque negativo</span><strong>{loading ? '—' : negativeBalances.length}</strong><small>Saíram mais unidades do que havia no saldo.</small></article>
+        <article className="surface-panel order-balance-card"><span>Produtos no estoque</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>Atualizado ao receber, vender ou retirar produtos.</small></article>
+        <article className="surface-panel order-balance-card"><span>Estoque em atenção</span><strong>{loading ? '—' : belowMinimum.length}</strong><small>Sem unidades ou abaixo do mínimo.</small>{!loading && belowMinimum.length > 0 && <button className="text-button" onClick={() => setShowReplenishmentList((value) => !value)} type="button">{showReplenishmentList ? 'Fechar lista' : 'Ver produtos'}</button>}</article>
+        <article className="surface-panel order-balance-card"><span>Faltam produtos</span><strong>{loading ? '—' : negativeBalances.length}</strong><small>Foram retiradas mais unidades do que havia.</small></article>
       </section>
 
       {showReplenishmentList && belowMinimum.length > 0 && <section className="surface-panel record-panel" aria-labelledby="inventory-replenishment-heading">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">SUGESTÃO DE COMPRA</p><h2 id="inventory-replenishment-heading">Lista de reposição</h2></div><span className="neutral-status">{belowMinimum.length}</span></div>
-        <p className="section-footnote">Saldo zero ou abaixo do mínimo informado. A entrada só atualiza o estoque após confirmar o recebimento.</p>
+        <p className="section-footnote">Sem unidades ou abaixo do mínimo. A quantidade muda quando você confirmar o recebimento.</p>
         <ul className="inventory-balance-list">{belowMinimum.map((balance) => {
           const deficit = balance.minimum_stock === null ? null : Math.max(0, Math.round((Number(balance.minimum_stock) - Number(balance.quantity_on_hand)) * 1000) / 1000)
-          return <li key={balance.product_id}><span className="inventory-balance-copy"><strong>{balance.product_name}</strong><small>Saldo {formatQuantity(Number(balance.quantity_on_hand))}{balance.minimum_stock === null ? '' : ` · mínimo ${formatQuantity(Number(balance.minimum_stock))}`}</small></span><span className="inventory-balance-value"><strong>{deficit === null ? '—' : formatQuantity(deficit)} <small>{balance.inventory_unit}</small></strong><span className="stock-state stock-state-low">{deficit === null ? 'Defina quanto repor' : 'Sugestão para repor'}</span></span></li>
+          return <li key={balance.product_id}><span className="inventory-balance-copy"><strong>{balance.product_name}</strong><small>Quantidade {formatQuantity(Number(balance.quantity_on_hand))}{balance.minimum_stock === null ? '' : ` · mínimo ${formatQuantity(Number(balance.minimum_stock))}`}</small></span><span className="inventory-balance-value"><strong>{deficit === null ? '—' : formatQuantity(deficit)} <small>{balance.inventory_unit}</small></strong><span className="stock-state stock-state-low">{deficit === null ? 'Defina quanto repor' : 'Sugestão para repor'}</span></span></li>
         })}</ul>
         <div className="record-form-actions"><button className="button button-secondary" disabled={loading || saving} onClick={() => startReceipt(belowMinimum.map((balance) => balance.product_id))} type="button">Usar produtos na entrada de estoque</button></div>
       </section>}
 
       {showReceiptForm && <form className="surface-panel record-form" onSubmit={(event) => void handleReceiptSubmit(event)}>
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">ENTRADA DE PRODUTOS</p><h2 ref={receiptHeadingRef} tabIndex={-1}>{selectedPurchaseScheduleId ? 'Confirmar recebimento' : 'Receber compra'}</h2></div><button className="text-button" disabled={receiptFormDisabled} onClick={() => { setShowReceiptForm(false); setSelectedPurchaseScheduleId(null) }} type="button">Fechar</button></div>
-        <p className="section-footnote inventory-form-hint">Informe quantidade e custo. Marque se a compra já foi paga para lançar a saída.</p>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">COMPRA DE PRODUTOS</p><h2 ref={receiptHeadingRef} tabIndex={-1}>{selectedPurchaseScheduleId ? 'Confirmar compra recebida' : 'Receber compra'}</h2></div><button className="text-button" disabled={receiptFormDisabled} onClick={() => { setShowReceiptForm(false); setSelectedPurchaseScheduleId(null) }} type="button">Fechar</button></div>
+        <p className="section-footnote inventory-form-hint">Informe a quantidade e o custo. Marque se já pagou para registrar a despesa.</p>
         {trackedProducts.length === 0 ? <p className="inline-state">Edite um produto no <Link to="/catalogo">Catálogo</Link> e informe sua unidade e quantidade física para registrar compras recebidas.</p> : <>
           {receipts[0] && <button className="text-button" disabled={saving || uncertain || repeatingReceipt || receiptHasProductLines} onClick={() => void repeatLastReceiptProducts()} type="button">{repeatingReceipt ? 'Carregando produtos…' : 'Repetir produtos da última compra'}</button>}
           {receiptSuggestionNotice && <p className="form-message form-message-success" role="status">{receiptSuggestionNotice}</p>}
@@ -723,7 +723,7 @@ export function InventoryPage() {
                   const product = trackedProducts.find((item) => item.id === event.target.value)
                   return { ...row, productId: event.target.value, unitCost: unitCostInput(product?.cost_cents) }
                 }))} required value={line.productId}><option value="">Selecione um produto</option>{trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
-                <label className="record-field"><span className="field-label">Quantidade recebida{selected?.inventory_unit ? ' · ' + selected.inventory_unit : ''}</span><input className="text-input" disabled={receiptFormDisabled} inputMode={isDiscreteInventoryUnit(selected?.inventory_unit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required value={line.quantity} /></label>
+            <label className="record-field"><span className="field-label">Quantidade que chegou{selected?.inventory_unit ? ' · ' + selected.inventory_unit : ''}</span><input className="text-input" disabled={receiptFormDisabled} inputMode={isDiscreteInventoryUnit(selected?.inventory_unit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, quantity: event.target.value } : row))} placeholder="1" required value={line.quantity} /></label>
                 <label className="record-field"><span className="field-label">Custo por unidade · R$</span><input className="text-input" disabled={receiptFormDisabled} inputMode="decimal" maxLength={16} onChange={(event) => setReceiptLines((current) => current.map((row) => row.key === line.key ? { ...row, unitCost: event.target.value } : row))} placeholder="0,00" required value={line.unitCost} /><small className="field-optional">{selected?.cost_cents !== null && selected?.cost_cents !== undefined ? 'Pré-preenchido com o custo atual.' : 'Informe o custo da compra.'}</small></label>
                 <button aria-label={'Remover produto ' + (index + 1)} className="text-button order-remove-button" disabled={receiptFormDisabled || receiptLines.length === 1} onClick={() => setReceiptLines((current) => current.filter((row) => row.key !== line.key))} type="button">Remover</button>
               </div>
@@ -734,8 +734,8 @@ export function InventoryPage() {
             <label className="record-field"><span className="field-label">Recebido em</span><input className="text-input" disabled={receiptFormDisabled} max={businessToday()} onChange={(event) => setReceiptDate(event.target.value)} required type="date" value={receiptDate} /><small className="field-optional">Padrão: hoje. Mude somente se recebeu em outro dia.</small></label>
           </div>
           <div className="record-field-wide inventory-purchase-total">
-            <label className="record-checkbox"><input checked={receiptRecordAsPaid} disabled={receiptFormDisabled} onChange={(event) => setReceiptRecordAsPaid(event.target.checked)} type="checkbox" /><span><strong>A compra já foi paga</strong><small>Marcado: lança {Number.isSafeInteger(receiptEstimatedTotalCents) ? formatBRL(receiptEstimatedTotalCents) : 'o total calculado'} em Compras de estoque, na data de hoje. Desmarque se ainda não pagou.</small></span></label>
-            <p className="section-footnote">A saída financeira é registrada na data de hoje. O custo do produto entra no resultado conforme ele for vendido.</p>
+            <label className="record-checkbox"><input checked={receiptRecordAsPaid} disabled={receiptFormDisabled} onChange={(event) => setReceiptRecordAsPaid(event.target.checked)} type="checkbox" /><span><strong>Já paguei esta compra</strong><small>Ao marcar, registra {Number.isSafeInteger(receiptEstimatedTotalCents) ? formatBRL(receiptEstimatedTotalCents) : 'o total calculado'} como despesa de hoje. Desmarque se ainda não pagou.</small></span></label>
+            <p className="section-footnote">O custo dos produtos entra no cálculo quando forem vendidos.</p>
           </div>
           <details className="record-field-wide inventory-receipt-details">
             <summary>Detalhes opcionais da compra</summary>
@@ -745,26 +745,26 @@ export function InventoryPage() {
             </div>
           </details>
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
-          <div className="record-form-actions"><button className="button button-primary" disabled={saving || repeatingReceipt} type="submit">{saving ? 'Registrando…' : uncertain ? 'Tentar novamente sem alterar os dados' : repeatingReceipt ? 'Carregando produtos…' : 'Confirmar recebimento físico'}</button></div>
+          <div className="record-form-actions"><button className="button button-primary" disabled={saving || repeatingReceipt} type="submit">{saving ? 'Salvando…' : uncertain ? 'Tentar novamente sem alterar os dados' : repeatingReceipt ? 'Carregando produtos…' : 'Confirmar compra recebida'}</button></div>
         </>}
       </form>}
 
       {showMovementForm && <form className="surface-panel record-form" onSubmit={(event) => void handleMovementSubmit(event)}>
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">AJUSTE DE SALDO</p><h2 ref={movementHeadingRef} tabIndex={-1}>Corrigir quantidade</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowMovementForm(false)} type="button">Fechar</button></div>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">CORRIGIR ESTOQUE</p><h2 ref={movementHeadingRef} tabIndex={-1}>Corrigir quantidade</h2></div><button className="text-button" disabled={saving || uncertain} onClick={() => setShowMovementForm(false)} type="button">Fechar</button></div>
         <p className="section-footnote inventory-form-hint">Atualiza a quantidade atual do produto.</p>
         <div className="record-form-grid">
           <label className="record-field"><span className="field-label">Produto <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => setMovementProductId(event.target.value)} required value={movementProductId}><option value="">Selecione um produto</option>{trackedProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.inventory_unit}</option>)}</select></label>
           <label className="record-field"><span className="field-label">Quantidade{movementProductId && selectedMovementUnit ? ' · ' + selectedMovementUnit : ''} <span aria-hidden="true">*</span></span><input className="text-input" disabled={saving || uncertain} inputMode={isDiscreteInventoryUnit(selectedMovementUnit) ? 'numeric' : 'decimal'} maxLength={16} onChange={(event) => setMovementQuantity(event.target.value)} placeholder="0" required value={movementQuantity} /></label>
-          <label className="record-field"><span className="field-label">Direção <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => setMovementDirection(event.target.value as 'increase' | 'decrease')} value={movementDirection}><option value="increase">Adicionar ao saldo</option><option value="decrease">Retirar do saldo</option></select></label>
+          <label className="record-field"><span className="field-label">O que fazer? <span aria-hidden="true">*</span></span><select className="text-input" disabled={saving || uncertain} onChange={(event) => setMovementDirection(event.target.value as 'increase' | 'decrease')} value={movementDirection}><option value="increase">Adicionar unidades</option><option value="decrease">Retirar unidades</option></select></label>
         </div>
         {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
         <div className="record-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : uncertain ? 'Tentar novamente sem alterar os dados' : 'Salvar quantidade'}</button></div>
       </form>}
 
       <section className="surface-panel record-panel" aria-labelledby="inventory-balance-heading">
-        <div className="section-heading section-heading-compact"><div><p className="eyebrow">QUANTIDADE ATUAL</p><h2 id="inventory-balance-heading">Produtos com saldo</h2></div><span className="neutral-status">{loading ? '—' : balances.length}</span></div>
+        <div className="section-heading section-heading-compact"><div><p className="eyebrow">QUANTIDADE ATUAL</p><h2 id="inventory-balance-heading">Produtos no estoque</h2></div><span className="neutral-status">{loading ? '—' : balances.length}</span></div>
         {!loading && balances.length > 0 && <label className="search-field"><Icon name="search" /><span className="visually-hidden">Buscar produtos no estoque</span><input onChange={(event) => setBalanceSearch(event.target.value)} placeholder="Buscar produto" value={balanceSearch} /></label>}
-        {loading ? <p className="inline-state" aria-live="polite">Carregando saldos…</p> : balances.length === 0 ? <div className="inline-state"><p>Não há saldos configurados. Configure a unidade e a contagem inicial no catálogo.</p><Link className="quiet-link" to="/catalogo">Abrir catálogo →</Link></div> : <ul className="inventory-balance-list">
+        {loading ? <p className="inline-state" aria-live="polite">Carregando estoque…</p> : balances.length === 0 ? <div className="inline-state"><p>Nenhum produto no estoque. Cadastre os produtos e informe a quantidade no catálogo.</p><Link className="quiet-link" to="/catalogo">Abrir catálogo →</Link></div> : <ul className="inventory-balance-list">
           {filteredBalances.length === 0 ? <li className="inline-state">Nenhum produto corresponde à busca.</li> : filteredBalances.map((balance) => {
             const quantity = Number(balance.quantity_on_hand)
             const isNegative = quantity < 0
@@ -779,10 +779,10 @@ export function InventoryPage() {
         {!loading && untrackedProducts.length > 0 && <div className="inventory-untracked"><p className="eyebrow">PRODUTOS AGUARDANDO CONTAGEM</p><p>{untrackedProducts.map((product) => product.name).join(' · ')}</p><Link className="quiet-link" to="/catalogo">Definir unidade e quantidade →</Link></div>}
       </section>
 
-      <details className="surface-panel dashboard-trend-details inventory-history-details" aria-label="Histórico de movimentações">
-        <summary>Ver histórico de movimentações <span>{movementTotal} registros</span></summary>
+      <details className="surface-panel dashboard-trend-details inventory-history-details" aria-label="Histórico do estoque">
+        <summary>Ver histórico do estoque <span>{movementTotal} registros</span></summary>
         <div className="inventory-history-content">
-        {loading ? <p className="inline-state" aria-live="polite">Carregando movimentações…</p> : movements.length === 0 ? <p className="inline-state">Nenhuma movimentação registrada.</p> : <ul className="timeline-list inventory-movement-list">
+        {loading ? <p className="inline-state" aria-live="polite">Carregando histórico…</p> : movements.length === 0 ? <p className="inline-state">Nenhuma alteração registrada.</p> : <ul className="timeline-list inventory-movement-list">
           {pagedMovements.map((movement) => {
             const product = productMap.get(movement.product_id)
             const quantity = Number(movement.quantity_delta)
@@ -796,8 +796,8 @@ export function InventoryPage() {
           })}
         </ul>}
         {!loading && movements.length > 0 && <div className="record-form-actions inventory-history-actions">
-          {historyPage > 0 && <button className="button button-secondary" onClick={() => setHistoryPage((page) => Math.max(0, page - 1))} type="button">Movimentações mais recentes</button>}
-          {historyPage < lastHistoryPage && <button className="button button-secondary" onClick={() => setHistoryPage((page) => Math.min(lastHistoryPage, page + 1))} type="button">Movimentações anteriores</button>}
+          {historyPage > 0 && <button className="button button-secondary" onClick={() => setHistoryPage((page) => Math.max(0, page - 1))} type="button">Alterações mais recentes</button>}
+          {historyPage < lastHistoryPage && <button className="button button-secondary" onClick={() => setHistoryPage((page) => Math.min(lastHistoryPage, page + 1))} type="button">Alterações anteriores</button>}
           {movementOffset < movementTotal && historyPage === lastHistoryPage && <button className="button button-secondary" disabled={loadingMore} onClick={() => void loadMoreMovements()} type="button">{loadingMore ? 'Carregando…' : 'Carregar histórico anterior'}</button>}
         </div>}
         </div>

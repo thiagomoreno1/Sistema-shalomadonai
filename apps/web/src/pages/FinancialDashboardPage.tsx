@@ -13,9 +13,9 @@ export function FinancialDashboardPage() {
         <div>
           <p className="eyebrow">FINANCEIRO</p>
           <h1>Dashboard</h1>
-          <p className="page-description">Faturamento, custos e gráficos do período.</p>
+          <p className="page-description">Veja quanto vendeu, quanto gastou e o que sobrou.</p>
         </div>
-        <Link className="button button-secondary" to="/relatorios/financeiro">Relatório financeiro</Link>
+        <Link className="button button-secondary" to="/relatorios/financeiro">Ver relatório</Link>
       </header>
       <FinanceNavigation active="dashboard" />
       {canViewDashboard

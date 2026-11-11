@@ -246,7 +246,7 @@ export function FinancialOutflowsPage() {
           if (linkResult.error) throw linkResult.error
           receiptLinks.push(...(linkResult.data ?? []))
         } catch {
-          warning = 'Os lançamentos foram carregados, mas não foi possível carregar os vínculos com recebimentos físicos.'
+          warning = 'As despesas abriram, mas as compras relacionadas não foram carregadas.'
         }
       }
 
@@ -265,7 +265,7 @@ export function FinancialOutflowsPage() {
           }
           relatedReceipts = loaded
         } catch {
-          warning = 'Os lançamentos foram carregados, mas não foi possível carregar os detalhes dos recebimentos físicos vinculados.'
+          warning = 'As despesas abriram, mas os detalhes das compras relacionadas não apareceram.'
         }
       }
 
@@ -283,7 +283,7 @@ export function FinancialOutflowsPage() {
           }
           relatedOrders = loaded
         } catch {
-          warning = 'Os lançamentos foram carregados, mas não foi possível carregar os nomes dos pedidos vinculados.'
+          warning = 'As despesas abriram, mas os nomes dos pedidos relacionados não apareceram.'
         }
       }
 
@@ -308,7 +308,7 @@ export function FinancialOutflowsPage() {
       setReferenceWarning(warning)
     } catch {
       if (request !== historyRequestRef.current) return
-      setHistoryError('Não foi possível carregar os lançamentos pagos. Tente novamente.')
+      setHistoryError('Não foi possível carregar as despesas pagas. Tente de novo.')
       setOutflows([])
       setHistoryTotal(0)
       setReferenceWarning(null)
@@ -390,7 +390,7 @@ export function FinancialOutflowsPage() {
       })
       setReceiptOptionsTotal(count ?? (append ? from + fetchedRows.length : fetchedRows.length))
     } catch {
-      setReceiptError('Não foi possível carregar os recebimentos físicos. Você ainda pode registrar a compra sem vinculá-la.')
+      setReceiptError('Não foi possível carregar as compras recebidas. Você ainda pode registrar a despesa sem escolher uma compra.')
       if (!append) setReceiptOptions([])
     } finally {
       if (append) setReceiptLoadingMore(false)
@@ -423,7 +423,7 @@ export function FinancialOutflowsPage() {
       setOrderOptions(results)
     } catch {
       if (request === orderSearchRequestRef.current) {
-        setOrdersError('Não foi possível localizar pedidos. O vínculo é opcional; você pode registrar o custo sem associá-lo.')
+      setOrdersError('Não foi possível localizar pedidos. Escolher um pedido é opcional.')
         setOrderOptions(selectedOrder ? [selectedOrder] : [])
       }
     } finally {
@@ -461,7 +461,7 @@ export function FinancialOutflowsPage() {
       return
     }
     if (!supabaseClient) {
-      setPrefillError('Não há conexão com o Supabase para confirmar este recebimento. A compra não foi lançada; reabra o link quando a conexão voltar ou continue sem vínculo.')
+      setPrefillError('Não foi possível confirmar esta compra. Nenhuma despesa foi salva; abra o link novamente ou continue sem escolher uma compra.')
       return
     }
 
@@ -473,11 +473,11 @@ export function FinancialOutflowsPage() {
           .eq('business_id', businessId).eq('id', receiptIdFromUrl).maybeSingle()
         if (!active) return
         if (error) {
-          setPrefillError('Não foi possível carregar este recebimento. Nenhum gasto foi lançado; reabra o link ou continue sem vínculo.')
+          setPrefillError('Não foi possível carregar esta compra. Nenhuma despesa foi salva; abra o link novamente ou continue sem escolher uma compra.')
           return
         }
         if (!data) {
-          setPrefillError('Este recebimento não foi encontrado para esta empresa. Nenhum gasto foi lançado; confira o estoque ou continue sem vínculo.')
+          setPrefillError('Esta compra não foi encontrada. Nenhuma despesa foi salva; confira o estoque ou continue sem escolher uma compra.')
           return
         }
         const receipt = data as InventoryReceipt
@@ -487,7 +487,7 @@ export function FinancialOutflowsPage() {
           .eq('inventory_receipt_id', receipt.id)
         if (!active) return
         if (linkError) {
-          setPrefillError('Não foi possível verificar se esta compra já foi paga. Nenhum novo lançamento foi preparado.')
+          setPrefillError('Não foi possível conferir se esta compra já foi paga. Nenhuma despesa nova foi preparada.')
           return
         }
         const linkedOutflowIds = (linkRows ?? []).map((row) => (row as { outflow_id: string }).outflow_id)
@@ -498,7 +498,7 @@ export function FinancialOutflowsPage() {
             .in('outflow_id', linkedOutflowIds)
           if (!active) return
           if (voidError) {
-            setPrefillError('Não foi possível confirmar o status financeiro deste recebimento. Nenhum novo lançamento foi preparado.')
+            setPrefillError('Não foi possível conferir se esta compra já foi paga. Nenhuma despesa nova foi preparada.')
             return
           }
           const voidedOutflowIds = new Set((voidRows ?? []).map((row) => (row as { outflow_id: string }).outflow_id))
@@ -531,7 +531,7 @@ export function FinancialOutflowsPage() {
             : `Recebimento de ${formatBusinessDate(receipt.received_on)} vinculado. ${lineError ? 'Não foi possível ler o custo cadastrado.' : 'Cadastre o custo unitário de todos os itens ou informe o total pago.'} Informe o valor realmente pago; nada foi lançado ainda.`,
         })
       } catch {
-        if (active) setPrefillError('Não foi possível confirmar este recebimento. Nenhum gasto foi lançado; reabra o link ou continue sem vínculo.')
+        if (active) setPrefillError('Não foi possível confirmar esta compra. Nenhuma despesa foi salva; abra o link novamente ou continue sem escolher uma compra.')
       }
     })()
     return () => { active = false }
@@ -715,7 +715,7 @@ export function FinancialOutflowsPage() {
         pendingExpenseScheduleCompletion.dueOn,
         pendingExpenseScheduleCompletion.outflowId,
       )
-      if (completed) setNotice('Lembrete avançado. O pagamento já estava salvo; nenhum lançamento duplicado foi criado.')
+      if (completed) setNotice('Lembrete atualizado. O pagamento já estava salvo; nenhuma despesa repetida foi criada.')
     } finally {
       setExpenseScheduleBusyId(null)
     }
@@ -757,11 +757,11 @@ export function FinancialOutflowsPage() {
       return
     }
     if (!outflowType) {
-      setFormError('Escolha o tipo de gasto para salvar o registro.')
+      setFormError('Escolha o tipo de despesa.')
       return
     }
     if (outflowType !== 'purchase' && selectedReceiptIds.length > 0) {
-      setFormError('Vínculos a recebimentos físicos só podem ser usados em compras.')
+      setFormError('Só compras podem ser relacionadas a uma compra recebida.')
       return
     }
 
@@ -785,10 +785,10 @@ export function FinancialOutflowsPage() {
         if (status >= 400 && status < 500) {
           requestIdRef.current = newRequestId()
           setUncertain(false)
-          setFormError('O lançamento não foi registrado. Confira os campos e tente novamente.')
+          setFormError('A despesa não foi salva. Confira os campos e tente de novo.')
         } else {
           setUncertain(true)
-          setFormError('Não foi possível confirmar se o lançamento foi registrado. Tente novamente sem alterar os dados para evitar duplicidade.')
+          setFormError('Não foi possível confirmar se a despesa foi salva. Tente de novo sem mudar os dados para evitar repetição.')
         }
         return
       }
@@ -799,7 +799,7 @@ export function FinancialOutflowsPage() {
         ? await completeExpenseSchedule(linkedSchedule.id, linkedSchedule.next_due_on, savedOutflowId)
         : null
       if (linkedSchedule && typeof savedOutflowId !== 'string') {
-        setExpenseScheduleCompletionError('O pagamento foi salvo, mas o identificador não voltou para avançar o lembrete. Atualize a tela antes de fazer novo lançamento.')
+        setExpenseScheduleCompletionError('O pagamento foi salvo, mas o lembrete não foi atualizado. Atualize a tela antes de registrar outra despesa.')
       }
       const paidReceiptIds = outflowType === 'purchase' ? new Set(selectedReceiptIds) : new Set<string>()
       if (paidReceiptIds.size > 0) {
@@ -811,14 +811,14 @@ export function FinancialOutflowsPage() {
           : 'Despesa paga registrada. O lembrete segue pendente; atualize a data sem registrar o pagamento outra vez.'
         : linkedSchedule
           ? 'Despesa paga registrada. Confira o aviso do lembrete antes de fechar.'
-          : 'Gasto pago registrado. O sistema não processou o pagamento nem consultou o banco.')
+          : 'Despesa paga salva. O sistema não fez o pagamento nem consultou o banco.')
       setShowForm(false)
       resetForm()
       requestIdRef.current = newRequestId()
       await loadHistory(0)
     } catch {
       setUncertain(true)
-      setFormError('Não foi possível confirmar se o lançamento foi registrado. Seus dados foram preservados; tente novamente sem alterá-los.')
+      setFormError('Não foi possível confirmar se a despesa foi salva. Seus dados continuam no formulário; tente de novo sem mudar nada.')
     } finally {
       setSaving(false)
     }
@@ -874,7 +874,7 @@ export function FinancialOutflowsPage() {
       setVoidError('Informe o motivo da anulação, com até 1.000 caracteres.')
       return
     }
-    const confirmed = window.confirm(`Anular por erro o lançamento de ${formatAmount(voidTarget.amount_cents)}? Ele deixará de compor os totais, mas continuará no histórico. Esta ação não registra entrada ou saída adicional de dinheiro.`)
+    const confirmed = window.confirm(`Corrigir a despesa de ${formatAmount(voidTarget.amount_cents)}? Ela sai dos totais, mas continua no histórico. Esta ação não registra outra entrada ou saída de dinheiro.`)
     if (!confirmed) return
 
     setVoiding(true)
@@ -897,7 +897,7 @@ export function FinancialOutflowsPage() {
         }
         return
       }
-      setVoidNotice('Lançamento anulado por erro e mantido no histórico. Nenhuma movimentação de dinheiro foi registrada pela anulação.')
+      setVoidNotice('Despesa corrigida e mantida no histórico. Nenhuma outra entrada ou saída de dinheiro foi registrada.')
       setVoidTarget(null)
       setVoidReason('')
       setVoidUncertain(false)
@@ -928,10 +928,10 @@ export function FinancialOutflowsPage() {
       <FinanceNavigation active="outflows" />
       <header className="page-heading">
         <div>
-          <p className="eyebrow">FINANCEIRO · GASTOS PAGOS</p>
-          <h1>Gastos pagos</h1>
+          <p className="eyebrow">FINANCEIRO · DESPESAS PAGAS</p>
+          <h1>Despesas pagas</h1>
         </div>
-        <div className="record-heading-actions"><button className="button button-secondary" disabled={Boolean(voidTarget) || showForm} onClick={() => openExpenseScheduleForm()} type="button">Agendar despesa</button><button className="button button-primary" disabled={Boolean(voidTarget) || showExpenseScheduleForm} onClick={() => { resetForm(); setNotice(null); setVoidNotice(null); setShowForm(true) }} ref={formTriggerRef} type="button">Registrar gasto pago</button></div>
+        <div className="record-heading-actions"><button className="button button-secondary" disabled={Boolean(voidTarget) || showForm} onClick={() => openExpenseScheduleForm()} type="button">Agendar despesa</button><button className="button button-primary" disabled={Boolean(voidTarget) || showExpenseScheduleForm} onClick={() => { resetForm(); setNotice(null); setVoidNotice(null); setShowForm(true) }} ref={formTriggerRef} type="button">Adicionar despesa paga</button></div>
       </header>
 
       {notice && <p className="form-message form-message-success" role="status">{notice}</p>}
@@ -966,7 +966,7 @@ export function FinancialOutflowsPage() {
       {showForm && (
         <form className="surface-panel record-form" onSubmit={handleSubmit}>
           <div className="section-heading section-heading-compact">
-            <div><p className="eyebrow">LANÇAMENTOS</p><h2 ref={formHeadingRef} tabIndex={-1}>Registrar gasto já pago</h2></div>
+            <div><p className="eyebrow">NOVA DESPESA</p><h2 ref={formHeadingRef} tabIndex={-1}>Adicionar despesa já paga</h2></div>
             <button className="text-button" disabled={saving || uncertain} onClick={() => { setShowForm(false); clearReceiptPrefillFromUrl(); prefilledReceiptRef.current = null; setReceiptPrefillStatus(null) }} type="button">Fechar</button>
           </div>
           {receiptPrefillStatus && <div className={`form-message ${receiptPrefillStatus.state === 'error' ? 'form-message-warning' : receiptPrefillStatus.state === 'ready' ? 'form-message-success' : ''}`} role={receiptPrefillStatus.state === 'error' ? 'alert' : 'status'}>
@@ -1006,9 +1006,9 @@ export function FinancialOutflowsPage() {
             </label>
             {salaryExpenseDraft && <p className="form-message form-message-warning record-field-wide" role="status">Se o salário está cadastrado na equipe, registre o pagamento em <Link className="quiet-link" to="/equipe#pagamentos-equipe">Equipe · Salários a pagar</Link> para evitar lançar a mesma competência duas vezes.</p>}
             {outflowType === 'purchase' && <div className="record-field record-field-wide">
-              <span className="field-label">Recebimentos de estoque vinculados <span className="field-optional">opcional</span></span>
-              <p className="section-footnote">Este gasto ficará ligado ao recebimento para consulta. O saldo de estoque já foi atualizado quando a mercadoria foi recebida.</p>
-              {receiptLoading && <p className="inline-state">Carregando recebimentos físicos…</p>}
+              <span className="field-label">Compra de estoque relacionada <span className="field-optional">opcional</span></span>
+              <p className="section-footnote">Escolha a compra relacionada a esta despesa.</p>
+              {receiptLoading && <p className="inline-state">Carregando compras recebidas…</p>}
               {receiptError && <div className="form-message form-message-warning" role="status"><p>{receiptError}</p><button className="text-button" disabled={saving || uncertain} onClick={() => void loadReceiptOptions()} type="button">Tentar carregar novamente</button></div>}
               {!receiptLoading && !receiptError && receiptOptions.length === 0 && <p className="inline-state">Nenhum recebimento disponível neste lote. Compras já pagas ficam ocultas.</p>}
               {!receiptLoading && !receiptError && receiptOptions.length > 0 && (
@@ -1059,27 +1059,27 @@ export function FinancialOutflowsPage() {
 
       {voidTarget && <form className="surface-panel record-form" onSubmit={handleVoidSubmit}>
         <div className="section-heading section-heading-compact">
-          <div><p className="eyebrow">CORREÇÃO AUDITÁVEL</p><h2 ref={voidHeadingRef} tabIndex={-1}>Anular lançamento por erro</h2></div>
+          <div><p className="eyebrow">CORRIGIR DESPESA</p><h2 ref={voidHeadingRef} tabIndex={-1}>Corrigir despesa registrada por engano</h2></div>
           <button className="text-button" disabled={voiding || voidUncertain} onClick={() => setVoidTarget(null)} type="button">Fechar</button>
         </div>
-        <p className="section-footnote">{outflowTypeLabel(voidTarget.outflow_type)} · {voidTarget.description} · {formatAmount(voidTarget.amount_cents)}. A anulação mantém o registro e o motivo no histórico, remove este valor dos totais e não registra um reembolso nem outra movimentação financeira.</p>
-        <label className="record-field record-field-wide"><span className="field-label">Motivo da anulação <span aria-hidden="true">*</span></span><textarea className="text-input record-textarea" disabled={voiding || voidUncertain} maxLength={1000} onChange={(event) => setVoidReason(event.target.value)} required rows={2} value={voidReason} /></label>
+        <p className="section-footnote">{outflowTypeLabel(voidTarget.outflow_type)} · {voidTarget.description} · {formatAmount(voidTarget.amount_cents)}. A correção tira este valor dos totais, mas mantém o registro no histórico. Não cria um reembolso.</p>
+        <label className="record-field record-field-wide"><span className="field-label">Por que está corrigindo? <span aria-hidden="true">*</span></span><textarea className="text-input record-textarea" disabled={voiding || voidUncertain} maxLength={1000} onChange={(event) => setVoidReason(event.target.value)} required rows={2} value={voidReason} /></label>
         {voidError && <p className="form-message form-message-error" role="alert">{voidError}</p>}
         <div className="record-form-actions">
-          <button className="button button-secondary" disabled={voiding || voidUncertain} onClick={() => setVoidTarget(null)} type="button">Manter lançamento</button>
-          <button className="button button-primary" disabled={voiding || voidUncertain} type="submit">{voiding ? 'Anulando…' : voidUncertain ? 'Tentar novamente sem alterar o motivo' : 'Anular lançamento por erro'}</button>
+          <button className="button button-secondary" disabled={voiding || voidUncertain} onClick={() => setVoidTarget(null)} type="button">Manter despesa</button>
+          <button className="button button-primary" disabled={voiding || voidUncertain} type="submit">{voiding ? 'Corrigindo…' : voidUncertain ? 'Tentar de novo sem mudar o motivo' : 'Corrigir despesa'}</button>
         </div>
       </form>}
 
       <section className="surface-panel record-panel" aria-labelledby="financial-outflows-heading">
         <div className="section-heading section-heading-compact">
-          <div><p className="eyebrow">PAGAMENTOS INFORMADOS</p><h2 id="financial-outflows-heading">Lançamentos pagos</h2></div>
+          <div><p className="eyebrow">HISTÓRICO</p><h2 id="financial-outflows-heading">Despesas pagas</h2></div>
           <span className="neutral-status">{historyLoading ? '…' : historyTotal}</span>
         </div>
-        <p className="section-footnote">Cada linha é um valor pago informado manualmente. Se houver erro de lançamento, anule com um motivo e registre outro valor correto; a anulação não cria um reembolso. Esta lista não é pagamento processado nem extrato bancário.</p>
+        <p className="section-footnote">Aqui ficam as despesas que a equipe informou como pagas. Corrija uma despesa errada; isso não cria um reembolso.</p>
         {referenceWarning && <p className="form-message form-message-warning" role="status">{referenceWarning}</p>}
         {historyError && <div className="inline-state inline-state-error" role="alert"><p>{historyError}</p><button className="text-button" onClick={() => void loadHistory(historyPage)} type="button">Tentar novamente</button></div>}
-        {historyLoading && <p className="inline-state" aria-live="polite">Carregando lançamentos…</p>}
+        {historyLoading && <p className="inline-state" aria-live="polite">Carregando despesas…</p>}
         {!historyLoading && !historyError && outflows.length === 0 && <p className="inline-state">Nenhuma saída paga registrada ainda.</p>}
         {!historyLoading && !historyError && outflows.length > 0 && <>
           <div aria-label="Pagamentos informados" className="report-table-wrap" role="region" tabIndex={0}>
@@ -1096,14 +1096,14 @@ export function FinancialOutflowsPage() {
                     {outflow.receipts.map((receipt) => <p key={receipt.id}>{receipt.supplier_name || 'Recebimento de estoque'}{receipt.purchase_reference ? ` · Ref. ${receipt.purchase_reference}` : ''} · {formatBusinessDate(receipt.received_on)}</p>)}
                     {!outflow.order_id && outflow.receipts.length === 0 && '—'}
                   </td>
-                  <td>{outflow.void_event ? <><strong>Anulado por erro</strong><small className="section-footnote">{formatBusinessDate(businessDateFromTimestamp(outflow.void_event.created_at))} · {outflow.void_event.reason}</small></> : <button className="text-button" disabled={voiding} onClick={(event) => openVoidForm(outflow, event.currentTarget)} type="button">Anular por erro</button>}</td>
+                  <td>{outflow.void_event ? <><strong>Corrigido</strong><small className="section-footnote">{formatBusinessDate(businessDateFromTimestamp(outflow.void_event.created_at))} · {outflow.void_event.reason}</small></> : <button className="text-button" disabled={voiding} onClick={(event) => openVoidForm(outflow, event.currentTarget)} type="button">Corrigir</button>}</td>
                 </tr>
               ))}</tbody>
             </table>
           </div>
-          {referenceWarning && <p className="section-footnote">Alguns vínculos opcionais podem estar indisponíveis nesta consulta.</p>}
+          {referenceWarning && <p className="section-footnote">Alguns pedidos ou compras relacionadas podem não aparecer.</p>}
           <div className="inventory-history-actions">
-            <span className="section-footnote">Exibindo {startRow}–{endRow} de {historyTotal} lançamentos.</span>
+            <span className="section-footnote">Exibindo {startRow}–{endRow} de {historyTotal} despesas.</span>
             <div className="record-heading-actions">
               <button className="button button-secondary" disabled={historyLoading || historyPage === 0} onClick={() => void loadHistory(historyPage - 1)} type="button">Anterior</button>
               <span className="neutral-status">Página {historyPage + 1} de {pageCount}</span>

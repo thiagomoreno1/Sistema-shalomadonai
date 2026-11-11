@@ -83,7 +83,7 @@ export function TeamPage() {
       || (needsPortal && !accountWorkerId && (!cleanEmail || password.length < 8 || password.length > 128))
       || (monthlySalary.trim() && (salaryCents === null || !Number.isSafeInteger(salaryCents) || salaryCents <= 0))
       || (salaryCents !== null && (!Number.isInteger(dueDay) || dueDay === null || dueDay < 1 || dueDay > 31))) {
-      setError('Confira nome, salário e vencimento. Entregadores também precisam de e-mail e senha inicial.')
+      setError('Confira o nome e o salário. Para criar acesso de entregador, informe também o e-mail e a senha inicial.')
       return
     }
     setSaving(true)
@@ -111,7 +111,7 @@ export function TeamPage() {
           setMonthlySalary('')
           setSalaryDueDay('')
           setShowForm(false)
-          setNotice(`${cleanName} foi cadastrado na equipe. ${salaryCents === null ? '' : 'O salário mensal e o vencimento foram configurados.'}`)
+          setNotice(`${cleanName} foi cadastrado na equipe. ${salaryCents === null ? '' : 'O salário mensal e o dia de pagamento foram configurados.'}`)
           await loadWorkers()
           return
         }
@@ -241,7 +241,7 @@ export function TeamPage() {
       return
     }
     if (amountCents !== null && (!Number.isInteger(dueDay) || dueDay === null || dueDay < 1 || dueDay > 31)) {
-      setError('Informe o dia de vencimento entre 1 e 31.')
+      setError('Informe um dia de pagamento entre 1 e 31.')
       return
     }
     setActionWorkerId(worker.id)
@@ -324,7 +324,7 @@ export function TeamPage() {
   return (
     <div className="page-stack team-page">
       <header className="page-heading">
-        <div><p className="eyebrow">PESSOAS E PAGAMENTOS</p><h1>Equipe</h1><p className="page-description">Cadastre funcionários e entregadores, acompanhe os salários e gerencie acessos ao painel de entregas.</p></div>
+        <div><p className="eyebrow">EQUIPE</p><h1>Equipe</h1><p className="page-description">Cadastre funcionários e entregadores e acompanhe salários e acessos.</p></div>
         {canManageBusiness(role) && <div className="team-heading-actions"><Link className="button button-secondary" to="/entregador/visualizar"><Icon name="truck" /> Visualizar painel</Link><button className="button button-primary" onClick={() => { setShowForm((open) => !open); setAccountWorkerId(null); setMemberType('delivery_driver'); setName(''); setPhone(''); setMonthlySalary(''); setSalaryDueDay(''); setEmail(''); setPassword(''); setError(null); setNotice(null) }} type="button"><Icon name="plus" /> Novo membro</button></div>}
       </header>
 
@@ -334,13 +334,13 @@ export function TeamPage() {
       {!canManageBusiness(role) ? <section className="surface-panel team-state"><h2>Acesso da equipe</h2><p>A gestão da equipe é feita pela pessoa proprietária ou pela gestão da empresa.</p></section> : <>
         {showForm && <form className="surface-panel record-form" onSubmit={(event) => void createWorker(event)}>
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">CADASTRO DA EQUIPE</p><h2>{accountWorkerId ? `Criar acesso para ${workers.find((worker) => worker.id === accountWorkerId)?.name ?? 'entregador'}` : 'Novo membro da equipe'}</h2></div><button className="text-button" disabled={saving} onClick={() => { setShowForm(false); setAccountWorkerId(null); setPassword('') }} type="button">Fechar</button></div>
-          {!accountWorkerId && <label className="record-field"><span className="field-label">Função na equipe</span><select className="text-input" onChange={(event) => setMemberType(event.target.value as 'delivery_driver' | 'employee')} value={memberType}><option value="delivery_driver">Entregador</option><option value="employee">Funcionário</option></select></label>}
+          {!accountWorkerId && <label className="record-field"><span className="field-label">Cargo</span><select className="text-input" onChange={(event) => setMemberType(event.target.value as 'delivery_driver' | 'employee')} value={memberType}><option value="delivery_driver">Entregador</option><option value="employee">Funcionário</option></select></label>}
           <p className="section-footnote">Funcionários ficam no cadastro e na folha. Entregadores também podem receber acesso ao painel de entregas.</p>
           <div className="record-form-grid">
             {!accountWorkerId && <label className="record-field"><span className="field-label">Nome</span><input autoComplete="name" className="text-input" maxLength={120} onChange={(event) => setName(event.target.value)} required value={name} /></label>}
             {!accountWorkerId && <label className="record-field"><span className="field-label">Telefone <span className="field-optional">opcional</span></span><input autoComplete="tel" className="text-input" maxLength={64} onChange={(event) => setPhone(event.target.value)} type="tel" value={phone} /></label>}
             {!accountWorkerId && <label className="record-field"><span className="field-label">Salário mensal <span className="field-optional">opcional</span></span><input className="text-input" inputMode="decimal" onChange={(event) => setMonthlySalary(event.target.value)} placeholder="0,00" value={monthlySalary} /><span className="section-footnote">Só entra nas saídas pagas quando você confirmar o pagamento.</span></label>}
-            {!accountWorkerId && monthlySalary.trim() !== '' && <label className="record-field"><span className="field-label">Dia de vencimento do salário</span><input className="text-input" inputMode="numeric" max="31" min="1" onChange={(event) => setSalaryDueDay(event.target.value)} required type="number" value={salaryDueDay} /></label>}
+            {!accountWorkerId && monthlySalary.trim() !== '' && <label className="record-field"><span className="field-label">Dia de pagar o salário</span><input className="text-input" inputMode="numeric" max="31" min="1" onChange={(event) => setSalaryDueDay(event.target.value)} required type="number" value={salaryDueDay} /></label>}
             {(accountWorkerId || memberType === 'delivery_driver') && <label className="record-field"><span className="field-label">E-mail de acesso</span><input autoComplete="email" autoCapitalize="none" className="text-input" maxLength={320} onChange={(event) => setEmail(event.target.value)} required type="email" value={email} /></label>}
             {(accountWorkerId || memberType === 'delivery_driver') && <label className="record-field"><span className="field-label">Senha inicial</span><input autoComplete="new-password" className="text-input" minLength={8} maxLength={128} onChange={(event) => setPassword(event.target.value)} required type="password" value={password} /></label>}
           </div>
@@ -349,25 +349,25 @@ export function TeamPage() {
         </form>}
 
         <section className="surface-panel record-panel" aria-labelledby="team-members-title">
-          <div className="section-heading section-heading-compact"><div><p className="eyebrow">PESSOAS</p><h2 id="team-members-title">Membros da equipe</h2></div><span className="neutral-status">{loading ? 'Carregando…' : `${activeCount} ativos`}</span></div>
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">PESSOAS</p><h2 id="team-members-title">Equipe cadastrada</h2></div><span className="neutral-status">{loading ? 'Carregando…' : `${activeCount} ativos`}</span></div>
           {loading ? <p className="inline-state" aria-live="polite">Carregando equipe…</p> : workers.length === 0 ? <p className="inline-state">Nenhum membro cadastrado.</p> : <ul className="worker-list team-worker-list">{workers.map((worker) => <li className={worker.is_active ? '' : 'record-inactive'} key={worker.id}>
             <span><strong>{worker.name}</strong><small>{worker.member_type === 'delivery_driver' ? 'Entregador' : 'Funcionário'} · {worker.phone || 'Telefone não informado'} · {worker.is_active ? 'Ativo' : 'Inativo'}{worker.member_type === 'delivery_driver' ? ` · ${worker.user_id ? 'Acesso ao painel ativo' : 'Sem acesso ao painel'}` : ''}{worker.monthly_salary_cents ? ` · Salário ${formatBRLExact(String(worker.monthly_salary_cents))}/mês, vence dia ${worker.salary_due_day}` : ''}</small></span>
             <div className="record-form-actions">
               {canManageBusiness(role) && <button className="text-button" onClick={() => { setSalaryEditWorkerId(salaryEditWorkerId === worker.id ? null : worker.id); setSalaryEditAmount(worker.monthly_salary_cents ? (Number(worker.monthly_salary_cents) / 100).toFixed(2).replace('.', ',') : ''); setSalaryEditDueDay(worker.salary_due_day?.toString() ?? ''); setError(null) }} type="button">{salaryEditWorkerId === worker.id ? 'Fechar salário' : 'Editar salário'}</button>}
-              {canManageBusiness(role) && worker.member_type === 'delivery_driver' && worker.is_active && !worker.user_id && <><button className="text-button" onClick={() => { setAccountWorkerId(worker.id); setMemberType('delivery_driver'); setName(worker.name); setPhone(worker.phone ?? ''); setEmail(''); setPassword(''); setShowForm(true); setError(null); setNotice(null) }} type="button">Criar acesso</button><button className="text-button" onClick={() => { setLinkWorkerId(linkWorkerId === worker.id ? null : worker.id); setLinkEmail(''); setError(null) }} type="button">{linkWorkerId === worker.id ? 'Fechar' : 'Vincular conta existente'}</button></>}
+              {canManageBusiness(role) && worker.member_type === 'delivery_driver' && worker.is_active && !worker.user_id && <><button className="text-button" onClick={() => { setAccountWorkerId(worker.id); setMemberType('delivery_driver'); setName(worker.name); setPhone(worker.phone ?? ''); setEmail(''); setPassword(''); setShowForm(true); setError(null); setNotice(null) }} type="button">Criar acesso</button><button className="text-button" onClick={() => { setLinkWorkerId(linkWorkerId === worker.id ? null : worker.id); setLinkEmail(''); setError(null) }} type="button">{linkWorkerId === worker.id ? 'Fechar' : 'Conectar conta existente'}</button></>}
               {canManageBusiness(role) && worker.member_type === 'delivery_driver' && worker.user_id && <button className="text-button" onClick={() => setConfirmUnlinkWorkerId(confirmUnlinkWorkerId === worker.id ? null : worker.id)} type="button">{confirmUnlinkWorkerId === worker.id ? 'Cancelar' : 'Remover acesso'}</button>}
               {canManageBusiness(role) && worker.member_type === 'delivery_driver' && worker.user_id && <Link className="text-button" to="/entregador/visualizar">Prévia do painel</Link>}
               <button className="text-button" disabled={actionWorkerId !== null} onClick={() => void setWorkerActive(worker)} type="button">{actionWorkerId === worker.id ? 'Salvando…' : worker.is_active ? 'Desativar' : 'Reativar'}</button>
             </div>
             {salaryEditWorkerId === worker.id && <form className="worker-access-form record-form-grid" onSubmit={(event) => void saveSalary(worker, event)}>
               <label className="record-field"><span className="field-label">Salário mensal</span><input className="text-input" inputMode="decimal" onChange={(event) => setSalaryEditAmount(event.target.value)} placeholder="0,00" value={salaryEditAmount} /></label>
-              <label className="record-field"><span className="field-label">Dia de vencimento</span><input className="text-input" inputMode="numeric" max="31" min="1" onChange={(event) => setSalaryEditDueDay(event.target.value)} required={salaryEditAmount.trim() !== ''} type="number" value={salaryEditDueDay} /></label>
+              <label className="record-field"><span className="field-label">Dia de pagar</span><input className="text-input" inputMode="numeric" max="31" min="1" onChange={(event) => setSalaryEditDueDay(event.target.value)} required={salaryEditAmount.trim() !== ''} type="number" value={salaryEditDueDay} /></label>
               <button className="button button-secondary" disabled={actionWorkerId !== null} type="submit">{actionWorkerId === worker.id ? 'Salvando…' : 'Salvar salário'}</button>
             </form>}
             {linkWorkerId === worker.id && <form className="worker-access-form" onSubmit={(event) => void connectDriver(event, worker)}>
-              <label className="record-field"><span className="field-label">E-mail da conta do entregador</span><input autoComplete="off" className="text-input" onChange={(event) => setLinkEmail(event.target.value)} required type="email" value={linkEmail} /></label>
+              <label className="record-field"><span className="field-label">E-mail da conta</span><input autoComplete="off" className="text-input" onChange={(event) => setLinkEmail(event.target.value)} required type="email" value={linkEmail} /></label>
               <p className="section-footnote">Use esta opção se o entregador já tem uma conta criada neste sistema.</p>
-              <button className="button button-secondary" disabled={actionWorkerId !== null} type="submit">{actionWorkerId === worker.id ? 'Vinculando…' : 'Vincular conta existente'}</button>
+              <button className="button button-secondary" disabled={actionWorkerId !== null} type="submit">{actionWorkerId === worker.id ? 'Conectando…' : 'Conectar conta existente'}</button>
             </form>}
             {confirmUnlinkWorkerId === worker.id && <div className="worker-access-form" role="group" aria-label={`Remover o painel de ${worker.name}`}>
               <p className="section-footnote">O entregador perderá acesso ao painel; o cadastro e o histórico de entregas permanecem.</p>
@@ -378,9 +378,9 @@ export function TeamPage() {
         </section>
 
         <section className="surface-panel record-panel" id="pagamentos-equipe" aria-labelledby="team-payroll-title">
-          <div className="section-heading section-heading-compact"><div><p className="eyebrow">FOLHA DE PAGAMENTO</p><h2 id="team-payroll-title">Salários a pagar</h2></div><span className="neutral-status">{salaryStatus ? `${salaryStatus.overdue_count} atrasados · ${salaryStatus.due_today_count} hoje` : 'Carregando…'}</span></div>
-          <p className="section-footnote">O vencimento é calculado pelo salário cadastrado. Ao marcar como pago, o sistema registra uma saída financeira; não faz transferência. Registre cada salário por aqui e não lance a mesma competência também em Gastos pagos.</p>
-          {loading ? <p className="inline-state" aria-live="polite">Carregando vencimentos…</p> : !salaryStatus || salaryStatus.items.length === 0 ? <p className="inline-state">Nenhum salário pendente ou pago neste mês. Cadastre o valor e o vencimento na equipe.</p> : <ul className="worker-list team-worker-list">{salaryStatus.items.map((item) => {
+          <div className="section-heading section-heading-compact"><div><p className="eyebrow">SALÁRIOS</p><h2 id="team-payroll-title">Salários da equipe</h2></div><span className="neutral-status">{salaryStatus ? `${salaryStatus.overdue_count} atrasados · ${salaryStatus.due_today_count} hoje` : 'Carregando…'}</span></div>
+          <p className="section-footnote">Ao confirmar um salário como pago, ele entra nas despesas. O sistema não faz transferências.</p>
+          {loading ? <p className="inline-state" aria-live="polite">Carregando salários…</p> : !salaryStatus || salaryStatus.items.length === 0 ? <p className="inline-state">Nenhum salário para este mês. Cadastre o valor e o dia de pagamento na equipe.</p> : <ul className="worker-list team-worker-list">{salaryStatus.items.map((item) => {
             const itemKey = `${item.worker_id}:${item.period_start}`
             const isPaid = item.paid_on !== null
             const isOverdue = !isPaid && item.due_on < today

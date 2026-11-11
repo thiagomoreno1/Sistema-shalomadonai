@@ -4,8 +4,8 @@ export function FinanceNavigation({ active }: { active: 'dashboard' | 'receivabl
   return (
     <nav aria-label="Seções financeiras" className="finance-subnav">
       <NavLink aria-current={active === 'dashboard' ? 'page' : undefined} className={active === 'dashboard' ? 'is-active' : undefined} end to="/financeiro">Dashboard</NavLink>
-      <NavLink aria-current={active === 'receivables' ? 'page' : undefined} className={active === 'receivables' ? 'is-active' : undefined} end to="/financeiro/receber">Pagamentos a receber</NavLink>
-      <NavLink aria-current={active === 'outflows' ? 'page' : undefined} className={active === 'outflows' ? 'is-active' : undefined} to="/financeiro/saidas">Gastos pagos</NavLink>
+      <NavLink aria-current={active === 'receivables' ? 'page' : undefined} className={active === 'receivables' ? 'is-active' : undefined} end to="/financeiro/receber">Falta receber</NavLink>
+      <NavLink aria-current={active === 'outflows' ? 'page' : undefined} className={active === 'outflows' ? 'is-active' : undefined} to="/financeiro/saidas">Despesas pagas</NavLink>
       <NavLink aria-current={active === 'reports' ? 'page' : undefined} className={active === 'reports' ? 'is-active' : undefined} to="/relatorios">Relatórios</NavLink>
     </nav>
   )

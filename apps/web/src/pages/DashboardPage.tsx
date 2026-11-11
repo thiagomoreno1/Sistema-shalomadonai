@@ -74,7 +74,7 @@ type DashboardPriorityAction = {
 
 const actionFilters: Array<{ value: ActionFilter; label: string }> = [
   { value: 'all', label: 'Todos' },
-  { value: 'followups', label: 'Retornos' },
+  { value: 'followups', label: 'Lembretes' },
   { value: 'receivables', label: 'Clientes e salários' },
   { value: 'deliveries', label: 'Entregas' },
   { value: 'inventory', label: 'Estoque' },
@@ -82,7 +82,7 @@ const actionFilters: Array<{ value: ActionFilter; label: string }> = [
 
 const deliveryStatusLabels: Record<DashboardPriorities['deliveries']['items'][number]['status'], string> = {
   awaiting_separation: 'Aguardando separação',
-  ready: 'Pronta para despacho',
+  ready: 'Pronta para sair',
   dispatched: 'Em rota',
   attempted: 'Entrega não concluída',
   rescheduled: 'Reagendada',
@@ -356,8 +356,8 @@ export function DashboardPage() {
       href: '/atendimento',
       icon: 'phone' as const,
       title: followUp.title,
-      detail: `${followUp.customer_name ?? 'Sem cliente vinculado'} · ${followUp.due_on < today ? 'Atrasado' : followUp.due_on === today ? 'Hoje' : formatBusinessDate(followUp.due_on)}`,
-      state: 'Retorno',
+      detail: `${followUp.customer_name ?? 'Sem cliente escolhido'} · ${followUp.due_on < today ? 'Atrasado' : followUp.due_on === today ? 'Hoje' : formatBusinessDate(followUp.due_on)}`,
+      state: 'Lembrete',
     })) ?? []),
     ...(priorities?.receivables.items.map((receivable) => ({
       key: receivable.installment_id,
@@ -411,7 +411,7 @@ export function DashboardPage() {
   const visibleStockItems = priorities?.inventory.items.slice(0, 2) ?? []
   const additionalStockItems = priorities?.inventory.items.slice(2) ?? []
   const renderStockItem = (item: DashboardPriorities['inventory']['items'][number]) => <li key={item.product_id}>
-    <span><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.quantity_on_hand === 0 ? 'Sem estoque' : item.minimum_stock === null ? 'Saldo abaixo do necessário' : `Mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
+    <span><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.quantity_on_hand === 0 ? 'Sem estoque' : item.minimum_stock === null ? 'Quantidade baixa' : `Mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
     <span className="dashboard-stock-quantity">{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span>
   </li>
   return (
@@ -429,7 +429,7 @@ export function DashboardPage() {
       <nav className="dashboard-day-summary" aria-label="Prioridades do dia" aria-busy={prioritiesLoading}>
         <Link className="dashboard-summary-link is-followups" to="/atendimento">
           <span className="dashboard-summary-icon"><Icon name="phone" /></span>
-          <span className="dashboard-summary-copy"><strong>Retornos prioritários</strong><small>Atrasados ou de hoje</small></span>
+          <span className="dashboard-summary-copy"><strong>Lembretes importantes</strong><small>Atrasados ou para hoje</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.follow_ups.pending_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
@@ -463,7 +463,7 @@ export function DashboardPage() {
         <section className="surface-panel dashboard-action-panel" aria-labelledby="attention-title">
           <div className="section-heading">
             <h2 id="attention-title">Fila de ações do dia</h2>
-            <span className="dashboard-today-label"><Icon name="clock" /> {totalPriorityActionCount === null ? 'Hoje' : `${totalPriorityActionCount} pendências`}</span>
+            <span className="dashboard-today-label"><Icon name="clock" /> {totalPriorityActionCount === null ? 'Hoje' : `${totalPriorityActionCount} itens para resolver`}</span>
           </div>
           {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
           {prioritiesError && <div className="dashboard-priority-retry" role="alert"><p>{priorities ? 'Não foi possível atualizar; os indicadores podem estar desatualizados.' : 'Não foi possível carregar as prioridades.'}</p><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>}
@@ -477,10 +477,10 @@ export function DashboardPage() {
               </Link>
             </li>)}
           </ul>}
-          {!prioritiesLoading && !prioritiesError && noActions && <p className="dashboard-priority-empty">Nenhum retorno, pagamento, entrega ou alerta de estoque precisa de atenção.</p>}
+          {!prioritiesLoading && !prioritiesError && noActions && <p className="dashboard-priority-empty">Nenhum lembrete, pagamento, entrega ou estoque precisa de atenção.</p>}
           {remainingPriorityActionCount > 0 && <p className="section-footnote dashboard-action-preview-note">Mais {remainingPriorityActionCount} ações na fila.</p>}
           <details className="dashboard-action-details">
-            <summary>Ver fila por tipo <span>Retornos, pagamentos, entregas e estoque</span></summary>
+            <summary>Ver por tipo <span>Lembretes, pagamentos, entregas e estoque</span></summary>
           <div className="dashboard-action-filters" role="group" aria-label="Filtrar fila por tipo de ação">
             {actionFilters.map((filter) => <button aria-pressed={actionFilter === filter.value} key={filter.value} onClick={() => setActionFilter(filter.value)} type="button">{filter.label}</button>)}
           </div>
@@ -488,10 +488,10 @@ export function DashboardPage() {
           {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando prioridades…</p>}
           {!prioritiesLoading && prioritiesError && <div className="dashboard-panel-state" role="alert"><span className="empty-icon"><Icon name="clock" /></span><h3>Não foi possível carregar as prioridades</h3><button className="text-button" onClick={() => void loadPriorities()} type="button">Tentar novamente</button></div>}
           {!prioritiesLoading && !prioritiesError && priorities && <div className="dashboard-action-queue">
-            {actionFilter === 'all' && noActions ? <div className="dashboard-panel-state is-clear"><span className="empty-icon"><Icon name="check" /></span><h3>Tudo em dia</h3><p>Nenhum retorno, pagamento, entrega ou saldo de estoque precisa de atenção.</p></div> : <>
+            {actionFilter === 'all' && noActions ? <div className="dashboard-panel-state is-clear"><span className="empty-icon"><Icon name="check" /></span><h3>Tudo em dia</h3><p>Nenhum lembrete, pagamento, entrega ou produto em falta precisa de atenção.</p></div> : <>
               {(actionFilter === 'followups' || (actionFilter === 'all' && priorities.follow_ups.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-followups-title">
-                <div className="dashboard-action-group-heading"><h3 id="dashboard-followups-title">Retornos</h3><Link className="quiet-link" to="/atendimento">Ver retornos <Icon name="arrow" /></Link></div>
-                {priorities.follow_ups.items.length === 0 ? <p className="dashboard-priority-empty">Nenhum retorno vencido ou com prazo para hoje.</p> : <ul className="dashboard-action-list">
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-followups-title">Lembretes</h3><Link className="quiet-link" to="/atendimento">Ver lembretes <Icon name="arrow" /></Link></div>
+                {priorities.follow_ups.items.length === 0 ? <p className="dashboard-priority-empty">Nenhum lembrete atrasado ou para hoje.</p> : <ul className="dashboard-action-list">
                   {priorities.follow_ups.items.map((task) => <li key={task.id}>
                     <Link to="/atendimento">
                       <span className={`dashboard-action-symbol${task.due_on < today ? ' is-overdue' : ' is-today'}`}><Icon name="phone" /></span>
@@ -501,12 +501,12 @@ export function DashboardPage() {
                     </Link>
                   </li>)}
                 </ul>}
-                {priorities.follow_ups.pending_count > priorities.follow_ups.items.length && <p className="section-footnote">Mostrando {priorities.follow_ups.items.length} de {priorities.follow_ups.pending_count} retornos com prazo até hoje.</p>}
+                {priorities.follow_ups.pending_count > priorities.follow_ups.items.length && <p className="section-footnote">Mostrando {priorities.follow_ups.items.length} de {priorities.follow_ups.pending_count} lembretes para hoje ou atrasados.</p>}
               </section>}
 
               {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.receivables.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-receivables-title">
                 <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Parcelas que clientes ainda devem</h3><Link className="quiet-link" to="/financeiro/receber">Ver parcelas <Icon name="arrow" /></Link></div>
-                {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma parcela atrasada ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
+                {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma parcela atrasada ou para pagar hoje.</p> : <ul className="dashboard-action-list">
                   {priorities.receivables.items.map((item) => {
                     const amount = formatDashboardMoney(item.balance_cents, 'incoming', `Valor a receber de ${item.customer_name}`)
                     return <li key={item.installment_id}>
@@ -524,7 +524,7 @@ export function DashboardPage() {
 
               {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.payroll.items.some((item) => item.paid_on === null && item.due_on <= today))) && <section className="dashboard-action-group" aria-labelledby="dashboard-payroll-title">
                 <div className="dashboard-action-group-heading"><h3 id="dashboard-payroll-title">Salários da equipe</h3><Link className="quiet-link" to="/equipe">Ver equipe <Icon name="arrow" /></Link></div>
-                {priorities.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).length === 0 ? <p className="dashboard-priority-empty">Nenhum salário vencido ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
+                {priorities.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).length === 0 ? <p className="dashboard-priority-empty">Nenhum salário atrasado ou para pagar hoje.</p> : <ul className="dashboard-action-list">
                   {priorities.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).map((item) => {
                     const amount = formatDashboardMoney(item.amount_cents, 'outgoing', `Salário de ${item.name}`)
                     return <li key={`${item.worker_id}-${item.period_start}`}>
@@ -560,7 +560,7 @@ export function DashboardPage() {
                   {priorities.inventory.items.map((item) => <li key={item.product_id}>
                     <Link to="/estoque">
                       <span className={`dashboard-action-symbol${item.quantity_on_hand < 0 ? ' is-overdue' : ''}`}><Icon name="box" /></span>
-                      <span className="dashboard-action-copy"><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.quantity_on_hand === 0 ? 'Sem estoque' : item.minimum_stock === null ? 'Saldo abaixo do necessário' : `Mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
+                      <span className="dashboard-action-copy"><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.quantity_on_hand === 0 ? 'Sem estoque' : item.minimum_stock === null ? 'Quantidade baixa' : `Mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
                       <span className={`dashboard-row-state${item.quantity_on_hand < 0 ? ' is-overdue' : ''}`}>{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span>
                       <Icon className="dashboard-row-arrow" name="arrow" />
                     </Link>
@@ -627,10 +627,10 @@ export function DashboardPage() {
             </div>
             {prioritiesLoading || prioritiesError ? <Icon className="section-icon" name="box" /> : <span className="dashboard-stock-count" aria-label={`${priorities?.inventory.attention_count ?? 0} produtos em atenção`}>{priorities?.inventory.attention_count ?? 0}</span>}
           </div>
-          {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando saldos…</p>}
+          {prioritiesLoading && <p className="inline-state" aria-live="polite">Conferindo estoque…</p>}
           {!prioritiesLoading && prioritiesError && <div className="small-empty-state"><p>As informações de estoque fazem parte da atualização geral do painel. Use “Tentar novamente” acima.</p></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count === 0 && <div className="small-empty-state"><p>Nenhum produto está configurado para controle de estoque.</p><Link className="quiet-link" to="/catalogo">Configurar produtos <Icon name="arrow" /></Link></div>}
-          {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count > 0 && priorities.inventory.attention_count === 0 && <div className="small-empty-state"><p>Nenhum saldo está negativo ou abaixo do mínimo definido.{priorities.inventory.without_minimum_count > 0 ? ` ${priorities.inventory.without_minimum_count} produto(s) sem mínimo; saldo zero ou negativo sempre gera alerta.` : ''}</p><Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link></div>}
+          {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count > 0 && priorities.inventory.attention_count === 0 && <div className="small-empty-state"><p>Todos os produtos têm quantidade suficiente.{priorities.inventory.without_minimum_count > 0 ? ` Produto sem quantidade mínima ainda gera alerta quando chega a zero.` : ''}</p><Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.attention_count > 0 && <>
             <ul className="dashboard-stock-list">{visibleStockItems.map(renderStockItem)}</ul>
             {additionalStockItems.length > 0 && <details className="dashboard-stock-details">
@@ -638,18 +638,18 @@ export function DashboardPage() {
               <ul className="dashboard-stock-list">{additionalStockItems.map(renderStockItem)}</ul>
               {priorities.inventory.attention_count > priorities.inventory.items.length && <p className="section-footnote">Mostrando {priorities.inventory.items.length} de {priorities.inventory.attention_count} produtos em atenção.</p>}
             </details>}
-            {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">{priorities.inventory.without_minimum_count} produto(s) sem mínimo; saldo zero ou negativo sempre gera alerta.</p>}
+            {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">Produto sem quantidade mínima ainda gera alerta quando chega a zero.</p>}
             <Link className="quiet-link" to="/estoque">Ver produtos em atenção <Icon name="arrow" /></Link>
           </>}
         </section>
       </div>
       </> : <section className="surface-panel dashboard-role-note" aria-label="Resumo do dia">
         <h2>Resumo de gestão</h2>
-        <p>Indicadores financeiros, vencimentos, entregas e alertas de estoque ficam disponíveis para o perfil proprietário.</p>
+        <p>O financeiro, os pagamentos, as entregas e o estoque aparecem para quem tem acesso de proprietário.</p>
       </section>}
 
       <section className="quick-links" aria-label="Atalhos">
-        <Link className="quick-link" to="/atendimento"><Icon name="phone" /><span><strong>Atendimento</strong><small>Chamadas e retornos</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
+        <Link className="quick-link" to="/atendimento"><Icon name="phone" /><span><strong>Atendimento</strong><small>Chamadas e lembretes</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
         <Link className="quick-link" to="/pedidos"><Icon name="bag" /><span><strong>Pedidos</strong><small>Vendas e entregas</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
         <Link className="quick-link" to="/clientes"><Icon name="people" /><span><strong>Clientes</strong><small>Cadastros e histórico</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>
         <Link className="quick-link" to="/catalogo"><Icon name="box" /><span><strong>Catálogo</strong><small>Produtos e categorias</small></span><Icon className="quick-link-arrow" name="arrow" /></Link>

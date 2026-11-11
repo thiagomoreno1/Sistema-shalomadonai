@@ -43,10 +43,10 @@ const routeLabels: Record<string, string> = {
   '/entregas': 'Entregas',
   '/equipe': 'Equipe',
   '/financeiro': 'Dashboard',
-  '/financeiro/receber': 'Pagamentos a receber',
-  '/financeiro/saidas': 'Gastos pagos',
+  '/financeiro/receber': 'Falta receber',
+  '/financeiro/saidas': 'Despesas pagas',
   '/relatorios': 'Relatórios',
-  '/mais': 'Mais ferramentas',
+  '/mais': 'Mais',
   '/configuracoes': 'Configurações',
 }
 

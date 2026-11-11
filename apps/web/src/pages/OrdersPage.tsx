@@ -133,14 +133,14 @@ export function OrdersPage() {
         <div>
           <p className="eyebrow">VENDAS E RECEBÍVEIS</p>
           <h1>Pedidos</h1>
-          <p className="page-description">Pedidos, prazos de pagamento e valores que você já recebeu.</p>
+          <p className="page-description">Pedidos, datas de pagamento e valores já recebidos.</p>
         </div>
         <Link className="button button-primary" to="/pedidos/novo"><Icon name="plus" /> Novo pedido</Link>
       </header>
 
       {locationState?.successMessage && <p className="form-message form-message-success" role="status">{locationState.successMessage}</p>}
 
-      <p className="section-footnote order-policy-note">Cada pedido informa quando o pagamento vence e quanto falta receber. Registrar um pagamento aqui não movimenta a conta bancária.</p>
+      <p className="section-footnote order-policy-note">Cada pedido mostra a data de pagamento e quanto falta receber. Marcar como pago aqui só atualiza o pedido.</p>
 
       {error && (
         <div className="inline-state inline-state-error" role="alert">
@@ -156,7 +156,7 @@ export function OrdersPage() {
               <div><p className="eyebrow">ACOMPANHAMENTO</p><h2 id="orders-open-title">Pedidos ativos</h2></div>
               <span className="neutral-status">{openOrders.length}</span>
             </div>
-            {renderOrders(openOrders, 'Nenhum pedido ativo. Crie um pedido para registrar os produtos e os vencimentos combinados.')}
+            {renderOrders(openOrders, 'Nenhum pedido ativo. Crie um pedido para registrar os produtos e as datas de pagamento combinadas.')}
           </section>
           <section className="surface-panel record-panel" aria-labelledby="orders-cancelled-title">
             <div className="section-heading section-heading-compact">

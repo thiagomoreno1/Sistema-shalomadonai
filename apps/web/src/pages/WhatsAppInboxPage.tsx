@@ -117,7 +117,7 @@ function statusLabel(value: string | null | undefined) {
   if (value === 'pending') return 'Pendente'
   if (value === 'snoozed') return 'Adiada'
   if (value === 'open') return 'Aberta'
-  return value ? `Status: ${value}` : 'Status indisponível'
+  return value ? `Status: ${value}` : 'Não foi possível conferir o status'
 }
 
 function normalizeConnectionState(value: string | null | undefined) {
@@ -129,10 +129,10 @@ function connectionStateLabel(value: string | null | undefined) {
   if (normalized === 'open' || normalized === 'connected') return 'Conectado'
   if (normalized === 'connecting' || normalized === 'connecting...') return 'Conectando'
   if (normalized === 'close' || normalized === 'closed' || normalized === 'disconnected') return 'Desconectado'
-  if (normalized === 'not_created') return 'Instância ainda não criada'
+  if (normalized === 'not_created') return 'Número ainda não conectado'
   if (normalized === 'not_configured') return 'Não configurado'
-  if (normalized === 'unavailable') return 'API indisponível'
-  return value ? `Estado: ${value}` : 'Estado indisponível'
+  if (normalized === 'unavailable') return 'Conexão indisponível'
+  return value ? `Status: ${value}` : 'Não foi possível conferir o status'
 }
 
 function isWhatsAppConnected(value: string | null | undefined) {
@@ -768,14 +768,14 @@ export function WhatsAppInboxPage() {
       ])
       if (requestId !== businessContextRequest.current) return
       if (customersResult.error || linksResult.error) {
-        setLinkError('Não foi possível carregar os vínculos com clientes e pedidos.')
+        setLinkError('Não foi possível carregar os clientes e pedidos desta conversa.')
       } else {
         setCustomers((customersResult.data ?? []) as Customer[])
         setLinks(Object.fromEntries(((linksResult.data ?? []) as ConversationLink[]).map((link) => [link.conversation_id, link])))
         setLinkError(null)
       }
     } catch {
-      if (requestId === businessContextRequest.current) setLinkError('Não foi possível carregar os vínculos com clientes e pedidos.')
+      if (requestId === businessContextRequest.current) setLinkError('Não foi possível carregar os clientes e pedidos desta conversa.')
     } finally {
       if (requestId === businessContextRequest.current) {
         businessContextLoaded.current = true
@@ -1464,9 +1464,9 @@ export function WhatsAppInboxPage() {
     setWebhookFeedback(null)
     try {
       await invokeInbox({ action: 'configure_webhook', business_id: businessId })
-      setWebhookFeedback('Configuração enviada. Envie uma mensagem de teste para confirmar o recebimento.')
+      setWebhookFeedback('Conexão ajustada. Envie uma mensagem para conferir se chegou.')
     } catch {
-      setWebhookFeedback('Não foi possível configurar o recebimento. Confira a URL e os secrets do servidor.')
+      setWebhookFeedback('Não foi possível ajustar a conexão. Tente de novo mais tarde.')
     } finally {
       setWebhookSaving(false)
     }
@@ -1487,7 +1487,7 @@ export function WhatsAppInboxPage() {
       }
     } catch {
       if (requestId === connectionStatusRequest.current) {
-        setConnectionError('Não foi possível consultar a Evolution. Confira se o computador e o túnel estão ligados.')
+        setConnectionError('Não foi possível conferir a conexão. Tente de novo mais tarde.')
         setConnectionState('unavailable')
       }
     } finally {
@@ -1572,7 +1572,7 @@ export function WhatsAppInboxPage() {
         return
       }
       if (result.error === 'webhook_setup_failed') {
-        setPairingError('A instância foi criada, mas o webhook não ficou pronto. Tente novamente; o telefone ainda não foi pareado.')
+        setPairingError('O WhatsApp foi preparado, mas o recebimento de mensagens ainda não está pronto. Tente de novo.')
         return
       }
       if (result.error === 'connection_must_be_archived_first') {
@@ -1595,31 +1595,31 @@ export function WhatsAppInboxPage() {
         return
       }
       if (result.error === 'pairing_restart_failed') {
-        setPairingError('Não foi possível reiniciar o pareamento. Verifique a conexão; se continuar, cancele o pareamento e comece novamente.')
+        setPairingError('Não foi possível continuar a conexão. Tente de novo; se não funcionar, cancele e comece outra vez.')
         return
       }
       if (method === 'phone' && result.pairing_code) {
         setPairingCode(result.pairing_code)
         setConnectionState(result.connection_state ?? 'connecting')
         setInstanceExists(true)
-        setWebhookFeedback('Código de pareamento pronto. Digite-o no WhatsApp do número informado.')
+        setWebhookFeedback('Código pronto. Digite-o no WhatsApp do número que você quer conectar.')
         return
       }
       if (method === 'phone') {
-        setPairingError('A Evolution não forneceu o código de pareamento. Confira o número e tente novamente; o QR continua disponível como alternativa.')
+        setPairingError('Não foi possível gerar o código. Confira o número e tente de novo; você também pode usar o QR Code.')
         return
       }
       if (result.error === 'qrcode_unavailable' || !result.qr_image) {
-        setPairingError('A instância e o webhook estão prontos, mas a Evolution ainda não forneceu o QR. Tente novamente em alguns segundos; nada será pareado sem escanear o código.')
+        setPairingError('O QR Code ainda não apareceu. Aguarde alguns segundos e tente de novo.')
         return
       }
       setQrImage(result.qr_image)
       setConnectionState(result.connection_state ?? 'connecting')
       setInstanceExists(true)
-      setWebhookFeedback('Evolution pronta. Escaneie o QR Code com o WhatsApp para concluir a conexão.')
+      setWebhookFeedback('Leia o QR Code com o WhatsApp para concluir a conexão.')
     } catch (error) {
       if (error instanceof InboxRequestError && error.code === 'pairing_restart_failed') {
-        setPairingError('Não foi possível reiniciar o pareamento. Verifique a conexão; se continuar, cancele o pareamento e comece novamente.')
+        setPairingError('Não foi possível continuar a conexão. Tente de novo; se não funcionar, cancele e comece outra vez.')
         return
       }
       if (error instanceof InboxRequestError && error.code === 'connection_must_be_archived_first') {
@@ -1640,8 +1640,8 @@ export function WhatsAppInboxPage() {
       }
       setConnectionState((current) => isWhatsAppConnected(current) ? current : 'unavailable')
       setPairingError(method === 'phone'
-        ? 'Não foi possível falar com a Evolution. Confira o número e tente novamente; você também pode conectar pelo QR Code.'
-        : 'Não foi possível falar com a Evolution. A instância pode ter sido criada; tente novamente.')
+        ? 'Não foi possível conectar este número. Confira o telefone e tente de novo; você também pode usar o QR Code.'
+        : 'Não foi possível conectar. O número pode ter sido preparado; tente de novo.')
     } finally {
       setPairingLoading(false)
     }
@@ -1667,12 +1667,12 @@ export function WhatsAppInboxPage() {
       setInstanceExists(false)
       setConfigured(true)
       setWebhookFeedback(result.provider_logout_failed
-        ? 'A caixa foi arquivada e isolada. A Evolution estava indisponível, então a sessão antiga pode precisar ser encerrada no provedor.'
+        ? 'A caixa foi guardada. O serviço do WhatsApp não respondeu; talvez seja preciso desconectar o número antigo pelo próprio WhatsApp.'
         : 'Número desconectado. O histórico foi arquivado; conecte o novo número para abrir uma caixa separada.')
       resetInboxForConnectionChange()
       setDisconnectConfirmationOpen(false)
     } catch {
-      setPairingError('Não foi possível desconectar o número. Confira se a Evolution está acessível e tente novamente.')
+      setPairingError('Não foi possível desconectar o número. Tente de novo mais tarde.')
     } finally {
       disconnectingRef.current = false
       setDisconnecting(false)
@@ -1689,7 +1689,7 @@ export function WhatsAppInboxPage() {
     const { data: authData, error: authError } = await client.auth.getUser()
     if (authError || !authData.user) {
       setLinkSaving(false)
-      setLinkError('Sua sessão expirou. Entre novamente para salvar o vínculo.')
+      setLinkError('Sua sessão expirou. Entre de novo para salvar o cliente e o pedido.')
       return
     }
     const row = {
@@ -1706,12 +1706,12 @@ export function WhatsAppInboxPage() {
       .single()
     setLinkSaving(false)
     if (result.error || !result.data) {
-      setLinkError('Não foi possível salvar o vínculo. Confira a seleção e tente novamente.')
+      setLinkError('Não foi possível salvar o cliente e o pedido. Confira os campos e tente de novo.')
       return
     }
     const saved = result.data as ConversationLink
     setLinks((current) => ({ ...current, [saved.conversation_id]: saved }))
-    setLinkMessage('Vínculo salvo para esta conversa.')
+    setLinkMessage('Cliente e pedido salvos nesta conversa.')
   }
 
   const showConversationListLoading = !listError && (
@@ -1730,35 +1730,35 @@ export function WhatsAppInboxPage() {
     <section className="whatsapp-disconnected" aria-label="Conexão WhatsApp">
       <div ref={connectionBannerRef} aria-label="Status da conexão WhatsApp" className="surface-panel whatsapp-connection-banner" tabIndex={-1}>
         <span className="whatsapp-connection-dot" aria-hidden="true" />
-        <div className="whatsapp-connection-status"><strong>Evolution API</strong><span>{connectionStateLabel(connectionState)}</span>{webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}</div>
+        <div className="whatsapp-connection-status"><strong>WhatsApp</strong><span>{connectionStateLabel(connectionState)}</span>{webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}</div>
         <div className="whatsapp-connection-actions">
           {canManageBusiness(role) && (normalizedConnectionState === 'unavailable' || hasPendingWhatsAppPairing || !isWhatsAppExplicitlyDisconnected(connectionState)) && <button className="button button-secondary" disabled={connectionChecking} onClick={() => void handleCheckConnection()} type="button">{connectionChecking ? 'Verificando…' : 'Verificar conexão'}</button>}
           {canManageBusiness(role) && mustArchiveCurrentConnection && <button className="button button-primary" disabled={disconnecting || pairingLoading} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Trocar número</button>}
-          {canManageBusiness(role) && canStartWhatsAppPairing && !mustArchiveCurrentConnection && <button className="button button-primary" disabled={pairingLoading} onClick={() => { setPairingError(null); setWebhookFeedback(null); setPhonePairingOpen(false); setPairingMethodsOpen(true) }} type="button">{pairingLoading ? 'Preparando…' : connectionSelected ? 'Continuar pareamento' : 'Criar e conectar WhatsApp'}</button>}
-          {canManageBusiness(role) && connectionSelected && !mustArchiveCurrentConnection && <button className="button button-secondary" disabled={disconnecting || pairingLoading} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Cancelar pareamento</button>}
-          {canManageBusiness(role) && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
+          {canManageBusiness(role) && canStartWhatsAppPairing && !mustArchiveCurrentConnection && <button className="button button-primary" disabled={pairingLoading} onClick={() => { setPairingError(null); setWebhookFeedback(null); setPhonePairingOpen(false); setPairingMethodsOpen(true) }} type="button">{pairingLoading ? 'Preparando…' : connectionSelected ? 'Continuar conexão' : 'Conectar WhatsApp'}</button>}
+          {canManageBusiness(role) && connectionSelected && !mustArchiveCurrentConnection && <button className="button button-secondary" disabled={disconnecting || pairingLoading} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Cancelar conexão</button>}
+          {canManageBusiness(role) && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Ajustar conexão'}</button>}
         </div>
       </div>
 
       <section className="surface-panel whatsapp-disconnected-card" aria-labelledby="whatsapp-disconnected-title">
         <span className="empty-icon"><Icon name="message" /></span>
-        <p className="eyebrow">EVOLUTION API · WHATSAPP</p>
+        <p className="eyebrow">WHATSAPP</p>
         <h2 id="whatsapp-disconnected-title">{connectionState === 'connecting' || connectionState === 'connecting...' ? 'Conectando o WhatsApp' : canStartWhatsAppPairing ? 'WhatsApp desconectado' : 'Não foi possível confirmar a conexão'}</h2>
         <p>{mustArchiveCurrentConnection
           ? 'Esta caixa já pertence a um número. Para conectar o número do cliente, arquive esta caixa primeiro. O histórico atual será preservado e ficará separado.'
           : canStartWhatsAppPairing
             ? connectionSelected
-              ? 'O pareamento ainda não terminou. Você pode continuar usando QR Code ou código no celular.'
+            ? 'A conexão ainda não terminou. Continue com o QR Code ou com o código no celular.'
               : 'O histórico do número anterior fica arquivado. Ao conectar outro número, ele abre uma caixa separada com os mesmos recursos.'
           : connectionState === 'connecting' || connectionState === 'connecting...'
-            ? 'Aguardando a confirmação do pareamento para carregar as conversas.'
-            : 'A caixa foi ocultada até confirmar a conexão. Verifique se a Evolution está disponível e tente consultar novamente.'}</p>
+            ? 'Confirme a conexão para carregar as conversas.'
+            : 'A caixa ficará oculta até confirmar a conexão. Tente conferir de novo.'}</p>
         {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
 
         {canManageBusiness(role) && pairingMethodsOpen && !mustArchiveCurrentConnection && <div className="whatsapp-pairing-methods" aria-label="Escolha como conectar">
           <h3>Escolha como conectar</h3>
           <p>{connectionSelected
-            ? 'Continue o pareamento pendente desta caixa pelo QR Code ou por um código no celular.'
+            ? 'Continue a conexão desta caixa pelo QR Code ou pelo código no celular.'
             : 'O novo número terá uma caixa separada. Use o QR Code ou pareie pelo celular com um código.'}</p>
           <div>
             <button className="button button-secondary" disabled={pairingLoading} onClick={() => void handleConnectWhatsApp('qr')} type="button">Conectar por QR Code</button>
@@ -1772,10 +1772,10 @@ export function WhatsAppInboxPage() {
           <form onSubmit={(event) => { event.preventDefault(); void handleConnectWhatsApp('phone') }}>
             <label htmlFor="whatsapp-pairing-phone">DDD e número do WhatsApp</label>
             <input autoComplete="tel" id="whatsapp-pairing-phone" inputMode="tel" onChange={(event) => setPairingPhone(event.target.value)} placeholder="21 99999-9999" required type="tel" value={pairingPhone} />
-            <button className="button button-primary" disabled={pairingLoading || !pairingPhone.trim()} type="submit">{pairingLoading ? 'Gerando código…' : 'Gerar código de pareamento'}</button>
+            <button className="button button-primary" disabled={pairingLoading || !pairingPhone.trim()} type="submit">{pairingLoading ? 'Gerando código…' : 'Gerar código para conectar'}</button>
           </form>
           {pairingCode && <div className="whatsapp-pairing-code" role="status" aria-live="polite">
-            <span>Código de pareamento</span>
+            <span>Código para conectar</span>
             <strong aria-label={`Código ${pairingCode}`}>{pairingCode}</strong>
             <button className="button button-secondary" onClick={() => void handleCopyPairingCode()} type="button">{pairingCodeCopied ? 'Código copiado' : 'Copiar código'}</button>
             <small>Use este código no WhatsApp do número informado. Se estiver nesta página pelo próprio celular, alterne para o WhatsApp e volte aqui para conferir a conexão.</small>
@@ -1783,28 +1783,28 @@ export function WhatsAppInboxPage() {
         </section>}
 
         {qrImage && <section className="surface-panel whatsapp-qr-panel" aria-labelledby="whatsapp-qr-title" aria-live="polite">
-          <div><p className="eyebrow">PAREAMENTO POR QR CODE</p><h2 id="whatsapp-qr-title">Escaneie com o WhatsApp</h2><p>Abra esta página em outro dispositivo. No telefone com o número que deseja usar, abra <strong>Aparelhos conectados</strong> e escaneie o código.</p></div>
+          <div><p className="eyebrow">CONECTAR COM QR CODE</p><h2 id="whatsapp-qr-title">Leia o código com o WhatsApp</h2><p>Abra esta página em outro dispositivo. No telefone que deseja conectar, abra <strong>Aparelhos conectados</strong> e leia o código.</p></div>
           <img alt="QR Code temporário para conectar o WhatsApp" src={qrImage} />
           <button className="button button-secondary" disabled={pairingLoading} onClick={() => void handleConnectWhatsApp('qr')} type="button">Atualizar QR Code</button>
         </section>}
 
-        {pairingLoading && !qrImage && !pairingCode && <p className="inline-state" role="status">Preparando o pareamento…</p>}
+        {pairingLoading && !qrImage && !pairingCode && <p className="inline-state" role="status">Preparando a conexão…</p>}
       </section>
     </section>
   )
 
   const connectedScreen = connectionChecking ? (
-    <section className="surface-panel whatsapp-connection-state" role="status"><span className="empty-icon"><Icon name="clock" /></span><h2>Verificando a conexão segura…</h2><p>O Shalom consulta a Evolution API no servidor.</p></section>
+    <section className="surface-panel whatsapp-connection-state" role="status"><span className="empty-icon"><Icon name="clock" /></span><h2>Conferindo a conexão…</h2><p>O WhatsApp está sendo conferido.</p></section>
   ) : !configured ? (
     <section className="surface-panel whatsapp-connection-state" aria-labelledby="whatsapp-pending-title">
       <span className="empty-icon"><Icon name="message" /></span>
       <p className="eyebrow">{connectionError ? 'CONEXÃO INDISPONÍVEL' : 'ETAPA 1 · CAIXA DE ENTRADA'}</p>
-      <h2 id="whatsapp-pending-title">{connectionError ? 'Não foi possível verificar a integração' : 'A caixa está pronta; falta configurar a Evolution API'}</h2>
-      <p>{connectionError ?? 'Esta tela reúne as conversas e chamadas do número da empresa. Configure os secrets do servidor e conecte o WhatsApp da empresa para começar.'}</p>
+      <h2 id="whatsapp-pending-title">{connectionError ? 'Não foi possível conferir a conexão' : 'Conecte o WhatsApp'}</h2>
+      <p>{connectionError ?? 'Conecte o número da empresa para ver as conversas e chamadas aqui.'}</p>
       <ol className="whatsapp-setup-steps">
-        <li><span>1</span><div><strong>Configurar a conexão segura</strong><small>Endereço e chave da Evolution ficam nos secrets do servidor, nunca no navegador.</small></div><span className="neutral-status">Pendente</span></li>
-        <li><span>2</span><div><strong>Configurar o webhook</strong><small>O Supabase precisa receber eventos por uma rede local compartilhada ou endpoint HTTPS seguro.</small></div><span className="neutral-status">Pendente</span></li>
-        <li><span>3</span><div><strong>Conectar o número da empresa</strong><small>O histórico desse número ficará separado da conexão usada nos testes.</small></div><span className="neutral-status">Pendente</span></li>
+        <li><span>1</span><div><strong>Preparar a conexão</strong><small>Esta etapa é feita no servidor.</small></div><span className="neutral-status">Pendente</span></li>
+        <li><span>2</span><div><strong>Ativar mensagens</strong><small>O sistema precisa conseguir receber mensagens.</small></div><span className="neutral-status">Pendente</span></li>
+        <li><span>3</span><div><strong>Conectar o número</strong><small>As conversas deste número ficam em uma caixa separada.</small></div><span className="neutral-status">Pendente</span></li>
       </ol>
       {connectionError && <button className="button button-secondary" onClick={() => { setConnectionChecking(true); setConnectionError(null); void invokeInbox<{ configured?: boolean; connected?: boolean; connection_selected?: boolean; connection_status?: 'pending' | 'active' | null; connection_state?: string; instance_exists?: boolean }>({ action: 'status', business_id: businessId }).then((result) => { setConfigured(result.configured === true); setConnectionState(connectionStateFromStatus(result)); setConnectionSelected(result.connection_selected === true); setConnectionStatus(result.connection_status ?? null); setInstanceExists(result.instance_exists === true) }).catch(() => setConnectionError('Não foi possível verificar a conexão com o servidor.')).finally(() => setConnectionChecking(false)) }} type="button">Tentar novamente</button>}
       <Link className="quiet-link" to="/configuracoes">Ver preparação da conexão <Icon name="arrow" /></Link>
@@ -1813,16 +1813,16 @@ export function WhatsAppInboxPage() {
     <section className="whatsapp-inbox" aria-label="Caixa de entrada WhatsApp">
       <div className="surface-panel whatsapp-connection-banner">
         <span className={`whatsapp-connection-dot${isWhatsAppConnected(connectionState) ? ' is-connected' : ''}`} aria-hidden="true" />
-        <div className="whatsapp-connection-status"><strong>Evolution API</strong><span role="status">{connectionStateLabel(connectionState)}</span>{webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}</div>
+        <div className="whatsapp-connection-status"><strong>WhatsApp</strong><span role="status">{connectionStateLabel(connectionState)}</span>{webhookFeedback && <span className="whatsapp-webhook-feedback" role="status">{webhookFeedback}</span>}</div>
         <div className="whatsapp-connection-actions">
           {canManageBusiness(role) && isWhatsAppConnected(connectionState) && <button className="button button-secondary" disabled={disconnecting} onClick={() => { setPairingError(null); setDisconnectConfirmationOpen(true) }} type="button">Desconectar / trocar número</button>}
-          {canManageBusiness(role) && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Reconfigurar recebimento'}</button>}
+          {canManageBusiness(role) && instanceExists && <button className="button button-secondary" disabled={webhookSaving} onClick={() => void handleConfigureWebhook()} type="button">{webhookSaving ? 'Configurando…' : 'Ajustar conexão'}</button>}
         </div>
       </div>
       {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
       <aside className={`surface-panel whatsapp-conversation-panel${selectedId ? ' is-mobile-hidden' : ''}`} aria-label="Lista de conversas">
         <div className="whatsapp-list-heading">
-          <div><p className="eyebrow">EVOLUTION API · WHATSAPP</p><h2>{view === 'calls' ? 'Chamadas' : 'Conversas'}</h2></div>
+          <div><p className="eyebrow">WHATSAPP</p><h2>{view === 'calls' ? 'Chamadas' : 'Conversas'}</h2></div>
           <button aria-label={view === 'calls' ? 'Atualizar chamadas' : 'Atualizar conversas'} className="icon-button" disabled={view === 'calls' ? callsLoading : listLoading} onClick={() => view === 'calls' ? void loadCalls() : void refreshLoadedConversations()} type="button"><Icon name="clock" /></button>
         </div>
         <div className="whatsapp-inbox-kind-tabs" aria-label="Tipo de atendimento" role="group">
@@ -1833,7 +1833,7 @@ export function WhatsAppInboxPage() {
           <>
             {callsError && <div className="inline-state inline-state-error" role="alert"><p>{callsError}</p><button className="text-button" onClick={() => void loadCalls()} type="button">Tentar novamente</button></div>}
             {callsLoading && <p className="inline-state" role="status">Carregando chamadas…</p>}
-            {!callsLoading && !callsError && calls.length === 0 && <div className="whatsapp-list-empty"><Icon name="message" /><strong>Nenhuma chamada registrada</strong><span>Chamadas recebidas pela Evolution aparecerão aqui quando o evento estiver disponível.</span></div>}
+            {!callsLoading && !callsError && calls.length === 0 && <div className="whatsapp-list-empty"><Icon name="message" /><strong>Nenhuma chamada registrada</strong><span>As chamadas do WhatsApp aparecerão aqui.</span></div>}
             <ul className="whatsapp-conversation-list">
               {calls.map((call) => <li key={call.id}><button className="whatsapp-conversation-item" onClick={() => { setContactListFeedback(null); setSelectedConversation(null); setSelectedId(call.conversation_id) }} type="button">
                 <span className="whatsapp-contact-avatar" aria-hidden="true">{call.is_video ? 'V' : '☎'}</span>
@@ -1841,7 +1841,7 @@ export function WhatsAppInboxPage() {
                 <span className="whatsapp-conversation-meta"><time>{timestampLabel(call.occurred_at)}</time>{call.hidden_from_inbox && <span>Oculta</span>}</span>
               </button></li>)}
             </ul>
-            <p className="whatsapp-call-note">Eventos agrupados pelo identificador enviado pela Evolution. O Shalom não grava áudio nem atende chamadas pelo navegador.</p>
+            <p className="whatsapp-call-note">As chamadas da mesma pessoa ficam juntas. O sistema não grava áudio nem faz chamadas pelo navegador.</p>
           </>
         ) : <>
         <form className="whatsapp-search" onSubmit={(event) => void handleSearch(event)} role="search">
@@ -1897,7 +1897,7 @@ export function WhatsAppInboxPage() {
               {contactPreferencesMessage && <p className="form-message form-message-success" role="status">{contactPreferencesMessage}</p>}
               <label className="whatsapp-context-field"><span>Nome neste sistema</span><input autoComplete="off" className="text-input" disabled={!currentConversation || !canManageBusiness(role) || contactPreferencesSaving} maxLength={160} onChange={(event) => setDisplayNameDraft(event.target.value)} placeholder={currentConversation?.is_group ? 'Nome do grupo' : 'Nome salvo para esta conversa'} value={displayNameDraft} /></label>
               {canManageBusiness(role) ? <button className="button button-secondary" disabled={!currentConversation || contactPreferencesSaving || displayNameDraft.trim() === (currentConversation?.display_name_override ?? '')} type="submit">{contactPreferencesSaving ? 'Salvando…' : 'Salvar nome'}</button> : <p className="section-footnote">Somente a gestão pode alterar o nome e a classificação.</p>}
-              <p className="whatsapp-match-hint">O nome fica salvo no Shalom e tem prioridade sobre o nome recebido da Evolution. O telefone, quando confiável, aparece separado. A classificação não cria nem altera cadastro de cliente.</p>
+              <p className="whatsapp-match-hint">O nome que você escolher aparece nesta conversa. O telefone fica logo abaixo. Isso não cria nem altera um cliente.</p>
               {canManageBusiness(role) && currentConversation && <>
                 {!currentConversation.hidden_from_inbox && currentConversation.contact_classification !== 'customer' && <button className="button button-secondary" disabled={contactPreferencesSaving} onClick={() => void handleContactPreferences({ contact_classification: 'customer', hidden_from_inbox: false }, 'customers', 'Contato movido para Clientes.')} type="button">Marcar como cliente</button>}
                 {!currentConversation.hidden_from_inbox && currentConversation.contact_classification === 'customer' && <button className="button button-secondary" disabled={contactPreferencesSaving} onClick={() => void handleContactPreferences({ contact_classification: 'unclassified', hidden_from_inbox: false }, 'conversations', 'Contato movido para Conversas.')} type="button">Mover para conversas</button>}
@@ -1920,7 +1920,7 @@ export function WhatsAppInboxPage() {
               ? <article className="whatsapp-call-event" key={`call-${event.call.id}`}>
                   <span className="whatsapp-call-event-icon" aria-hidden="true">{event.call.is_video ? 'V' : '☎'}</span>
                   <div><strong>{event.call.status_label}{event.call.is_video ? ' · vídeo' : ''}</strong><time>{timestampLabel(event.call.occurred_at)}</time></div>
-                  <small>Registro do provedor</small>
+                  <small>Número original</small>
                 </article>
               : <article className={`whatsapp-message${event.message.message_type === 'outgoing' ? ' is-outgoing' : ''}${event.message.private ? ' is-private' : ''}`} key={`message-${event.message.id}`}>
                   {event.message.private && <span className="whatsapp-message-label">Nota interna</span>}
@@ -1942,23 +1942,23 @@ export function WhatsAppInboxPage() {
           </form>
 
           <details className="whatsapp-context-disclosure" key={selectedId}>
-            <summary><span><strong>Contexto Shalom</strong><small>Associação opcional de cliente e pedido</small></span><span className="whatsapp-context-status">{selectedLink?.match_method === 'phone' ? 'Telefone reconhecido' : selectedLink?.customer_id ? 'Cliente vinculado' : 'Sem vínculo'}</span></summary>
+            <summary><span><strong>Cliente e pedido</strong><small>Opcional</small></span><span className="whatsapp-context-status">{selectedLink?.match_method === 'phone' ? 'Telefone identificado' : selectedLink?.customer_id ? 'Cliente escolhido' : 'Sem cliente escolhido'}</span></summary>
             <form className="whatsapp-context-panel" onSubmit={(event) => void handleSaveLink(event)}>
             {linkError && <p className="form-message form-message-error" role="alert">{linkError}</p>}
             {linkMessage && <p className="form-message form-message-success" role="status">{linkMessage}</p>}
             {selectedLink?.match_method === 'phone' && selectedLink.customer_id && <p className="whatsapp-match-hint">Cliente identificado automaticamente por um telefone único. Você pode trocar o cadastro se precisar.</p>}
-            {currentConversation && !currentConversation.contact.phone && <p className="whatsapp-match-hint">O WhatsApp não enviou um número para este contato. Vincule o cadastro manualmente para identificar esta pessoa.</p>}
-            {!selectedLink?.customer_id && phoneMatches.length === 1 && customerDraft === phoneMatches[0].id && <p className="whatsapp-match-hint">Telefone único reconhecido. Salve o vínculo para manter este cliente nesta conversa.</p>}
-            {phoneMatches.length > 0 && !customerDraft && <p className="whatsapp-match-hint">{phoneMatches.length === 1 ? `Telefone correspondente ao cadastro de ${phoneMatches[0].name}.` : `${phoneMatches.length} cadastros usam este telefone; escolha o cliente correto.`} {phoneMatches.length > 1 ? 'A associação precisa de escolha manual.' : 'Confira o cadastro antes de salvar.'}</p>}
-            <label className="whatsapp-context-field"><span>Cliente</span><select disabled={!currentConversation || linkLoading || !canManageBusiness(role)} onChange={(event) => { setCustomerDraft(event.target.value); setOrderDraft('') }} value={customerDraft}><option value="">Sem cliente associado</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
+            {currentConversation && !currentConversation.contact.phone && <p className="whatsapp-match-hint">O WhatsApp não enviou o telefone. Escolha o cliente na lista para identificar esta conversa.</p>}
+            {!selectedLink?.customer_id && phoneMatches.length === 1 && customerDraft === phoneMatches[0].id && <p className="whatsapp-match-hint">Este telefone bate com um cliente. Salve para manter o nome nesta conversa.</p>}
+            {phoneMatches.length > 0 && !customerDraft && <p className="whatsapp-match-hint">{phoneMatches.length === 1 ? `Este telefone está no cadastro de ${phoneMatches[0].name}.` : `${phoneMatches.length} clientes usam este telefone. Escolha o correto.`} {phoneMatches.length > 1 ? 'Escolha um cliente antes de salvar.' : 'Confira antes de salvar.'}</p>}
+            <label className="whatsapp-context-field"><span>Cliente</span><select disabled={!currentConversation || linkLoading || !canManageBusiness(role)} onChange={(event) => { setCustomerDraft(event.target.value); setOrderDraft('') }} value={customerDraft}><option value="">Escolha um cliente</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
             {canManageBusiness(role) && <Link className="quiet-link whatsapp-register-customer" to="/clientes">Cadastrar cliente</Link>}
-            <label className="whatsapp-context-field"><span>Pedido relacionado</span><select disabled={!currentConversation || !customerDraft || !canManageBusiness(role)} onChange={(event) => setOrderDraft(event.target.value)} value={orderDraft}><option value="">Sem pedido associado</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
-            {canManageBusiness(role) ? <button className="button button-secondary" disabled={!currentConversation || linkSaving || linkLoading} type="submit">{linkSaving ? 'Salvando…' : 'Salvar vínculo'}</button> : <p className="section-footnote">Somente a gestão pode alterar vínculos de atendimento.</p>}
+            <label className="whatsapp-context-field"><span>Pedido relacionado</span><select disabled={!currentConversation || !customerDraft || !canManageBusiness(role)} onChange={(event) => setOrderDraft(event.target.value)} value={orderDraft}><option value="">Escolha um pedido</option>{orders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
+            {canManageBusiness(role) ? <button className="button button-secondary" disabled={!currentConversation || linkSaving || linkLoading} type="submit">{linkSaving ? 'Salvando…' : 'Salvar cliente e pedido'}</button> : <p className="section-footnote">Só a gestão pode mudar o cliente e o pedido desta conversa.</p>}
             {customerDraft && canManageBusiness(role)
               ? conversationContextNeedsSave
-                ? <p className="section-footnote whatsapp-match-hint">Salve o vínculo do cliente acima para manter a associação nesta conversa. Depois, você poderá criar o rascunho do pedido.</p>
+                ? <p className="section-footnote whatsapp-match-hint">Salve o cliente acima para manter o nome nesta conversa. Depois, você poderá preparar um pedido.</p>
                 : <><Link className="button button-primary" to={`/pedidos/novo?cliente=${encodeURIComponent(customerDraft)}`}>Criar rascunho de pedido</Link><p className="section-footnote whatsapp-match-hint">O cliente e os dados do pedido anterior podem ser reaproveitados. O pedido só será salvo quando você revisar e confirmar no formulário.</p></>
-              : <p className="section-footnote whatsapp-match-hint">{canManageBusiness(role) ? 'Vincule um cliente acima para preparar um pedido sem sair desta conversa.' : 'Somente a gestão pode criar pedidos.'}</p>}
+              : <p className="section-footnote whatsapp-match-hint">{canManageBusiness(role) ? 'Escolha um cliente acima para preparar um pedido sem sair da conversa.' : 'Só a gestão pode criar pedidos.'}</p>}
             </form>
           </details>
         </>}
@@ -1972,7 +1972,7 @@ export function WhatsAppInboxPage() {
         <div>
           <p className="eyebrow">ATENDIMENTO</p>
           <h1>WhatsApp</h1>
-          <p className="page-description">Conversas e registros de chamadas recebidos pela Evolution API.</p>
+          <p className="page-description">Conversas e chamadas do WhatsApp.</p>
         </div>
         <span className="module-heading-icon"><Icon name="message" /></span>
       </header>
@@ -1981,8 +1981,8 @@ export function WhatsAppInboxPage() {
         <section aria-describedby="whatsapp-disconnect-description" aria-labelledby="whatsapp-disconnect-title" aria-modal="true" className="whatsapp-dialog surface-panel" ref={disconnectDialogRef} role="dialog" tabIndex={-1}>
           <span className="whatsapp-dialog-icon" aria-hidden="true"><Icon name="message" /></span>
           <p className="eyebrow">CONEXÃO WHATSAPP</p>
-          <h2 id="whatsapp-disconnect-title">{mustArchiveCurrentConnection ? 'Arquivar esta caixa e trocar o número?' : isWhatsAppConnected(connectionState) ? 'Desconectar o WhatsApp?' : 'Cancelar este pareamento?'}</h2>
-          <p id="whatsapp-disconnect-description">O histórico desta caixa será arquivado, sem ser apagado. Se a Evolution estiver indisponível, a sessão antiga pode precisar ser encerrada diretamente no provedor. O novo número ficará em uma caixa separada, com os mesmos recursos.</p>
+          <h2 id="whatsapp-disconnect-title">{mustArchiveCurrentConnection ? 'Trocar o número do WhatsApp?' : isWhatsAppConnected(connectionState) ? 'Desconectar o WhatsApp?' : 'Cancelar conexão?'}</h2>
+          <p id="whatsapp-disconnect-description">As conversas desta caixa serão guardadas. O novo número ficará em outra caixa, com os mesmos recursos.</p>
           {pairingError && <div className="inline-state inline-state-error" role="alert">{pairingError}</div>}
           <div className="whatsapp-dialog-actions">
             <button className="button button-secondary" disabled={disconnecting} onClick={() => setDisconnectConfirmationOpen(false)} ref={disconnectCancelRef} type="button">{mustArchiveCurrentConnection && !isWhatsAppConnected(connectionState) ? 'Voltar' : 'Manter conectado'}</button>

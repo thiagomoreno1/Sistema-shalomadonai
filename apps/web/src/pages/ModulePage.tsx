@@ -51,7 +51,7 @@ export function MorePage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">NAVEGAÇÃO</p>
-          <h1>Mais ferramentas</h1>
+          <h1>Mais</h1>
           <p className="page-description">Acesse os outros módulos da operação.</p>
         </div>
       </header>

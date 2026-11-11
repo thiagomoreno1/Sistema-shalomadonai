@@ -439,11 +439,11 @@ export function ProductsPage() {
       const quantityGuidance = isDiscreteInventoryUnit(inventoryUnit)
         ? `Para ${inventoryUnit || 'unidade/peça'}, use um número inteiro.`
         : 'Para medidas como kg e litros, use até 3 casas decimais.'
-      setFormError(`Escolha a unidade e informe a quantidade atual. ${quantityGuidance} Use 0 se estiver sem saldo.`)
+      setFormError(`Escolha a unidade e informe quantos produtos há agora. ${quantityGuidance} Use 0 se não houver nenhum.`)
       return
     }
     if (!isCombo && !editingProduct?.inventory_tracked && opening !== null && opening > 0 && cost === null) {
-      setFormError('Informe o custo unitário atual para registrar o saldo inicial do estoque.')
+      setFormError('Informe quanto custa cada unidade para calcular o valor inicial do estoque.')
       return
     }
     if (!isCombo && minimumStock.trim() && minimum === null) {
