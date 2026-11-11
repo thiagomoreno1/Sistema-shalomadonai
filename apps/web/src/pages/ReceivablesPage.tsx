@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { FinanceNavigation } from '../components/FinanceNavigation'
+import { isArariboiaPaymentMethod, nextArariboiaDueDate } from '../lib/arariboia'
 import { businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
 type Order = { id: string; customer_id: string | null; customer_name_snapshot: string; status: 'open' | 'cancelled' }
-type Installment = { id: string; order_id: string; installment_number: number; amount_cents: number; due_on: string }
+type Installment = { id: string; order_id: string; installment_number: number; amount_cents: number; due_on: string; payment_method: string | null }
 type Allocation = { id: string; order_id: string; installment_id: string; amount_cents: number }
 type Receivable = Installment & { customer_id: string | null; customer_name: string; balance_cents: number; overdue: boolean }
 type FollowUpPriority = 'low' | 'normal' | 'high'
@@ -275,7 +276,7 @@ export function ReceivablesPage() {
         const orderIdBatch = orderIds.slice(start, start + 100)
         const [installmentsResult, allocationsResult] = await Promise.all([
           loadAllPages<Installment>((from, to) => client.from('order_installments')
-            .select('id, order_id, installment_number, amount_cents, due_on')
+            .select('id, order_id, installment_number, amount_cents, due_on, payment_method')
             .eq('business_id', businessId)
             .in('order_id', orderIdBatch)
             .order('id', { ascending: true })
@@ -332,9 +333,13 @@ export function ReceivablesPage() {
     if (activeFollowUpId) followUpHeadingRef.current?.focus()
   }, [activeFollowUpId])
 
-  const overdue = useMemo(() => receivables.filter((item) => item.due_on < today), [receivables, today])
-  const dueToday = useMemo(() => receivables.filter((item) => item.due_on === today), [receivables, today])
-  const upcoming = useMemo(() => receivables.filter((item) => item.due_on > today), [receivables, today])
+  const arariboiaDueDate = nextArariboiaDueDate(today)
+  const arariboiaCycle = useMemo(() => receivables.filter((item) => isArariboiaPaymentMethod(item.payment_method) && item.due_on === arariboiaDueDate), [arariboiaDueDate, receivables])
+  const arariboiaCustomerCount = new Set(arariboiaCycle.map((item) => item.customer_id ?? item.order_id)).size
+  const arariboiaCycleIds = useMemo(() => new Set(arariboiaCycle.map((item) => item.id)), [arariboiaCycle])
+  const overdue = useMemo(() => receivables.filter((item) => !arariboiaCycleIds.has(item.id) && item.due_on < today), [arariboiaCycleIds, receivables, today])
+  const dueToday = useMemo(() => receivables.filter((item) => !arariboiaCycleIds.has(item.id) && item.due_on === today), [arariboiaCycleIds, receivables, today])
+  const upcoming = useMemo(() => receivables.filter((item) => !arariboiaCycleIds.has(item.id) && item.due_on > today), [arariboiaCycleIds, receivables, today])
 
   function openFollowUp(item: Receivable, trigger: HTMLButtonElement) {
     if (followUpSavingId || followUpDraft?.pending || !followUpStorageReady) return
@@ -577,6 +582,7 @@ export function ReceivablesPage() {
       {followUpNotice && <p className="form-message form-message-success" role="status">{followUpNotice} <Link to="/atendimento">Abrir fila de Atendimento</Link></p>}
 
       {!loading && !error && <section className="receivable-summary-grid" aria-label="Resumo dos pagamentos a receber">
+        {arariboiaCycle.length > 0 && <article className="surface-panel receivable-summary-card"><span>Arariboia · ciclo do dia 6</span><strong>{formatBRL(groupTotal(arariboiaCycle))}</strong><small>{arariboiaCustomerCount} clientes · vence {formatBusinessDate(arariboiaDueDate)}</small></article>}
         <article className="surface-panel receivable-summary-card"><span>Parcelas de clientes atrasadas</span><strong>{formatBRL(groupTotal(overdue))}</strong><small>{overdue.length} parcelas passaram da data</small></article>
         <article className="surface-panel receivable-summary-card"><span>Parcelas de clientes vencendo hoje</span><strong>{formatBRL(groupTotal(dueToday))}</strong><small>{dueToday.length} parcelas ainda sem pagamento</small></article>
         <article className="surface-panel receivable-summary-card"><span>Próximos vencimentos</span><strong>{formatBRL(groupTotal(upcoming))}</strong><small>{upcoming.length} parcelas ainda sem pagamento</small></article>
@@ -586,6 +592,10 @@ export function ReceivablesPage() {
 
       {loading ? <p className="inline-state" aria-live="polite">Carregando vencimentos…</p> : !error && (
         <div className="page-stack receivable-groups">
+          {arariboiaCycle.length > 0 && <section className="surface-panel record-panel" aria-labelledby="receivable-arariboia-heading">
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">CARTÃO ARARIBOIA</p><h2 id="receivable-arariboia-heading">Ciclo com vencimento em {formatBusinessDate(arariboiaDueDate)}</h2></div><span className="neutral-status">{arariboiaCycle.length}</span></div>
+            {renderGroup(arariboiaCycle, 'Nenhum pagamento pendente neste ciclo.')}
+          </section>}
           <section className="surface-panel record-panel" aria-labelledby="receivable-overdue-heading">
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">PRIORIDADE</p><h2 id="receivable-overdue-heading">Parcelas de clientes atrasadas</h2></div><span className="neutral-status">{overdue.length}</span></div>
             {renderGroup(overdue, 'Nenhum pagamento atrasado.')}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEve
 import { Link, useParams } from 'react-router-dom'
 import { useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { businessLocalDateTimeToIso, businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
+import { businessLocalDateTimeToIso, businessToday, currentTimestamp, formatBRL, formatBusinessDate, parseBrazilianCurrency } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
 
 type Customer = {
@@ -12,6 +12,8 @@ type Customer = {
   whatsapp_phone: string | null
   delivery_address: string | null
   is_active: boolean
+  is_arariboia: boolean
+  arariboia_limit_cents: number | null
 }
 
 type CustomerAddress = { id: string; label: string; address: string; is_default: boolean }
@@ -225,6 +227,7 @@ export function CustomerDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [customerErrorScope, setCustomerErrorScope] = useState<string | null>(null)
   const [editOpen, setEditOpen] = useState(false)
+  const [editArariboia, setEditArariboia] = useState(false)
   const [interactionOpen, setInteractionOpen] = useState(false)
   const [interactionFormMode, setInteractionFormMode] = useState<'general' | 'missed_call'>('general')
   const [interactionType, setInteractionType] = useState<Interaction['interaction_type']>('call')
@@ -299,7 +302,7 @@ export function CustomerDetailPage() {
     try {
       const [customerResult, interactionResult, followUpResult] = await Promise.all([
         client.from('customers')
-          .select('id, name, phone, whatsapp_phone, delivery_address, is_active')
+          .select('id, name, phone, whatsapp_phone, delivery_address, is_active, is_arariboia, arariboia_limit_cents')
           .eq('business_id', businessId).eq('id', customerId).maybeSingle(),
         client.from('customer_interactions')
           .select('id, related_order_id, interaction_type, direction, call_outcome, outcome, occurred_at')
@@ -503,12 +506,17 @@ export function CustomerDetailPage() {
     const form = new FormData(event.currentTarget)
     const name = String(form.get('name') ?? '').trim()
     const whatsappPhone = String(form.get('whatsapp_phone') ?? '').trim()
+    const arariboiaLimitCents = editArariboia ? parseBrazilianCurrency(String(form.get('arariboia_limit') ?? '')) : null
     if (!name) {
       setFormError('Informe o nome do cliente.')
       return
     }
     if (whatsappPhone && !getWhatsAppChatUrl(whatsappPhone)) {
       setFormError('Informe o número começando com + e o código do país, por exemplo +55 21 99999-0000.')
+      return
+    }
+    if (editArariboia && Number.isNaN(arariboiaLimitCents)) {
+      setFormError('Confira o limite do cartão. Use um valor como 600,00.')
       return
     }
     setSaving(true)
@@ -518,6 +526,8 @@ export function CustomerDetailPage() {
         name,
         phone: String(form.get('phone') ?? '').trim() || null,
         whatsapp_phone: whatsappPhone || null,
+        is_arariboia: editArariboia,
+        arariboia_limit_cents: arariboiaLimitCents,
         ...(form.has('delivery_address') ? { delivery_address: String(form.get('delivery_address') ?? '').trim() || null } : {}),
       }
       const { error: updateError } = await supabaseClient.from('customers')
@@ -812,13 +822,13 @@ export function CustomerDetailPage() {
         <div>
           <p className="eyebrow">CLIENTE</p>
           <h1 className="customer-detail-heading" ref={customerHeadingRef} tabIndex={-1}>{customer.name}</h1>
-          <p className="page-description">{customer.phone ? `Telefone: ${customer.phone}` : 'Telefone não informado'}{customer.whatsapp_phone ? ` · WhatsApp: ${customer.whatsapp_phone}` : ''}{customer.is_active ? '' : ' · Cadastro arquivado'}</p>
+          <p className="page-description">{customer.phone ? `Telefone: ${customer.phone}` : 'Telefone não informado'}{customer.whatsapp_phone ? ` · WhatsApp: ${customer.whatsapp_phone}` : ''}{customer.is_arariboia ? ` · Arariboia${customer.arariboia_limit_cents === null ? '' : ` · limite de referência ${formatBRL(customer.arariboia_limit_cents)}`}` : ''}{customer.is_active ? '' : ' · Cadastro arquivado'}</p>
         </div>
         <div className="record-heading-actions customer-heading-actions">
           {whatsappChatUrl && <a aria-label={`Abrir conversa no WhatsApp com ${customer.name}`} className="button button-secondary" href={whatsappChatUrl} rel="noopener noreferrer" target="_blank"><Icon name="message" /> Abrir WhatsApp</a>}
           {customer.is_active ? <>
             <Link className="button button-primary" to={`/pedidos/novo?cliente=${encodeURIComponent(customer.id)}`}><Icon name="bag" /> Novo pedido</Link>
-            <button className="button button-secondary" onClick={() => { setEditOpen((value) => !value); setFormError(null) }} type="button">{editOpen ? 'Fechar edição' : 'Editar'}</button>
+            <button className="button button-secondary" onClick={() => { const opening = !editOpen; setEditOpen(opening); if (opening) setEditArariboia(customer.is_arariboia); setFormError(null) }} type="button">{editOpen ? 'Fechar edição' : 'Editar'}</button>
             <button className="button button-secondary" disabled={saving} onClick={openGeneralInteraction} type="button">{interactionOpen ? 'Fechar contato' : <><Icon name="plus" /> Registrar contato</>}</button>
             {!interactionOpen && <button className="button button-secondary" onClick={openMissedCallInteraction} type="button">Ligação não atendida</button>}
           </> : <button className="button button-primary" onClick={() => void handleReactivateCustomer()} type="button">Reativar cliente</button>}
@@ -834,6 +844,8 @@ export function CustomerDetailPage() {
             <label className="record-field record-field-wide"><span className="field-label">Nome *</span><input className="text-input" defaultValue={customer.name} maxLength={160} name="name" required /></label>
             <label className="record-field"><span className="field-label">Telefone <span className="field-optional">opcional</span></span><input className="text-input" defaultValue={customer.phone ?? ''} maxLength={64} name="phone" type="tel" /></label>
             <label className="record-field"><span className="field-label">WhatsApp <span className="field-optional">opcional</span></span><input autoComplete="tel" className="text-input" defaultValue={customer.whatsapp_phone ?? ''} maxLength={64} name="whatsapp_phone" placeholder="+55 21 99999-0000" type="tel" /><span className="customer-whatsapp-hint">Use +55 e DDD no Brasil; para outros países, informe + e o DDI.</span></label>
+            <label className="record-checkbox record-field-wide"><input checked={editArariboia} onChange={(event) => setEditArariboia(event.target.checked)} type="checkbox" /><span><strong>Cliente Arariboia</strong></span></label>
+            {editArariboia && <label className="record-field"><span className="field-label">Limite de referência <span className="field-optional">opcional</span></span><input className="text-input" defaultValue={customer.arariboia_limit_cents === null ? '' : (customer.arariboia_limit_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" maxLength={18} name="arariboia_limit" placeholder="R$ 600,00" /></label>}
             {addressesError && <label className="record-field record-field-wide"><span className="field-label">Endereço principal <span className="field-optional">modo compatível</span></span><input autoComplete="street-address" className="text-input" defaultValue={customer.delivery_address ?? ''} maxLength={1000} name="delivery_address" /><span className="customer-whatsapp-hint">A lista de endereços está indisponível. Você ainda pode editar o endereço principal por aqui.</span></label>}
           </div>
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}

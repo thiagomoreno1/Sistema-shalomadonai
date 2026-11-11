@@ -238,8 +238,8 @@ export function InventoryPage() {
   }, [showMovementForm, showReceiptForm])
 
   const trackedProducts = products.filter((product) => product.inventory_tracked)
-  const untrackedProducts = products.filter((product) => product.is_active && !product.inventory_tracked && !product.is_combo)
-  const belowMinimum = balances.filter((balance) => balance.minimum_stock !== null && Number(balance.quantity_on_hand) < Number(balance.minimum_stock))
+  const untrackedProducts = products.filter((product) => !product.inventory_tracked && !product.is_combo)
+  const belowMinimum = balances.filter((balance) => Number(balance.quantity_on_hand) <= 0 || (balance.minimum_stock !== null && Number(balance.quantity_on_hand) < Number(balance.minimum_stock)))
   const recentSuppliers = [...receipts.reduce((suppliers, receipt) => {
     const supplier = receipt.supplier_name?.trim() ?? ''
     if (supplier) suppliers.set(supplier.toLocaleLowerCase('pt-BR'), supplier)
@@ -694,16 +694,16 @@ export function InventoryPage() {
 
       <section className="order-balance-grid inventory-summary" aria-label="Resumo do estoque">
         <article className="surface-panel order-balance-card"><span>Produtos com saldo no sistema</span><strong>{loading ? '—' : trackedProducts.length}</strong><small>Atualizado em despachos, retiradas e recebimentos.</small></article>
-        <article className="surface-panel order-balance-card"><span>Abaixo do mínimo</span><strong>{loading ? '—' : belowMinimum.length}</strong><small>Somente produtos com limite configurado.</small>{!loading && belowMinimum.length > 0 && <button className="text-button" onClick={() => setShowReplenishmentList((value) => !value)} type="button">{showReplenishmentList ? 'Fechar lista' : 'Montar lista de reposição'}</button>}</article>
+        <article className="surface-panel order-balance-card"><span>Estoque em atenção</span><strong>{loading ? '—' : belowMinimum.length}</strong><small>Saldo zero ou abaixo do mínimo informado.</small>{!loading && belowMinimum.length > 0 && <button className="text-button" onClick={() => setShowReplenishmentList((value) => !value)} type="button">{showReplenishmentList ? 'Fechar lista' : 'Ver produtos'}</button>}</article>
         <article className="surface-panel order-balance-card"><span>Estoque negativo</span><strong>{loading ? '—' : negativeBalances.length}</strong><small>Saíram mais unidades do que havia no saldo.</small></article>
       </section>
 
       {showReplenishmentList && belowMinimum.length > 0 && <section className="surface-panel record-panel" aria-labelledby="inventory-replenishment-heading">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">SUGESTÃO DE COMPRA</p><h2 id="inventory-replenishment-heading">Lista de reposição</h2></div><span className="neutral-status">{belowMinimum.length}</span></div>
-        <p className="section-footnote">A sugestão mostra quanto falta para chegar ao mínimo cadastrado. Ela não altera o estoque; informe a quantidade que realmente chegar.</p>
+        <p className="section-footnote">Saldo zero ou abaixo do mínimo informado. A entrada só atualiza o estoque após confirmar o recebimento.</p>
         <ul className="inventory-balance-list">{belowMinimum.map((balance) => {
-          const deficit = Math.round((Number(balance.minimum_stock) - Number(balance.quantity_on_hand)) * 1000) / 1000
-          return <li key={balance.product_id}><span className="inventory-balance-copy"><strong>{balance.product_name}</strong><small>Saldo {formatQuantity(Number(balance.quantity_on_hand))} · mínimo {formatQuantity(Number(balance.minimum_stock))}</small></span><span className="inventory-balance-value"><strong>{formatQuantity(deficit)} <small>{balance.inventory_unit}</small></strong><span className="stock-state stock-state-low">Sugestão para repor</span></span></li>
+          const deficit = balance.minimum_stock === null ? null : Math.max(0, Math.round((Number(balance.minimum_stock) - Number(balance.quantity_on_hand)) * 1000) / 1000)
+          return <li key={balance.product_id}><span className="inventory-balance-copy"><strong>{balance.product_name}</strong><small>Saldo {formatQuantity(Number(balance.quantity_on_hand))}{balance.minimum_stock === null ? '' : ` · mínimo ${formatQuantity(Number(balance.minimum_stock))}`}</small></span><span className="inventory-balance-value"><strong>{deficit === null ? '—' : formatQuantity(deficit)} <small>{balance.inventory_unit}</small></strong><span className="stock-state stock-state-low">{deficit === null ? 'Defina quanto repor' : 'Sugestão para repor'}</span></span></li>
         })}</ul>
         <div className="record-form-actions"><button className="button button-secondary" disabled={loading || saving} onClick={() => startReceipt(belowMinimum.map((balance) => balance.product_id))} type="button">Usar produtos na entrada de estoque</button></div>
       </section>}
@@ -769,15 +769,14 @@ export function InventoryPage() {
             const quantity = Number(balance.quantity_on_hand)
             const isNegative = quantity < 0
             const isZero = quantity === 0
-            const isBelow = balance.minimum_stock !== null && quantity < Number(balance.minimum_stock)
+            const isBelow = quantity <= 0 || (balance.minimum_stock !== null && quantity < Number(balance.minimum_stock))
             return <li key={balance.product_id}>
               <span className="inventory-balance-copy"><strong>{balance.product_name}</strong><small>Unidade: {balance.inventory_unit}{balance.minimum_stock !== null ? ' · Mínimo ' + formatQuantity(Number(balance.minimum_stock)) : ' · Sem limite mínimo'}</small></span>
               <span className="inventory-balance-value"><strong>{formatQuantity(quantity)} <small>{balance.inventory_unit}</small></strong><span className={'stock-state' + (isNegative ? ' stock-state-negative' : isZero ? ' stock-state-zero' : isBelow ? ' stock-state-low' : '')}>{isNegative ? 'Estoque negativo' : isZero ? 'Sem estoque' : isBelow ? 'Abaixo do mínimo' : 'Disponível'}</span></span>
             </li>
           })}
         </ul>}
-        {!loading && untrackedProducts.length > 0 && <div className="inventory-untracked"><p className="eyebrow">SEM CONTROLE DE ESTOQUE</p><p>{untrackedProducts.map((product) => product.name).join(' · ')}</p><Link className="quiet-link" to="/catalogo">Ativar estoque no catálogo →</Link></div>}
-        {!loading && products.some((product) => product.is_combo) && <p className="section-footnote inventory-combo-note">Combos não têm saldo próprio. A disponibilidade é formada pelos saldos dos produtos da composição.</p>}
+        {!loading && untrackedProducts.length > 0 && <div className="inventory-untracked"><p className="eyebrow">PRODUTOS AGUARDANDO CONTAGEM</p><p>{untrackedProducts.map((product) => product.name).join(' · ')}</p><Link className="quiet-link" to="/catalogo">Definir unidade e quantidade →</Link></div>}
       </section>
 
       <details className="surface-panel dashboard-trend-details inventory-history-details" aria-label="Histórico de movimentações">

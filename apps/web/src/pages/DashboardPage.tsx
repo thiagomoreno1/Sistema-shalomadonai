@@ -397,13 +397,13 @@ export function DashboardPage() {
     ...(priorities?.inventory.items.map((stockItem) => ({
       key: stockItem.product_id,
       dueOn: '9999-12-31',
-      severity: stockItem.quantity_on_hand < 0 ? 0 : 5,
+      severity: stockItem.quantity_on_hand < 0 ? 0 : stockItem.quantity_on_hand === 0 ? 1 : 5,
       category: 3,
       href: '/estoque',
       icon: 'box' as const,
       title: stockItem.product_name,
       detail: `${formatQuantity(stockItem.quantity_on_hand)} ${stockItem.inventory_unit} disponíveis`,
-      state: stockItem.quantity_on_hand < 0 ? 'Estoque negativo' : 'Abaixo do mínimo',
+      state: stockItem.quantity_on_hand < 0 ? 'Estoque negativo' : stockItem.quantity_on_hand === 0 ? 'Sem estoque' : 'Abaixo do mínimo',
     })) ?? []),
   ].sort((left, right) => left.severity - right.severity || left.dueOn.localeCompare(right.dueOn) || left.category - right.category)
   const visiblePriorityActions = priorityActionCandidates.slice(0, 3)
@@ -411,7 +411,7 @@ export function DashboardPage() {
   const visibleStockItems = priorities?.inventory.items.slice(0, 2) ?? []
   const additionalStockItems = priorities?.inventory.items.slice(2) ?? []
   const renderStockItem = (item: DashboardPriorities['inventory']['items'][number]) => <li key={item.product_id}>
-    <span><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.minimum_stock === null ? 'Defina um mínimo para receber alerta' : `Estoque mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
+    <span><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.quantity_on_hand === 0 ? 'Sem estoque' : item.minimum_stock === null ? 'Saldo abaixo do necessário' : `Mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
     <span className="dashboard-stock-quantity">{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span>
   </li>
   return (
@@ -560,7 +560,7 @@ export function DashboardPage() {
                   {priorities.inventory.items.map((item) => <li key={item.product_id}>
                     <Link to="/estoque">
                       <span className={`dashboard-action-symbol${item.quantity_on_hand < 0 ? ' is-overdue' : ''}`}><Icon name="box" /></span>
-                      <span className="dashboard-action-copy"><strong>{item.product_name}</strong><small>{item.minimum_stock === null ? 'Defina um mínimo para receber alerta' : `Mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
+                      <span className="dashboard-action-copy"><strong>{item.product_name}</strong><small>{item.quantity_on_hand < 0 ? 'Estoque negativo' : item.quantity_on_hand === 0 ? 'Sem estoque' : item.minimum_stock === null ? 'Saldo abaixo do necessário' : `Mínimo: ${formatQuantity(item.minimum_stock)} ${item.inventory_unit}`}</small></span>
                       <span className={`dashboard-row-state${item.quantity_on_hand < 0 ? ' is-overdue' : ''}`}>{formatQuantity(item.quantity_on_hand)} {item.inventory_unit}</span>
                       <Icon className="dashboard-row-arrow" name="arrow" />
                     </Link>
@@ -630,7 +630,7 @@ export function DashboardPage() {
           {prioritiesLoading && <p className="inline-state" aria-live="polite">Carregando saldos…</p>}
           {!prioritiesLoading && prioritiesError && <div className="small-empty-state"><p>As informações de estoque fazem parte da atualização geral do painel. Use “Tentar novamente” acima.</p></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count === 0 && <div className="small-empty-state"><p>Nenhum produto está configurado para controle de estoque.</p><Link className="quiet-link" to="/catalogo">Configurar produtos <Icon name="arrow" /></Link></div>}
-          {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count > 0 && priorities.inventory.attention_count === 0 && <div className="small-empty-state"><p>Nenhum saldo está negativo ou abaixo do mínimo definido.{priorities.inventory.without_minimum_count > 0 ? ` ${priorities.inventory.without_minimum_count} produto(s) ainda sem mínimo definido.` : ''}</p><Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link></div>}
+          {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.tracked_product_count > 0 && priorities.inventory.attention_count === 0 && <div className="small-empty-state"><p>Nenhum saldo está negativo ou abaixo do mínimo definido.{priorities.inventory.without_minimum_count > 0 ? ` ${priorities.inventory.without_minimum_count} produto(s) sem mínimo; saldo zero ou negativo sempre gera alerta.` : ''}</p><Link className="quiet-link" to="/estoque">Abrir estoque <Icon name="arrow" /></Link></div>}
           {!prioritiesLoading && !prioritiesError && priorities && priorities.inventory.attention_count > 0 && <>
             <ul className="dashboard-stock-list">{visibleStockItems.map(renderStockItem)}</ul>
             {additionalStockItems.length > 0 && <details className="dashboard-stock-details">
@@ -638,7 +638,7 @@ export function DashboardPage() {
               <ul className="dashboard-stock-list">{additionalStockItems.map(renderStockItem)}</ul>
               {priorities.inventory.attention_count > priorities.inventory.items.length && <p className="section-footnote">Mostrando {priorities.inventory.items.length} de {priorities.inventory.attention_count} produtos em atenção.</p>}
             </details>}
-            {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">{priorities.inventory.without_minimum_count} produto(s) sem mínimo configurado para alerta.</p>}
+            {priorities.inventory.without_minimum_count > 0 && <p className="section-footnote">{priorities.inventory.without_minimum_count} produto(s) sem mínimo; saldo zero ou negativo sempre gera alerta.</p>}
             <Link className="quiet-link" to="/estoque">Ver produtos em atenção <Icon name="arrow" /></Link>
           </>}
         </section>
