@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
+import { FinancialChartsPanel } from '../components/FinancialChartsPanel'
 import { Icon, type IconName } from '../components/Icon'
 import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
 import { useBusinessToday } from '../lib/useBusinessToday'
@@ -90,9 +91,10 @@ function ReadOnlyButton({ children }: { children: ReactNode }) {
   return <button className="demo-readonly-button" disabled type="button">{children}</button>
 }
 
-function FinanceTabs({ current }: { current: 'receivables' | 'outflows' }) {
+function FinanceTabs({ current }: { current: 'dashboard' | 'receivables' | 'outflows' }) {
   return <nav className="finance-subnav" aria-label="Seções financeiras">
-    <Link className={current === 'receivables' ? 'is-active' : ''} to="/financeiro">Pagamentos pendentes</Link>
+    <Link className={current === 'dashboard' ? 'is-active' : ''} to="/financeiro">Dashboard</Link>
+    <Link className={current === 'receivables' ? 'is-active' : ''} to="/financeiro/receber">Pagamentos a receber</Link>
     <Link className={current === 'outflows' ? 'is-active' : ''} to="/financeiro/saidas">Gastos pagos</Link>
   </nav>
 }
@@ -140,10 +142,7 @@ function CustomerDetail({ customerId, today }: { customerId: string; today: stri
   return <div className="page-stack demo-preview-page">
     <DemoHeading eyebrow="CLIENTE · CADASTRO DEMONSTRATIVO" title={customer.name} description={`${customer.kind} · cliente fictício desde agosto de 2026`} action={<Link className="quiet-link" to="/clientes"><Icon name="arrow" /> Voltar aos clientes</Link>} />
     <DemoMetrics className="demo-customer-metrics" items={[{ label: 'Pedidos feitos', value: orders.length ? String(orders.length) : '0', note: 'Compras registradas no exemplo', icon: 'bag' }, { label: 'Falta receber', value: customer.id === 'demo-customer-1' ? 'R$ 120,00' : customer.id === 'demo-customer-2' ? 'R$ 87,00' : 'R$ 198,00', note: 'Valor de pedidos ainda não pagos', icon: 'coin' }]} />
-    <div className="demo-two-column">
-      <DemoPanel title="Contato e entrega" subtitle="Informações de exemplo"><dl className="demo-detail-list"><div><dt>Contato principal</dt><dd>{customer.contact}</dd></div><div><dt>Telefone / WhatsApp</dt><dd>{customer.phone}</dd></div><div><dt>E-mail</dt><dd>{customer.email}</dd></div><div><dt>Endereço de entrega</dt><dd>{customer.address}</dd></div><div><dt>Preferência</dt><dd>WhatsApp em horário comercial</dd></div></dl></DemoPanel>
-      <DemoPanel title="Observação interna"><p className="demo-body-copy">Cliente recorrente. Costuma confirmar reposições e horários de entrega pelo WhatsApp.</p><DemoBadge tone="accent">Cadastro demonstrativo</DemoBadge></DemoPanel>
-    </div>
+    <DemoPanel title="Contato e entrega"><dl className="demo-detail-list"><div><dt>Contato principal</dt><dd>{customer.contact}</dd></div><div><dt>Telefone / WhatsApp</dt><dd>{customer.phone}</dd></div><div><dt>E-mail</dt><dd>{customer.email}</dd></div><div><dt>Endereço de entrega</dt><dd>{customer.address}</dd></div></dl></DemoPanel>
     <DemoPanel title="Pedidos recentes" subtitle="Histórico de compras de exemplo"><DemoTable caption={`Pedidos fictícios de ${customer.name}`} headings={['Pedido', 'Data', 'Entrega', 'Situação', 'Total']} rows={(orders.length ? orders : getOrders(today).slice(0, 2)).map((order) => [orderLink(order), dateLabel(order.createdOn), order.delivery, <DemoBadge tone={statusTone(order.status)}>{orderStatusLabel(order.status)}</DemoBadge>, brl(order.totalCents)])} /></DemoPanel>
     <DemoPanel title="Linha do tempo"><div className="demo-activity-list"><ActivityItem date={dateLabel(day(today, 0))} title="Contato de acompanhamento" detail="Retorno programado para confirmar o próximo pedido." icon="phone" /><ActivityItem date={dateLabel(day(today, -5))} title="Pedido concluído" detail="Entrega confirmada e pagamento registrado no exemplo." icon="check" /></div></DemoPanel>
   </div>
@@ -193,7 +192,7 @@ function OrdersPreview({ today, detailId, newOrder = false }: { today: string; d
     <div className="demo-callout"><Icon name="shield" /><p><strong>Somente visualização.</strong> Este formulário fictício não cria pedido nem altera estoque.</p></div>
     <DemoPanel title="Cliente e atendimento" subtitle="Exemplo de pedido"><div className="demo-form-grid"><label>Cliente<input disabled value={draftCustomer.name} /></label><label>Tipo de pedido<input disabled value="Entrega" /></label><label>Data prevista<input disabled value={dateLabel(today)} /></label><label>Responsável<input disabled value="Equipe de gestão" /></label></div></DemoPanel>
     <DemoPanel title="Itens do pedido" subtitle="Preço e quantidade registrados no exemplo"><DemoTable caption="Itens do pedido fictício" headings={['Produto', 'Quantidade', 'Preço unitário', 'Total']} rows={draftLines.map((line) => [line.name, line.quantity, brl(line.totalCents / Number.parseInt(line.quantity, 10)), brl(line.totalCents)])} /><div className="demo-total-row"><span>Total do pedido</span><strong>{brl(draftTotal)}</strong></div><p className="demo-footnote">O preço unitário fica registrado no pedido; alterações futuras no catálogo não mudam este registro.</p></DemoPanel>
-    <DemoPanel title="Pagamento e entrega" subtitle="Condições informadas no exemplo"><div className="demo-form-grid"><label>Forma de pagamento<input disabled value="Boleto" /></label><label>Prazo<input disabled value="1ª parcela · vencimento em 15 dias" /></label><label>Endereço<input disabled value={draftCustomer.address} /></label><label>Observações<input disabled value="Confirmar horário antes de sair para entrega." /></label></div></DemoPanel>
+    <DemoPanel title="Pagamento e entrega"><div className="demo-form-grid"><label>Forma de pagamento<input disabled value="Boleto" /></label><label>Prazo<input disabled value="1ª parcela · vencimento em 15 dias" /></label><label>Endereço<input disabled value={draftCustomer.address} /></label></div></DemoPanel>
   </div>
   }
   const order = detailId ? orders.find((item) => item.id === detailId) ?? orders[0] : null
@@ -276,6 +275,14 @@ function ReceivablesPreview({ today }: { today: string }) {
   </div>
 }
 
+function FinancialDashboardPreview() {
+  return <div className="page-stack demo-preview-page">
+    <DemoHeading eyebrow="FINANCEIRO" title="Dashboard" description="Faturamento, custos e gráficos do período." action={<Link className="button button-secondary" to="/relatorios/financeiro">Relatório financeiro</Link>} />
+    <FinanceTabs current="dashboard" />
+    <FinancialChartsPanel />
+  </div>
+}
+
 function OutflowsPreview({ today }: { today: string }) {
   const rows = [
     [dateLabel(day(today, 0)), 'Embalagens para pedidos', 'Materiais', 'Fornecedor Exemplo', 'R$ 486,00', <DemoBadge tone="success">Pago</DemoBadge>],
@@ -331,8 +338,9 @@ function DemoDefaultPage({ path }: { path: string }) {
   if (path === '/estoque') return <InventoryPreview today={today} />
   if (path === '/entregas') return <DeliveriesPreview today={today} />
   if (path === '/financeiro/saidas') return <OutflowsPreview today={today} />
-  if (path === '/financeiro') return <ReceivablesPreview today={today} />
-  if (path === '/relatorios') return <ReportsPreview today={today} />
+  if (path === '/financeiro/receber') return <ReceivablesPreview today={today} />
+  if (path === '/financeiro') return <FinancialDashboardPreview />
+  if (path === '/relatorios' || path === '/relatorios/financeiro') return <ReportsPreview today={today} />
   if (path === '/configuracoes') return <SettingsPreview today={today} />
   if (path === '/mais') return <MorePreview today={today} />
   return <CustomerList today={today} />

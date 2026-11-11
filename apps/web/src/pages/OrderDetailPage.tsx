@@ -14,7 +14,6 @@ type Order = {
   delivery_fee_cents: number
   discount_cents: number
   total_cents: number
-  notes: string | null
   status: 'open' | 'cancelled'
   requires_delivery: boolean
   cancellation_reason: string | null
@@ -44,7 +43,6 @@ type Payment = {
   amount_cents: number
   received_at: string
   payment_method: string | null
-  notes: string | null
 }
 type PaymentAllocation = { id: string; payment_id: string; installment_id: string; amount_cents: number }
 type PickupWarning = { product_id: string; product_name: string; inventory_unit: string; quantity_on_hand: number }
@@ -105,7 +103,6 @@ export function OrderDetailPage() {
   const [paymentAmount, setPaymentAmount] = useState('')
   const [receivedAt, setReceivedAt] = useState('')
   const [paymentMethod, setPaymentMethod] = useState('')
-  const [paymentNotes, setPaymentNotes] = useState('')
   const [allocationDraft, setAllocationDraft] = useState<Record<string, string>>({})
   const [paymentSaving, setPaymentSaving] = useState(false)
   const [paymentUncertain, setPaymentUncertain] = useState(false)
@@ -143,7 +140,7 @@ export function OrderDetailPage() {
     let orderExists = false
     try {
       const orderResult = await supabaseClient.from('orders')
-        .select('id, customer_id, customer_name_snapshot, delivery_address_snapshot, subtotal_cents, delivery_fee_cents, discount_cents, total_cents, notes, status, cancellation_reason, created_at, cancelled_at, requires_delivery')
+        .select('id, customer_id, customer_name_snapshot, delivery_address_snapshot, subtotal_cents, delivery_fee_cents, discount_cents, total_cents, status, cancellation_reason, created_at, cancelled_at, requires_delivery')
         .eq('business_id', businessId).eq('id', orderId).maybeSingle()
       if (orderResult.error || !orderResult.data) {
         setError(locationState?.successMessage
@@ -161,7 +158,7 @@ export function OrderDetailPage() {
           .select('id, installment_number, amount_cents, due_on, payment_method')
           .eq('business_id', businessId).eq('order_id', orderId).order('installment_number', { ascending: true }),
         supabaseClient.from('order_payments')
-          .select('id, amount_cents, received_at, payment_method, notes')
+          .select('id, amount_cents, received_at, payment_method')
           .eq('business_id', businessId).eq('order_id', orderId).order('received_at', { ascending: false }),
         supabaseClient.from('order_events')
           .select('id, event_type, reason, stock_warnings, occurred_at')
@@ -284,7 +281,6 @@ export function OrderDetailPage() {
     setPaymentAmount('')
     setReceivedAt('')
     setPaymentMethod('')
-    setPaymentNotes('')
     setAllocationDraft(Object.fromEntries(installments.map((installment) => [installment.id, ''])))
     setPaymentError(null)
     setPaymentUncertain(false)
@@ -443,8 +439,8 @@ export function OrderDetailPage() {
       setPaymentError('Informe um valor recebido positivo, com até duas casas decimais.')
       return
     }
-    if (paymentMethod.trim().length > 64 || paymentNotes.trim().length > 1000) {
-      setPaymentError('Confira o tamanho da forma informada ou das observações.')
+    if (paymentMethod.trim().length > 64) {
+      setPaymentError('Confira a forma de pagamento informada.')
       return
     }
     if (selectedAllocations.length === 0 || selectedAllocationTotal !== parsedPaymentAmount) {
@@ -477,7 +473,7 @@ export function OrderDetailPage() {
         p_amount_cents: parsedPaymentAmount,
         p_received_at: receivedAtIso,
         p_payment_method: paymentMethod.trim() || null,
-        p_notes: paymentNotes.trim() || null,
+        p_notes: null,
         p_allocations: selectedAllocations,
         p_request_id: paymentRequestIdRef.current,
       })
@@ -620,12 +616,11 @@ export function OrderDetailPage() {
       {showPaymentForm && order.status === 'open' && (
         <form className="surface-panel record-form" onSubmit={handlePaymentSubmit}>
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">RECEBIMENTO MANUAL</p><h2>Registrar valor recebido</h2></div><button className="text-button" disabled={paymentSaving || paymentUncertain} onClick={closePaymentForm} type="button">Fechar</button></div>
-          <p className="section-footnote order-payment-hint">Este registro anota um recebimento informado por você. Não processa o pagamento. A sugestão abaixo é editável e não salva nada até você confirmar o recebimento.</p>
+          <p className="section-footnote order-payment-hint">Registre o valor que você recebeu. O sistema não processa o pagamento.</p>
           <div className="record-form-grid">
             <label className="record-field"><span className="field-label">Valor recebido <span aria-hidden="true">*</span></span><input className="text-input" disabled={paymentSaving || paymentUncertain} inputMode="decimal" onChange={(event) => setPaymentAmount(event.target.value)} placeholder="0,00" ref={paymentAmountInputRef} value={paymentAmount} /></label>
             <label className="record-field"><span className="field-label">Recebido em <span className="field-optional">Horário de Brasília; em branco = agora</span></span><input className="text-input" disabled={paymentSaving || paymentUncertain} onChange={(event) => setReceivedAt(event.target.value)} type="datetime-local" value={receivedAt} /></label>
             <label className="record-field"><span className="field-label">Forma informada <span className="field-optional">texto opcional</span></span><input className="text-input" disabled={paymentSaving || paymentUncertain} maxLength={64} onChange={(event) => setPaymentMethod(event.target.value)} placeholder="Ex.: Pix, dinheiro, transferência" value={paymentMethod} /></label>
-            <label className="record-field"><span className="field-label">Observações <span className="field-optional">opcional</span></span><input className="text-input" disabled={paymentSaving || paymentUncertain} maxLength={1000} onChange={(event) => setPaymentNotes(event.target.value)} value={paymentNotes} /></label>
           </div>
           <div className="order-allocation-panel">
             <div className="section-heading section-heading-compact"><div><p className="eyebrow">DESTINAÇÃO DO RECEBIMENTO</p><h3>Como o valor se distribui</h3></div><span className="neutral-status">{formatBRL(selectedAllocationTotal)}</span></div>
@@ -680,7 +675,7 @@ export function OrderDetailPage() {
       {order.requires_delivery && <section className="surface-panel record-panel order-delivery-panel" aria-labelledby="order-delivery-heading">
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">LOGÍSTICA</p><h2 id="order-delivery-heading">Entrega vinculada</h2></div>{delivery && <span className="delivery-status">{delivery.canceled_at ? 'Cancelada com o pedido' : deliveryStatusLabels[delivery.status]}</span>}</div>
         {!delivery ? <p className="form-message form-message-warning" role="status">Este pedido foi marcado para entrega, mas não há registro de entrega carregado. Atualize o histórico antes de continuar.</p> : <>
-          <dl className="customer-facts order-address-facts"><div><dt>Endereço</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div><div><dt>Entregador</dt><dd>{deliveryWorkerName || 'Sem atribuição'}</dd></div><div><dt>Agendamento</dt><dd>{delivery.scheduled_on ? formatBusinessDate(delivery.scheduled_on) + (delivery.time_window ? ' · ' + delivery.time_window : '') : 'Sem data ou horário definido'}</dd></div><div><dt>Observações da entrega</dt><dd>{delivery.notes || 'Nenhuma observação'}</dd></div></dl>
+          <dl className="customer-facts order-address-facts"><div><dt>Endereço</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div><div><dt>Entregador</dt><dd>{deliveryWorkerName || 'Sem atribuição'}</dd></div><div><dt>Agendamento</dt><dd>{delivery.scheduled_on ? formatBusinessDate(delivery.scheduled_on) + (delivery.time_window ? ' · ' + delivery.time_window : '') : 'Sem data ou horário definido'}</dd></div><div><dt>Instruções para entrega</dt><dd>{delivery.notes || 'Nenhuma'}</dd></div></dl>
           <div className="record-form-actions"><Link className="button button-secondary" to="/entregas">Abrir fila de entregas</Link>{delivery.dispatched_at && <span className="section-footnote">Despachado em {formatOrderTimestamp(delivery.dispatched_at, true)}</span>}{delivery.delivered_at && <span className="section-footnote">Concluído em {formatOrderTimestamp(delivery.delivered_at, true)}</span>}</div>
           {deliveryEvents.length > 0 && <ul className="timeline-list order-delivery-history">{deliveryEvents.map((event) => <li key={event.id}><span className="timeline-dot" /><div><strong>{event.event_type === 'created' ? 'Entrega criada' : event.event_type === 'plan_updated' ? 'Horário ou entregador atualizado' : (event.from_status ? deliveryStatusLabels[event.from_status] + ' → ' : '') + deliveryStatusLabels[event.to_status]}</strong><p>{formatOrderTimestamp(event.occurred_at, true)}</p>{event.note && <p>{event.note}</p>}{event.next_step && <p>Próximo passo: {event.next_step}</p>}{event.stock_warnings.length > 0 && <p className="delivery-stock-warning">Estoque abaixo de zero após o despacho: {event.stock_warnings.map((warning) => warning.product_name + ' (' + formatQuantity(warning.quantity_on_hand) + ' ' + warning.inventory_unit + ')').join(' · ')}.</p>}</div></li>)}</ul>}
         </>}
@@ -705,7 +700,7 @@ export function OrderDetailPage() {
             <div><dt>Desconto</dt><dd>− {formatBRL(order.discount_cents)}</dd></div>
             <div className="order-total-grand"><dt>Total</dt><dd>{formatBRL(order.total_cents)}</dd></div>
           </dl>
-          <dl className="customer-facts order-address-facts"><div><dt>Cliente</dt><dd><Link to={`/clientes/${order.customer_id}`}>{order.customer_name_snapshot}</Link></dd></div><div><dt>Endereço deste pedido</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div><div><dt>Observações</dt><dd>{order.notes || 'Nenhuma observação'}</dd></div></dl>
+          <dl className="customer-facts order-address-facts"><div><dt>Cliente</dt><dd><Link to={`/clientes/${order.customer_id}`}>{order.customer_name_snapshot}</Link></dd></div><div><dt>Endereço deste pedido</dt><dd>{order.delivery_address_snapshot || 'Não informado'}</dd></div></dl>
         </section>
 
         <section className="surface-panel record-panel" aria-labelledby="order-installments-detail-heading">
@@ -732,7 +727,7 @@ export function OrderDetailPage() {
             const paymentAllocations = allocations.filter((allocation) => allocation.payment_id === payment.id)
             return <li key={payment.id}><span className="timeline-dot" /><div>
               <strong>{formatBRL(payment.amount_cents)} · {formatOrderTimestamp(payment.received_at, true)}</strong>
-              <p>{payment.payment_method || 'Forma não informada'}{payment.notes ? ` · ${payment.notes}` : ''}</p>
+              <p>{payment.payment_method || 'Forma não informada'}</p>
               <p>Destinado: {paymentAllocations.map((allocation) => {
                 const installment = installments.find((candidate) => candidate.id === allocation.installment_id)
                 return `${installment ? `vencimento ${installment.installment_number}` : 'vencimento'} ${formatBRL(allocation.amount_cents)}`

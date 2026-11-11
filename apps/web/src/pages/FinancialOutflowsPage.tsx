@@ -16,12 +16,9 @@ type Outflow = {
   business_id: string
   outflow_type: OutflowType
   description: string
-  category: string | null
-  counterparty_name: string | null
   amount_cents: number | string
   paid_on: string
   order_id: string | null
-  notes: string | null
   created_at: string
 }
 type InventoryReceipt = {
@@ -129,7 +126,6 @@ export function FinancialOutflowsPage() {
   const [showExpenseScheduleForm, setShowExpenseScheduleForm] = useState(false)
   const [editingExpenseSchedule, setEditingExpenseSchedule] = useState<RecurringOperationTemplate | null>(null)
   const [expenseScheduleDescription, setExpenseScheduleDescription] = useState('')
-  const [expenseScheduleCategory, setExpenseScheduleCategory] = useState('')
   const [expenseScheduleAmount, setExpenseScheduleAmount] = useState('')
   const [expenseScheduleDay, setExpenseScheduleDay] = useState(String(Number(today.slice(8, 10))))
   const [expenseScheduleStartsOn, setExpenseScheduleStartsOn] = useState(today)
@@ -152,8 +148,6 @@ export function FinancialOutflowsPage() {
 
   const [outflowType, setOutflowType] = useState<OutflowType | ''>('')
   const [description, setDescription] = useState('')
-  const [category, setCategory] = useState('')
-  const [counterpartyName, setCounterpartyName] = useState('')
   const [amount, setAmount] = useState('')
   const [paidOnOverride, setPaidOnOverride] = useState<string | null>(null)
   const paidOn = paidOnOverride ?? today
@@ -169,9 +163,8 @@ export function FinancialOutflowsPage() {
   const [receiptError, setReceiptError] = useState<string | null>(null)
   const [selectedReceiptIds, setSelectedReceiptIds] = useState<string[]>([])
   const [receiptPrefillStatus, setReceiptPrefillStatus] = useState<ReceiptPrefillStatus | null>(null)
-  const [notes, setNotes] = useState('')
   const receiptPrefillBlocked = receiptPrefillStatus?.state === 'loading' || receiptPrefillStatus?.state === 'error'
-  const salaryExpenseDraft = outflowType === 'operating_expense' && /sal[aá]rios?|folha/i.test(`${description} ${category}`)
+  const salaryExpenseDraft = outflowType === 'operating_expense' && /sal[aá]rios?|folha/i.test(description)
 
   const requestIdRef = useRef(newRequestId())
   const historyRequestRef = useRef(0)
@@ -219,7 +212,7 @@ export function FinancialOutflowsPage() {
     try {
       const from = page * PAGE_SIZE
       const { data, error, count } = await client.from('financial_outflows')
-        .select('id, business_id, outflow_type, description, category, counterparty_name, amount_cents, paid_on, order_id, notes, created_at', { count: 'exact' })
+        .select('id, business_id, outflow_type, description, amount_cents, paid_on, order_id, created_at', { count: 'exact' })
         .eq('business_id', businessId)
         .order('paid_on', { ascending: false })
         .order('created_at', { ascending: false })
@@ -457,12 +450,9 @@ export function FinancialOutflowsPage() {
     setFormError(null)
     setOutflowType('purchase')
     setDescription('')
-    setCategory('')
-    setCounterpartyName('')
     setAmount('')
     setPaidOnOverride(null)
     setSelectedReceiptIds([])
-    setNotes('')
     setReceiptPrefillStatus({ receiptId: receiptIdFromUrl, state: 'loading', message: 'Carregando o recebimento para vincular ao pagamento…' })
 
     const setPrefillError = (message: string) => setReceiptPrefillStatus({ receiptId: receiptIdFromUrl, state: 'error', message })
@@ -528,7 +518,6 @@ export function FinancialOutflowsPage() {
         setReceiptOptions((current) => [receipt, ...current.filter((row) => row.id !== receipt.id)])
         setSelectedReceiptIds([receipt.id])
         setOutflowType('purchase')
-        setCounterpartyName(receipt.supplier_name ?? '')
         setDescription(receipt.purchase_reference
           ? `Compra de estoque · ${receipt.purchase_reference}`.slice(0, 200)
           : 'Compra de estoque')
@@ -576,8 +565,6 @@ export function FinancialOutflowsPage() {
     setReceiptPrefillStatus(null)
     setOutflowType('')
     setDescription('')
-    setCategory('')
-    setCounterpartyName('')
     setAmount('')
     setPaidOnOverride(null)
     setOrderSearch('')
@@ -585,7 +572,6 @@ export function FinancialOutflowsPage() {
     setOrderOptions([])
     setOrdersError(null)
     setSelectedReceiptIds([])
-    setNotes('')
     setFormError(null)
     setUncertain(false)
     setSelectedExpenseScheduleId(null)
@@ -594,7 +580,6 @@ export function FinancialOutflowsPage() {
   function openExpenseScheduleForm(template?: RecurringOperationTemplate) {
     setEditingExpenseSchedule(template ?? null)
     setExpenseScheduleDescription(template?.description ?? template?.name ?? '')
-    setExpenseScheduleCategory(template?.category ?? '')
     setExpenseScheduleAmount(template?.amount_cents === null || template?.amount_cents === undefined ? '' : centsToBrazilianInput(BigInt(template.amount_cents)))
     setExpenseScheduleDay(String(template?.day_of_month ?? Number(today.slice(8, 10))))
     setExpenseScheduleStartsOn(template?.starts_on ?? today)
@@ -606,10 +591,9 @@ export function FinancialOutflowsPage() {
     event.preventDefault()
     if (!supabaseClient || expenseScheduleSaving) return
     const name = expenseScheduleDescription.trim()
-    const categoryValue = expenseScheduleCategory.trim()
     const amountCents = parseBrazilianCurrency(expenseScheduleAmount)
     const day = Number(expenseScheduleDay)
-    if (!name || name.length > 200 || categoryValue.length > 120
+    if (!name || name.length > 200
       || amountCents === null || !Number.isSafeInteger(amountCents) || amountCents <= 0
       || !Number.isInteger(day) || day < 1 || day > 31
       || !isCalendarDate(expenseScheduleStartsOn)) {
@@ -627,7 +611,7 @@ export function FinancialOutflowsPage() {
     const templateValues = {
       name,
       description: name,
-      category: categoryValue || null,
+      category: editingExpenseSchedule?.category ?? null,
       product_id: null,
       quantity: null,
       expected_unit_cost_cents: null,
@@ -691,7 +675,6 @@ export function FinancialOutflowsPage() {
     setNotice(null)
     setOutflowType('operating_expense')
     setDescription(template.description ?? template.name)
-    setCategory(template.category ?? '')
     setAmount(template.amount_cents === null ? '' : centsToBrazilianInput(BigInt(template.amount_cents)))
     setPaidOnOverride(null)
     setSelectedExpenseScheduleId(template.id)
@@ -759,17 +742,10 @@ export function FinancialOutflowsPage() {
       return
     }
     const trimmedDescription = description.trim()
-    const trimmedCategory = category.trim()
-    const trimmedCounterparty = counterpartyName.trim()
-    const trimmedNotes = notes.trim()
     const amountCents = parseBrazilianCurrency(amount)
 
     if (trimmedDescription.length < 1 || trimmedDescription.length > 200) {
       setFormError('Informe uma descrição com até 200 caracteres.')
-      return
-    }
-    if (trimmedCategory.length > 120 || trimmedCounterparty.length > 160 || trimmedNotes.length > 2000) {
-      setFormError('Confira o tamanho da categoria, contraparte ou observação.')
       return
     }
     if (amountCents === null || Number.isNaN(amountCents) || amountCents <= 0) {
@@ -796,12 +772,12 @@ export function FinancialOutflowsPage() {
         p_business_id: businessId,
         p_outflow_type: outflowType,
         p_description: trimmedDescription,
-        p_category: trimmedCategory || null,
-        p_counterparty_name: trimmedCounterparty || null,
+        p_category: null,
+        p_counterparty_name: null,
         p_amount_cents: amountCents,
         p_paid_on: paidOn,
         p_order_id: outflowType === 'delivery_cost' ? selectedOrder?.id ?? null : null,
-        p_notes: trimmedNotes || null,
+        p_notes: null,
         p_inventory_receipt_ids: outflowType === 'purchase' ? selectedReceiptIds : [],
         p_request_id: requestIdRef.current,
       })
@@ -864,14 +840,11 @@ export function FinancialOutflowsPage() {
   function applyRecentOutflowSuggestion(outflow: OutflowView) {
     setOutflowType(outflow.outflow_type)
     setDescription(outflow.description)
-    setCategory(outflow.category ?? '')
-    setCounterpartyName(outflow.counterparty_name ?? '')
     setAmount('')
     setPaidOnOverride(null)
     setSelectedOrder(null)
     setOrderSearch('')
     setSelectedReceiptIds([])
-    setNotes('')
     setFormError(null)
     setReceiptPrefillStatus(null)
     prefilledReceiptRef.current = null
@@ -945,7 +918,7 @@ export function FinancialOutflowsPage() {
   const recentOutflowSuggestions = Array.from(new Map<string, OutflowView>(outflows
     .filter((outflow) => !outflow.void_event)
     .map((outflow): [string, OutflowView] => [
-      `${outflow.outflow_type}|${outflow.description}|${outflow.category ?? ''}|${outflow.counterparty_name ?? ''}`,
+      `${outflow.outflow_type}|${outflow.description}`,
       outflow,
     ])).values()).slice(0, 4)
   const dueExpenseSchedules = expenseSchedules.filter((template) => template.is_active && template.next_due_on <= today)
@@ -957,7 +930,6 @@ export function FinancialOutflowsPage() {
         <div>
           <p className="eyebrow">FINANCEIRO · GASTOS PAGOS</p>
           <h1>Gastos pagos</h1>
-          <p className="page-description">Opcional: registre compras, gastos da empresa e pagamentos de entrega se quiser incluí-los nos relatórios.</p>
         </div>
         <div className="record-heading-actions"><button className="button button-secondary" disabled={Boolean(voidTarget) || showForm} onClick={() => openExpenseScheduleForm()} type="button">Agendar despesa</button><button className="button button-primary" disabled={Boolean(voidTarget) || showExpenseScheduleForm} onClick={() => { resetForm(); setNotice(null); setVoidNotice(null); setShowForm(true) }} ref={formTriggerRef} type="button">Registrar gasto pago</button></div>
       </header>
@@ -969,11 +941,10 @@ export function FinancialOutflowsPage() {
 
       {showExpenseScheduleForm && <form className="surface-panel record-form" onSubmit={(event) => void saveExpenseSchedule(event)}>
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">LEMBRETE OPCIONAL</p><h2>{editingExpenseSchedule ? 'Editar despesa mensal' : 'Agendar despesa mensal'}</h2></div><button className="text-button" disabled={expenseScheduleSaving} onClick={() => { setShowExpenseScheduleForm(false); setEditingExpenseSchedule(null) }} type="button">Fechar</button></div>
-        <p className="section-footnote">O lembrete não registra nem paga a conta sozinho. No vencimento, use “Registrar como pago” somente depois de pagar a despesa.</p>
+        <p className="section-footnote">O lembrete não paga a conta automaticamente.</p>
         <div className="record-form-grid">
           <label className="record-field"><span className="field-label">Despesa</span><input className="text-input" disabled={expenseScheduleSaving} maxLength={200} onChange={(event) => setExpenseScheduleDescription(event.target.value)} placeholder="Ex.: Conta de luz" required value={expenseScheduleDescription} /></label>
           <label className="record-field"><span className="field-label">Valor previsto · R$</span><input className="text-input" disabled={expenseScheduleSaving} inputMode="decimal" onChange={(event) => setExpenseScheduleAmount(event.target.value)} placeholder="Ex.: 180,00" required value={expenseScheduleAmount} /></label>
-          <label className="record-field"><span className="field-label">Categoria <span className="field-optional">opcional</span></span><input className="text-input" disabled={expenseScheduleSaving} maxLength={120} onChange={(event) => setExpenseScheduleCategory(event.target.value)} value={expenseScheduleCategory} /></label>
           <label className="record-field"><span className="field-label">Dia do mês</span><input className="text-input" disabled={expenseScheduleSaving} inputMode="numeric" max="31" min="1" onChange={(event) => setExpenseScheduleDay(event.target.value)} required type="number" value={expenseScheduleDay} /><small className="field-optional">{expenseScheduleDay ? formatRecurringDay(Number(expenseScheduleDay)) : 'Escolha de 1 a 31'}; em meses curtos, usa o último dia.</small></label>
           <label className="record-field"><span className="field-label">Começar em</span><input className="text-input" disabled={expenseScheduleSaving} onChange={(event) => setExpenseScheduleStartsOn(event.target.value)} required type="date" value={expenseScheduleStartsOn} /></label>
         </div>
@@ -983,11 +954,11 @@ export function FinancialOutflowsPage() {
 
       {expenseSchedules.length > 0 && <details className="surface-panel dashboard-trend-details" open={dueExpenseSchedules.length > 0}>
         <summary>Despesas programadas <span>{dueExpenseSchedules.length ? dueExpenseSchedules.length + ' para conferir' : expenseSchedules.filter((template) => template.is_active).length + ' ativas'}{expenseSchedules.some((template) => !template.is_active) ? ` · ${expenseSchedules.filter((template) => !template.is_active).length} pausadas` : ''}</span></summary>
-        <div className="inventory-history-content"><p className="section-footnote">Marcar como pago cria o lançamento financeiro; este lembrete nunca paga a conta automaticamente.</p>
+        <div className="inventory-history-content">
           <ul className="inventory-balance-list">{expenseSchedules.map((template) => {
             const due = template.is_active && template.next_due_on <= today
             const amountText = template.amount_cents === null ? '' : formatBRLExact(String(template.amount_cents))
-            return <li key={template.id}><span className="inventory-balance-copy"><strong>{template.name}{!template.is_active && ' · Pausada'}</strong><small>{formatRecurringDay(template.day_of_month)} · próxima: {formatBusinessDate(template.next_due_on)} · previsto {amountText}{template.category ? ' · ' + template.category : ''}</small></span><span className="record-form-actions">{template.is_active ? <><button className="button button-secondary" disabled={Boolean(expenseScheduleBusyId)} onClick={() => startScheduledExpense(template)} type="button">{due ? 'Registrar como pago' : 'Registrar pagamento'}</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => openExpenseScheduleForm(template)} type="button">Editar</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void pauseExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Pausando…' : 'Pausar'}</button></> : <button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void resumeExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Reativando…' : 'Reativar'}</button>}</span></li>
+            return <li key={template.id}><span className="inventory-balance-copy"><strong>{template.name}{!template.is_active && ' · Pausada'}</strong><small>{formatRecurringDay(template.day_of_month)} · próxima: {formatBusinessDate(template.next_due_on)} · previsto {amountText}</small></span><span className="record-form-actions">{template.is_active ? <><button className="button button-secondary" disabled={Boolean(expenseScheduleBusyId)} onClick={() => startScheduledExpense(template)} type="button">{due ? 'Registrar como pago' : 'Registrar pagamento'}</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => openExpenseScheduleForm(template)} type="button">Editar</button><button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void pauseExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Pausando…' : 'Pausar'}</button></> : <button className="text-button" disabled={Boolean(expenseScheduleBusyId)} onClick={() => void resumeExpenseSchedule(template)} type="button">{expenseScheduleBusyId === template.id ? 'Reativando…' : 'Reativar'}</button>}</span></li>
           })}</ul>
         </div>
       </details>}
@@ -998,19 +969,17 @@ export function FinancialOutflowsPage() {
             <div><p className="eyebrow">LANÇAMENTOS</p><h2 ref={formHeadingRef} tabIndex={-1}>Registrar gasto já pago</h2></div>
             <button className="text-button" disabled={saving || uncertain} onClick={() => { setShowForm(false); clearReceiptPrefillFromUrl(); prefilledReceiptRef.current = null; setReceiptPrefillStatus(null) }} type="button">Fechar</button>
           </div>
-          <p className="section-footnote">Cada registro representa um valor que você já pagou. Esta tela não acompanha contas que ainda não foram pagas.</p>
           {receiptPrefillStatus && <div className={`form-message ${receiptPrefillStatus.state === 'error' ? 'form-message-warning' : receiptPrefillStatus.state === 'ready' ? 'form-message-success' : ''}`} role={receiptPrefillStatus.state === 'error' ? 'alert' : 'status'}>
             <p>{receiptPrefillStatus.message}</p>
             {receiptPrefillStatus.state === 'error' && <button className="text-button" disabled={saving} onClick={continueWithoutReceiptLink} type="button">Continuar sem vincular recebimento</button>}
           </div>}
           {!receiptPrefillStatus && recentOutflowSuggestions.length > 0 && <div className="record-field record-field-wide">
-            <span className="field-label">Atalhos de gastos recentes <span className="field-optional">preenche descrição, categoria e favorecido</span></span>
+            <span className="field-label">Gastos recentes</span>
             <div className="record-form-actions">
               {recentOutflowSuggestions.map((outflow) => <button className="button button-secondary" key={`${outflow.id}-${outflow.description}`} onClick={() => applyRecentOutflowSuggestion(outflow)} type="button">
-                {outflowTypeLabel(outflow.outflow_type)} · {outflow.description}{outflow.counterparty_name ? ` · ${outflow.counterparty_name}` : ''}
+                {outflow.description}
               </button>)}
             </div>
-            <small className="field-optional">O valor fica em branco e a data volta para hoje. Confira antes de salvar.</small>
           </div>}
 
           <div className="record-form-grid">
@@ -1018,36 +987,24 @@ export function FinancialOutflowsPage() {
               <span className="field-label">Tipo de gasto <span aria-hidden="true">*</span></span>
               <select className="text-input" disabled={saving || uncertain || receiptPrefillBlocked || receiptPrefillStatus?.state === 'ready' || Boolean(selectedExpenseScheduleId)} onChange={(event) => changeOutflowType(event.target.value as OutflowType | '')} required value={outflowType}>
                 <option value="">Selecione o tipo de gasto</option>
-                <option value="purchase">Compra de produtos para revenda</option>
-                <option value="operating_expense">Gasto da empresa</option>
-                <option value="delivery_cost">Pagamento de entrega</option>
+              <option value="purchase">Compra de estoque</option>
+              <option value="operating_expense">Despesa da empresa</option>
+              <option value="delivery_cost">Custo de entrega</option>
               </select>
-              {outflowType === 'purchase' && <small className="field-optional">Use quando comprar produtos que serão revendidos. Esse valor entra no lucro quando o produto é vendido.</small>}
-              {outflowType === 'operating_expense' && <small className="field-optional">Use para contas da empresa, materiais e compras que não serão revendidos.</small>}
-              {outflowType === 'delivery_cost' && <small className="field-optional">Informe quanto você pagou ao entregador. Esse valor pode ser diferente da taxa cobrada do cliente.</small>}
             </label>
             <label className="record-field">
               <span className="field-label">Valor pago (R$) <span aria-hidden="true">*</span></span>
               <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} inputMode="decimal" onChange={(event) => setAmount(event.target.value)} placeholder="0,00" ref={amountInputRef} required value={amount} />
             </label>
             <label className="record-field">
-              <span className="field-label">Descrição <span aria-hidden="true">*</span></span>
+              <span className="field-label">Nome do gasto <span aria-hidden="true">*</span></span>
               <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={200} onChange={(event) => setDescription(event.target.value)} required value={description} />
-            </label>
-            <label className="record-field">
-              <span className="field-label">Categoria <span className="field-optional">opcional, texto livre</span></span>
-              <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={120} onChange={(event) => setCategory(event.target.value)} value={category} />
-            </label>
-            {salaryExpenseDraft && <p className="form-message form-message-warning record-field-wide" role="status">Se o salário está cadastrado na equipe, registre o pagamento em <Link className="quiet-link" to="/equipe#pagamentos-equipe">Equipe · Salários a pagar</Link> para evitar lançar a mesma competência duas vezes.</p>}
-            <label className="record-field">
-              <span className="field-label">{outflowType === 'purchase' ? 'Fornecedor' : outflowType === 'delivery_cost' ? 'Entregador / prestador' : 'Favorecido'} <span className="field-optional">opcional</span></span>
-              <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={160} onChange={(event) => setCounterpartyName(event.target.value)} value={counterpartyName} />
             </label>
             <label className="record-field">
               <span className="field-label">Pago em <span aria-hidden="true">*</span></span>
               <input className="text-input" disabled={saving || uncertain || receiptPrefillBlocked} max={today} onChange={(event) => setPaidOnOverride(event.target.value)} required type="date" value={paidOn} />
             </label>
-
+            {salaryExpenseDraft && <p className="form-message form-message-warning record-field-wide" role="status">Se o salário está cadastrado na equipe, registre o pagamento em <Link className="quiet-link" to="/equipe#pagamentos-equipe">Equipe · Salários a pagar</Link> para evitar lançar a mesma competência duas vezes.</p>}
             {outflowType === 'purchase' && <div className="record-field record-field-wide">
               <span className="field-label">Recebimentos de estoque vinculados <span className="field-optional">opcional</span></span>
               <p className="section-footnote">Este gasto ficará ligado ao recebimento para consulta. O saldo de estoque já foi atualizado quando a mercadoria foi recebida.</p>
@@ -1090,10 +1047,6 @@ export function FinancialOutflowsPage() {
               <p className="section-footnote">Informe o custo pago manualmente. Ele não é calculado pela taxa cobrada do cliente.</p>
             </div>}
 
-            <label className="record-field record-field-wide">
-              <span className="field-label">Observações <span className="field-optional">opcional</span></span>
-              <textarea className="text-input record-textarea" disabled={saving || uncertain || receiptPrefillBlocked} maxLength={2000} onChange={(event) => setNotes(event.target.value)} rows={2} value={notes} />
-            </label>
           </div>
 
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
@@ -1131,14 +1084,12 @@ export function FinancialOutflowsPage() {
         {!historyLoading && !historyError && outflows.length > 0 && <>
           <div aria-label="Pagamentos informados" className="report-table-wrap" role="region" tabIndex={0}>
             <table className="report-table">
-              <thead><tr><th>Pago em</th><th>Tipo</th><th>Descrição</th><th>Categoria</th><th>Quem recebeu</th><th>Valor pago</th><th>Referências</th><th>Situação / ação</th></tr></thead>
+              <thead><tr><th>Pago em</th><th>Tipo</th><th>Gasto</th><th>Valor pago</th><th>Referências</th><th>Situação / ação</th></tr></thead>
               <tbody>{outflows.map((outflow) => (
                 <tr key={outflow.id}>
                   <td>{formatBusinessDate(outflow.paid_on)}</td>
                   <td>{outflowTypeLabel(outflow.outflow_type)}</td>
-                  <td>{outflow.description}{outflow.notes && <small className="section-footnote">{outflow.notes}</small>}</td>
-                  <td>{outflow.category || '—'}</td>
-                  <td>{outflow.counterparty_name || '—'}</td>
+                  <td>{outflow.description}</td>
                   <td>{formatAmount(outflow.amount_cents)}</td>
                   <td>
                     {outflow.order_id && <p><Link className="report-order-link" to={`/pedidos/${outflow.order_id}`}>{outflow.order_name || `Pedido ${outflow.order_id.slice(0, 8)}`}</Link></p>}

@@ -35,7 +35,6 @@ type NewOrderDraft = {
   deliveryAddress: string
   deliveryFee: string
   discount: string
-  notes: string
   items: ItemDraft[]
   installments: InstallmentDraft[]
   paymentPlanMode: PaymentPlanMode
@@ -63,7 +62,7 @@ function writeNewOrderDraft(storageKey: string, draft: NewOrderDraft) {
 
 function hasOrderDraftContent(draft: NewOrderDraft) {
   return Boolean(draft.submissionPending || draft.customerId || draft.selectedAddressId || draft.requiresDelivery || draft.deliveryWorkerId
-    || draft.deliveryAddress.trim() || draft.deliveryFee.trim() || draft.discount.trim() || draft.notes.trim()
+    || draft.deliveryAddress.trim() || draft.deliveryFee.trim() || draft.discount.trim()
     || draft.selectedScheduleTemplateId || draft.newTemplateName.trim()
     || draft.items.some((item) => item.productId || item.quantity !== '1' || item.components?.length)
     || draft.installments.some((installment) => installment.amount.trim() || installment.dueOn || installment.paymentMethod.trim()))
@@ -86,7 +85,7 @@ function readNewOrderDraft(storageKey: string): NewOrderDraft | null {
       || typeof parsed.customerId !== 'string' || typeof parsed.selectedAddressId !== 'string'
       || typeof parsed.requiresDelivery !== 'boolean' || typeof parsed.deliveryWorkerId !== 'string'
       || typeof parsed.deliveryAddress !== 'string' || typeof parsed.deliveryFee !== 'string'
-      || typeof parsed.discount !== 'string' || typeof parsed.notes !== 'string'
+      || typeof parsed.discount !== 'string'
       || typeof parsed.selectedScheduleTemplateId !== 'string' || typeof parsed.scheduleBaseDate !== 'string'
       || typeof parsed.newTemplateName !== 'string'
       || (parsed.paymentPlanMode !== undefined && !['once', 'monthly', 'custom'].includes(String(parsed.paymentPlanMode)))
@@ -106,7 +105,6 @@ function readNewOrderDraft(storageKey: string): NewOrderDraft | null {
       deliveryAddress: parsed.deliveryAddress,
       deliveryFee: parsed.deliveryFee,
       discount: parsed.discount,
-      notes: parsed.notes,
       items: parsed.items as ItemDraft[],
       installments: parsed.installments as InstallmentDraft[],
       paymentPlanMode: parsed.paymentPlanMode as PaymentPlanMode | undefined
@@ -352,13 +350,12 @@ export function NewOrderPage() {
   const [customerAddresses, setCustomerAddresses] = useState<CustomerAddress[]>([])
   const [customerAddressesLoading, setCustomerAddressesLoading] = useState(false)
   const [customerAddressesError, setCustomerAddressesError] = useState<string | null>(null)
-  const [selectedAddressId, setSelectedAddressId] = useState(initialOrderDraft?.selectedAddressId ?? '')
+  const [selectedAddressId, setSelectedAddressId] = useState(initialOrderDraft?.requiresDelivery ? initialOrderDraft.selectedAddressId : '')
   const [requiresDelivery, setRequiresDelivery] = useState(initialOrderDraft?.requiresDelivery ?? false)
-  const [deliveryWorkerId, setDeliveryWorkerId] = useState(initialOrderDraft?.deliveryWorkerId ?? '')
-  const [deliveryAddress, setDeliveryAddress] = useState(initialOrderDraft?.deliveryAddress ?? '')
-  const [deliveryFee, setDeliveryFee] = useState(initialOrderDraft?.deliveryFee ?? '')
+  const [deliveryWorkerId, setDeliveryWorkerId] = useState(initialOrderDraft?.requiresDelivery ? initialOrderDraft.deliveryWorkerId : '')
+  const [deliveryAddress, setDeliveryAddress] = useState(initialOrderDraft?.requiresDelivery ? initialOrderDraft.deliveryAddress : '')
+  const [deliveryFee, setDeliveryFee] = useState(initialOrderDraft?.requiresDelivery ? initialOrderDraft.deliveryFee : '')
   const [discount, setDiscount] = useState(initialOrderDraft?.discount ?? '')
-  const [notes, setNotes] = useState(initialOrderDraft?.notes ?? '')
   const [items, setItems] = useState<ItemDraft[]>(initialOrderDraft?.items ?? [{ key: newKey(), productId: '', quantity: '1' }])
   const [scheduleBaseDate, setScheduleBaseDate] = useState(() => initialOrderDraft?.scheduleBaseDate || businessDateForTimestamp(new Date(), timezone))
   const [installments, setInstallments] = useState<InstallmentDraft[]>(() => initialOrderDraft?.installments ?? [{ key: newKey(), amount: '', dueOn: initialOrderDraft?.scheduleBaseDate || businessDateForTimestamp(new Date(), timezone), paymentMethod: '' }])
@@ -407,7 +404,6 @@ export function NewOrderPage() {
     deliveryAddress,
     deliveryFee,
     discount,
-    notes,
     items,
     installments,
     paymentPlanMode,
@@ -417,7 +413,7 @@ export function NewOrderPage() {
     scheduleBaseDate,
     newTemplateName,
   }), [customerId, selectedAddressId, requiresDelivery, deliveryWorkerId, deliveryAddress, deliveryFee,
-    discount, notes, items, installments, paymentPlanMode, installmentCount, installmentPaymentMethod, selectedScheduleTemplateId, scheduleBaseDate, newTemplateName])
+    discount, items, installments, paymentPlanMode, installmentCount, installmentPaymentMethod, selectedScheduleTemplateId, scheduleBaseDate, newTemplateName])
 
   const loadChoices = useCallback(async () => {
     const requestId = ++choicesRequestIdRef.current
@@ -625,12 +621,16 @@ export function NewOrderPage() {
   useEffect(() => {
     const requestId = ++customerAddressRequestRef.current
     const nextCustomerId = customerId
+    if (nextCustomerId && !requiresDelivery && supabaseClient) {
+      setCustomerAddressesLoading(false)
+      return
+    }
     // oxlint-disable-next-line react/set-state-in-effect
     setCustomerAddresses([])
     if (!customerPrefillManualRef.current.address) setSelectedAddressId('')
     setCustomerAddressesError(null)
-    setCustomerAddressesLoading(Boolean(nextCustomerId && supabaseClient))
-    if (!nextCustomerId || !supabaseClient) {
+    setCustomerAddressesLoading(Boolean(nextCustomerId && requiresDelivery && supabaseClient))
+    if (!nextCustomerId || !requiresDelivery || !supabaseClient) {
       if (!nextCustomerId && !customerPrefillManualRef.current.address) setDeliveryAddress('')
       setCustomerAddressesLoading(false)
       return
@@ -668,7 +668,7 @@ export function NewOrderPage() {
       }
     })()
     return () => { active = false }
-  }, [businessId, customerId, customers])
+  }, [businessId, customerId, customers, requiresDelivery])
 
   const loadCustomerOrderSuggestion = useCallback(async (nextCustomerId: string) => {
     const requestId = ++customerOrderRequestRef.current
@@ -872,7 +872,7 @@ export function NewOrderPage() {
 
   const feeCents = parseBrazilianCurrency(deliveryFee)
   const discountCents = parseBrazilianCurrency(discount)
-  const safeFeeCents = feeCents === null ? 0 : feeCents
+  const safeFeeCents = requiresDelivery && feeCents !== null ? feeCents : 0
   const safeDiscountCents = discountCents === null ? 0 : discountCents
   const totalCents = estimate.subtotal + safeFeeCents - safeDiscountCents
 
@@ -1231,7 +1231,6 @@ export function NewOrderPage() {
     setDeliveryAddress('')
     setDeliveryFee('')
     setDiscount('')
-    setNotes('')
     setItems([{ key: newKey(), productId: '', quantity: '1' }])
     const nextPaymentDate = businessDateForTimestamp(new Date(), timezone)
     setInstallments([{ key: newKey(), amount: '', dueOn: nextPaymentDate, paymentMethod: '' }])
@@ -1349,8 +1348,8 @@ export function NewOrderPage() {
       setFormError('O desconto e a taxa de entrega precisam deixar um total positivo e válido.')
       return
     }
-    if (deliveryAddress.trim().length > 1000 || notes.trim().length > 4000) {
-      setFormError('Confira o tamanho do endereço ou das observações.')
+    if (deliveryAddress.trim().length > 1000) {
+      setFormError('O endereço é muito longo.')
       return
     }
     if (requiresDelivery && !deliveryAddress.trim()) {
@@ -1394,10 +1393,10 @@ export function NewOrderPage() {
         p_business_id: businessId,
         p_customer_id: customerId,
         p_requires_delivery: requiresDelivery,
-        p_delivery_address: deliveryAddress.trim() || null,
+        p_delivery_address: requiresDelivery ? deliveryAddress.trim() || null : null,
         p_delivery_fee_cents: safeFeeCents,
         p_discount_cents: safeDiscountCents,
-        p_notes: notes.trim() || null,
+        p_notes: null,
         p_items: itemPayload,
         p_installments: installmentPayload,
         p_request_id: submissionRequestId,
@@ -1527,12 +1526,12 @@ export function NewOrderPage() {
       {loadingChoices ? <p className="inline-state" aria-live="polite">Carregando clientes e produtos ativos…</p> : (
         <form className="order-create-form" onChangeCapture={() => { draftTouchedRef.current = true; setDraftActionError(null) }} onClickCapture={() => { draftTouchedRef.current = true; setDraftActionError(null) }} onSubmit={handleSubmit}>
           <section className="surface-panel record-form" aria-labelledby="order-customer-heading">
-            <div className="section-heading section-heading-compact"><div><p className="eyebrow">01 · CLIENTE</p><h2 id="order-customer-heading">Entrega e observações</h2></div></div>
+            <div className="section-heading section-heading-compact"><div><p className="eyebrow">01 · CLIENTE</p><h2 id="order-customer-heading">Cliente e entrega</h2></div></div>
             {customers.length === 0 ? <p className="inline-state">Cadastre um cliente ativo antes de criar um pedido. <Link to="/clientes">Abrir clientes</Link></p> : (
               <div className="record-form-grid">
                 <CustomerSearchSelect customers={customers} disabled={disabled} onPendingChange={setCustomerSearchPending} onSelect={handleCustomerChange} selectedId={customerId} />
                 {requestedCustomerId && !selectedCustomer && <p className="form-message form-message-warning record-field-wide">O cliente do atalho não está ativo. Selecione outro cliente disponível.</p>}
-                {customerId && <label className="record-field record-field-wide"><span className="field-label">Endereço salvo do cliente <span className="field-optional">opcional</span></span>
+                {requiresDelivery && customerId && <label className="record-field record-field-wide"><span className="field-label">Endereço salvo do cliente <span className="field-optional">opcional</span></span>
                   <select className="text-input" disabled={disabled || customerAddressesLoading} onChange={(event) => handleSavedAddressChange(event.target.value)} value={selectedAddressId}>
                     <option value="">Informar endereço neste pedido</option>
                     {customerAddresses.map((address) => <option key={address.id} value={address.id}>{address.label}{address.is_default ? ' · principal' : ''} — {address.address}</option>)}
@@ -1540,7 +1539,19 @@ export function NewOrderPage() {
                   {customerAddressesLoading && <span className="customer-whatsapp-hint" role="status">Carregando endereços salvos…</span>}
                   {customerAddressesError && <span className="customer-whatsapp-hint" role="status">{customerAddressesError}</span>}
                 </label>}
-                <label className="record-checkbox record-field-wide order-delivery-toggle"><input checked={requiresDelivery} disabled={disabled} onChange={(event) => { customerPrefillManualRef.current.delivery = true; setRequiresDelivery(event.target.checked) }} type="checkbox" /><span><strong>Este pedido precisa ser entregue</strong><small>Só pedidos marcados aqui entram na fila de entregas.</small></span></label>
+                <label className="record-checkbox record-field-wide order-delivery-toggle"><input checked={requiresDelivery} disabled={disabled} onChange={(event) => {
+                  const nextRequiresDelivery = event.target.checked
+                  customerPrefillManualRef.current.delivery = true
+                  setRequiresDelivery(nextRequiresDelivery)
+                  if (!nextRequiresDelivery) {
+                    customerPrefillManualRef.current.address = true
+                    customerPrefillManualRef.current.fee = true
+                    setSelectedAddressId('')
+                    setDeliveryAddress('')
+                    setDeliveryWorkerId('')
+                    setDeliveryFee('')
+                  }
+                }} type="checkbox" /><span><strong>Este pedido precisa ser entregue</strong></span></label>
                 {requiresDelivery && <label className="record-field record-field-wide"><span className="field-label">Entregador responsável <span className="field-optional">opcional</span></span>
                   <select className="text-input" disabled={disabled || deliveryWorkersLoadError} onChange={(event) => setDeliveryWorkerId(event.target.value)} value={deliveryWorkerId}>
                     <option value="">Definir depois em Entregas</option>
@@ -1552,13 +1563,11 @@ export function NewOrderPage() {
                       ? <span className="customer-whatsapp-hint">Nenhum entregador com acesso ao painel. Cadastre e vincule um acesso em Entregas.</span>
                       : <span className="customer-whatsapp-hint">A atribuição aparece no painel do entregador quando o pedido é salvo.</span>}
                 </label>}
-                <label className="record-field record-field-wide"><span className="field-label">Endereço registrado para este pedido <span className="field-optional">{requiresDelivery ? 'obrigatório para entrega' : 'opcional'}</span></span>
-                  <textarea className="text-input record-textarea" disabled={disabled} maxLength={1000} onChange={(event) => { customerPrefillManualRef.current.address = true; setSelectedAddressId(''); setDeliveryAddress(event.target.value) }} placeholder="Pode ajustar ou deixar em branco" required={requiresDelivery} rows={2} value={deliveryAddress} />
-                  <span className="customer-whatsapp-hint">O pedido guarda uma cópia deste endereço; alterações futuras no cadastro não mudam pedidos anteriores.</span>
+                {requiresDelivery && <label className="record-field record-field-wide"><span className="field-label">Endereço da entrega <span className="field-optional">obrigatório</span></span>
+                  <textarea className="text-input record-textarea" disabled={disabled} maxLength={1000} onChange={(event) => { customerPrefillManualRef.current.address = true; setSelectedAddressId(''); setDeliveryAddress(event.target.value) }} placeholder="Rua, número e bairro" required rows={2} value={deliveryAddress} />
+                  <span className="customer-whatsapp-hint">O endereço fica salvo neste pedido.</span>
                 </label>
-                <label className="record-field record-field-wide"><span className="field-label">Observações do pedido <span className="field-optional">opcional</span></span>
-                  <textarea className="text-input record-textarea" disabled={disabled} maxLength={4000} onChange={(event) => setNotes(event.target.value)} rows={3} value={notes} />
-                </label>
+                }
               </div>
             )}
           </section>
@@ -1655,23 +1664,23 @@ export function NewOrderPage() {
               </div>
             )}
             {legacyCompositionReviewCount > 0 && <label className="record-checkbox record-field-wide"><input checked={legacyCompositionReviewConfirmed} disabled={disabled} onChange={(event) => setLegacyCompositionReviewConfirmed(event.target.checked)} type="checkbox" /><span><strong>Revisei a composição estimada dessas cestas antigas</strong><small>O histórico antigo guardava o total arredondado, não a quantidade original por cesta.</small></span></label>}
-            <div className="record-form-grid order-adjustments">
-              <label className="record-field"><span className="field-label">Taxa cobrada pela entrega <span className="field-optional">opcional</span></span>
-                <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => { customerPrefillManualRef.current.fee = true; setDeliveryFee(event.target.value) }} placeholder="0,00" value={deliveryFee} />
-                <small className="field-optional">Valor cobrado do cliente pela entrega.</small>
-              </label>
-              <label className="record-field"><span className="field-label">Desconto concedido <span className="field-optional">opcional</span></span>
-                <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => setDiscount(event.target.value)} placeholder="0,00" value={discount} />
-                <small className="field-optional">Reduz o total que o cliente paga. Deixe em branco se não houver desconto.</small>
-              </label>
-            </div>
+            <details className="order-payment-advanced order-optional-details order-adjustments-details">
+              <summary>Ajustes no total <span className="field-optional">opcional</span></summary>
+              <div className="record-form-grid order-adjustments">
+                <label className="record-field"><span className="field-label">Taxa de entrega</span>
+                  <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => { customerPrefillManualRef.current.fee = true; setDeliveryFee(event.target.value) }} placeholder="0,00" value={deliveryFee} />
+                </label>
+                <label className="record-field"><span className="field-label">Desconto</span>
+                  <input className="text-input" disabled={disabled} inputMode="decimal" onChange={(event) => setDiscount(event.target.value)} placeholder="0,00" value={discount} />
+                </label>
+              </div>
+            </details>
             <dl className="order-total-list">
-              <div><dt>Subtotal atual do catálogo</dt><dd>{formatBRL(estimate.subtotal)}</dd></div>
-              <div><dt>Taxa cobrada do cliente</dt><dd>{Number.isNaN(feeCents ?? 0) ? 'Confira o valor' : formatBRL(safeFeeCents)}</dd></div>
-              <div><dt>Desconto concedido</dt><dd>{Number.isNaN(discountCents ?? 0) ? 'Confira o valor' : `− ${formatBRL(safeDiscountCents)}`}</dd></div>
+              <div><dt>Produtos</dt><dd>{formatBRL(estimate.subtotal)}</dd></div>
+              {requiresDelivery && (deliveryFee.trim() || safeFeeCents > 0) && <div><dt>Taxa de entrega</dt><dd>{feeCents === null ? 'Confira o valor' : formatBRL(safeFeeCents)}</dd></div>}
+              {(discount.trim() || safeDiscountCents > 0) && <div><dt>Desconto</dt><dd>{discountCents === null ? 'Confira o valor' : `− ${formatBRL(safeDiscountCents)}`}</dd></div>}
               <div className="order-total-grand"><dt>Total estimado do pedido</dt><dd>{Number.isSafeInteger(totalCents) ? formatBRL(totalCents) : '—'}</dd></div>
             </dl>
-            <p className="section-footnote">O pedido guarda o nome e preço atuais dos produtos como fotografia deste registro. A soma final é calculada novamente ao salvar.</p>
           </section>
 
           <section className="surface-panel record-form" aria-labelledby="order-installments-heading">

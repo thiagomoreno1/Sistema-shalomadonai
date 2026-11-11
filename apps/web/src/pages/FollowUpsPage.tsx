@@ -18,7 +18,7 @@ type FollowUp = {
 }
 
 type CustomerOption = { id: string; name: string; is_active: boolean }
-type RecentCall = { id: string; customer_id: string | null; call_outcome: 'answered' | 'missed' | 'other'; notes: string | null; occurred_at: string }
+type RecentCall = { id: string; customer_id: string | null; call_outcome: 'answered' | 'missed' | 'other'; occurred_at: string }
 const pageBusinessDate = businessToday()
 const callPageSize = 20
 const callOutcomeLabels: Record<RecentCall['call_outcome'], string> = { answered: 'Atendida', missed: 'Não atendida', other: 'Outro resultado' }
@@ -65,7 +65,7 @@ export function FollowUpsPage() {
         supabaseClient.from('customers').select('id, name, is_active')
           .eq('business_id', businessId).order('name', { ascending: true }),
         supabaseClient.from('customer_interactions')
-          .select('id, customer_id, call_outcome, notes, occurred_at')
+          .select('id, customer_id, call_outcome, occurred_at')
           .eq('business_id', businessId)
           .eq('interaction_type', 'call').order('occurred_at', { ascending: false })
           .order('id', { ascending: false }).range(0, callPageSize - 1),
@@ -171,7 +171,7 @@ export function FollowUpsPage() {
     try {
       const cursor = recentCalls.at(-1)
       let query = supabaseClient.from('customer_interactions')
-        .select('id, customer_id, call_outcome, notes, occurred_at')
+        .select('id, customer_id, call_outcome, occurred_at')
         .eq('business_id', businessId).eq('interaction_type', 'call')
       if (cursor) {
         query = query.or(`occurred_at.lt.${cursor.occurred_at},and(occurred_at.eq.${cursor.occurred_at},id.lt.${cursor.id})`)
@@ -272,7 +272,7 @@ export function FollowUpsPage() {
         p_direction: String(form.get('direction')),
         p_call_outcome: callOutcome,
         p_outcome: null,
-        p_notes: String(form.get('notes') ?? '').trim() || null,
+        p_notes: null,
         p_occurred_at: occurredAt,
         p_follow_up_title: followUpTitle || null,
         p_follow_up_due_on: dueOn || null,
@@ -309,7 +309,6 @@ export function FollowUpsPage() {
             <label className="record-field"><span className="field-label">Direção</span><select className="text-input" name="direction"><option value="outgoing">Realizada pelo negócio</option><option value="incoming">Recebida do cliente</option></select></label>
             <label className="record-field"><span className="field-label">Resultado da ligação</span><select className="text-input" defaultValue="answered" name="call_outcome" required><option value="answered">Atendida</option><option value="missed">Não atendida</option><option value="other">Outro resultado</option></select></label>
             <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">padrão: agora · horário de Brasília · alterável</span></span><input className="text-input" defaultValue={businessDateTimeInputValue()} name="occurred_at" type="datetime-local" /></label>
-            <label className="record-field record-field-wide"><span className="field-label">Anotações <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" maxLength={4000} name="notes" rows={3} /></label>
             <label className="record-field record-field-wide"><span className="field-label">Próximo passo <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" /></label>
             <label className="record-field"><span className="field-label">Data do retorno <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="follow_up_due_on" type="date" /></label>
             <label className="record-field"><span className="field-label">Prioridade do retorno</span><select className="text-input" defaultValue="" name="priority"><option value="">Automática</option><option value="normal">Normal</option><option value="high">Alta</option><option value="low">Baixa</option></select></label>
@@ -367,7 +366,7 @@ export function FollowUpsPage() {
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">HISTÓRICO</p><h2 id="recent-calls-title">Ligações registradas</h2></div><span className="neutral-status">{recentCalls.length} carregadas</span></div>
           {callHistoryError && <div className="inline-state inline-state-error" role="alert"><p>{callHistoryError}</p><button className="text-button" disabled={loadingMoreCalls} onClick={() => void loadMoreCalls()} type="button">Tentar novamente</button></div>}
           {!callHistoryError && recentCalls.length === 0 && <p className="inline-state">Nenhuma ligação registrada ainda.</p>}
-          {recentCalls.length > 0 && <ul className="timeline-list">{recentCalls.map((call) => <li key={call.id}><span className="timeline-dot" /><div><strong>{callOutcomeLabels[call.call_outcome]}</strong><p>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(call.occurred_at))}</p>{call.customer_id ? <p><Link to={`/clientes/${call.customer_id}`}>{customerLabel(call.customer_id, customers)}</Link></p> : <p>Cliente não identificado</p>}{call.notes && <p>{call.notes}</p>}</div></li>)}</ul>}
+          {recentCalls.length > 0 && <ul className="timeline-list">{recentCalls.map((call) => <li key={call.id}><span className="timeline-dot" /><div><strong>{callOutcomeLabels[call.call_outcome]}</strong><p>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(call.occurred_at))}</p>{call.customer_id ? <p><Link to={`/clientes/${call.customer_id}`}>{customerLabel(call.customer_id, customers)}</Link></p> : <p>Cliente não identificado</p>}</div></li>)}</ul>}
           {hasMoreCalls && !callHistoryError && <button className="button button-secondary" disabled={loadingMoreCalls} onClick={() => void loadMoreCalls()} type="button">{loadingMoreCalls ? 'Carregando…' : 'Carregar ligações anteriores'}</button>}
         </section>
       )}

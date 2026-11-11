@@ -92,7 +92,6 @@ type Customer = {
   phone: string | null
   whatsapp_phone: string | null
   delivery_address: string | null
-  notes: string | null
   created_at: string
   is_active: boolean
 }
@@ -224,7 +223,7 @@ export function CustomersPage() {
     try {
       const { data, error: queryError } = await supabaseClient
         .from('customers')
-        .select('id, name, phone, whatsapp_phone, delivery_address, notes, created_at, is_active')
+        .select('id, name, phone, whatsapp_phone, delivery_address, created_at, is_active')
         .eq('business_id', businessId)
         .eq('is_active', !showArchived)
         .order('name', { ascending: true })
@@ -361,7 +360,6 @@ export function CustomersPage() {
           phone: normalizedPhone || null,
           whatsapp_phone: normalizedWhatsappPhone || null,
           delivery_address: deliveryAddress.trim() || null,
-          notes: String(form.get('notes') ?? '').trim() || null,
         })
         .select('id')
         .single()
@@ -432,7 +430,7 @@ export function CustomersPage() {
               </div>
             </div>}
             <div className="record-field record-field-wide customer-optional-details">
-              <button aria-expanded={showOptionalDetails} className="text-button" onClick={() => setShowOptionalDetails((value) => !value)} type="button">{showOptionalDetails ? 'Ocultar endereço e observações' : 'Adicionar endereço principal ou observações'}</button>
+              <button aria-expanded={showOptionalDetails} className="text-button" onClick={() => setShowOptionalDetails((value) => !value)} type="button">{showOptionalDetails ? 'Ocultar endereço' : 'Adicionar endereço'}</button>
               {showOptionalDetails && <div className="record-form-grid customer-optional-grid">
                 <label className="record-field record-field-wide">
                   <span className="field-label">CEP <span className="field-optional">opcional</span></span>
@@ -447,10 +445,6 @@ export function CustomersPage() {
                   <span className="field-label">Endereço de entrega <span className="field-optional">opcional</span></span>
                   <textarea autoComplete="street-address" className="text-input record-textarea" disabled={saving} maxLength={1000} onChange={(event) => { setDeliveryAddress(event.target.value); setAddressEdited(true); addressEditedRef.current = true }} placeholder="Rua, número, bairro, cidade e complemento" rows={2} value={deliveryAddress} />
                   <span className="customer-whatsapp-hint">Este será o endereço principal. Outros podem ser adicionados depois, no perfil do cliente.</span>
-                </label>
-                <label className="record-field record-field-wide">
-                  <span className="field-label">Observações <span className="field-optional">opcional</span></span>
-                  <textarea className="text-input record-textarea" disabled={saving} maxLength={4000} name="notes" rows={3} />
                 </label>
               </div>}
             </div>

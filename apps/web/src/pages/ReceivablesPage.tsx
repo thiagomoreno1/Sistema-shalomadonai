@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { canManageBusiness, useBusiness } from '../business/BusinessContext'
-import { FinancialChartsPanel } from '../components/FinancialChartsPanel'
+import { useBusiness } from '../business/BusinessContext'
 import { FinanceNavigation } from '../components/FinanceNavigation'
 import { businessToday, currentTimestamp, formatBRL, formatBusinessDate } from '../lib/formatters'
 import { supabaseClient } from '../lib/supabase'
@@ -557,14 +556,12 @@ export function ReceivablesPage() {
       <header className="page-heading receivables-page-heading">
         <div>
           <p className="eyebrow">FINANCEIRO</p>
-          <h1>Dashboard</h1>
-          <p className="page-description">Faturamento, custos e pagamentos pendentes.</p>
+          <h1>Pagamentos a receber</h1>
+          <p className="page-description">Parcelas pendentes e próximos vencimentos.</p>
         </div>
         <Link className="button button-secondary" to="/pedidos">Ver pedidos</Link>
       </header>
       <FinanceNavigation active="receivables" />
-
-      {canManageBusiness(businessRole) && <FinancialChartsPanel />}
 
       <div className="section-heading receivables-section-heading"><h2>Pagamentos a receber</h2></div>
       <p className="section-footnote order-policy-note">Atrasado = ainda há saldo e a data de vencimento já passou.</p>

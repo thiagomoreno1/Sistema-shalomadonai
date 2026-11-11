@@ -16,6 +16,7 @@ const OrdersPage = lazy(async () => ({ default: (await import('../pages/OrdersPa
 const NewOrderPage = lazy(async () => ({ default: (await import('../pages/NewOrderPage')).NewOrderPage }))
 const OrderDetailPage = lazy(async () => ({ default: (await import('../pages/OrderDetailPage')).OrderDetailPage }))
 const ReceivablesPage = lazy(async () => ({ default: (await import('../pages/ReceivablesPage')).ReceivablesPage }))
+const FinancialDashboardPage = lazy(async () => ({ default: (await import('../pages/FinancialDashboardPage')).FinancialDashboardPage }))
 const FinancialOutflowsPage = lazy(async () => ({ default: (await import('../pages/FinancialOutflowsPage')).FinancialOutflowsPage }))
 const ReportsPage = lazy(async () => ({ default: (await import('../pages/ReportsPage')).ReportsPage }))
 const FinancialReportsPage = lazy(async () => ({ default: (await import('../pages/FinancialReportsPage')).FinancialReportsPage }))
@@ -82,7 +83,8 @@ export function AuthRoutes() {
               <Route path="estoque" element={<InventoryPage />} />
               <Route path="entregas" element={<DeliveriesPage />} />
               <Route path="equipe" element={<TeamPage />} />
-              <Route path="financeiro" element={<ReceivablesPage />} />
+              <Route path="financeiro" element={<FinancialDashboardPage />} />
+              <Route path="financeiro/receber" element={<ReceivablesPage />} />
               <Route path="financeiro/saidas" element={<FinancialOutflowsPage />} />
               <Route path="relatorios" element={<ReportsPage />} />
               <Route path="relatorios/financeiro" element={<FinancialReportsPage />} />

@@ -11,7 +11,6 @@ type Customer = {
   phone: string | null
   whatsapp_phone: string | null
   delivery_address: string | null
-  notes: string | null
   is_active: boolean
 }
 
@@ -24,7 +23,6 @@ type Interaction = {
   direction: 'incoming' | 'outgoing' | 'not_applicable'
   call_outcome: 'answered' | 'missed' | 'other' | null
   outcome: string | null
-  notes: string | null
   occurred_at: string
 }
 
@@ -301,10 +299,10 @@ export function CustomerDetailPage() {
     try {
       const [customerResult, interactionResult, followUpResult] = await Promise.all([
         client.from('customers')
-          .select('id, name, phone, whatsapp_phone, delivery_address, notes, is_active')
+          .select('id, name, phone, whatsapp_phone, delivery_address, is_active')
           .eq('business_id', businessId).eq('id', customerId).maybeSingle(),
         client.from('customer_interactions')
-          .select('id, related_order_id, interaction_type, direction, call_outcome, outcome, notes, occurred_at')
+          .select('id, related_order_id, interaction_type, direction, call_outcome, outcome, occurred_at')
           .eq('business_id', businessId).eq('customer_id', customerId)
           .order('occurred_at', { ascending: false }),
         client.from('follow_up_tasks')
@@ -520,7 +518,6 @@ export function CustomerDetailPage() {
         name,
         phone: String(form.get('phone') ?? '').trim() || null,
         whatsapp_phone: whatsappPhone || null,
-        notes: String(form.get('notes') ?? '').trim() || null,
         ...(form.has('delivery_address') ? { delivery_address: String(form.get('delivery_address') ?? '').trim() || null } : {}),
       }
       const { error: updateError } = await supabaseClient.from('customers')
@@ -747,7 +744,7 @@ export function CustomerDetailPage() {
       p_direction: String(form.get('direction')),
       p_call_outcome: callOutcome || null,
       p_outcome: null,
-      p_notes: String(form.get('notes') ?? '').trim() || null,
+      p_notes: null,
       p_follow_up_title: nextAction || null,
       p_follow_up_due_on: dueOn || null,
       p_follow_up_priority: String(form.get('priority') ?? '').trim() || null,
@@ -838,7 +835,6 @@ export function CustomerDetailPage() {
             <label className="record-field"><span className="field-label">Telefone <span className="field-optional">opcional</span></span><input className="text-input" defaultValue={customer.phone ?? ''} maxLength={64} name="phone" type="tel" /></label>
             <label className="record-field"><span className="field-label">WhatsApp <span className="field-optional">opcional</span></span><input autoComplete="tel" className="text-input" defaultValue={customer.whatsapp_phone ?? ''} maxLength={64} name="whatsapp_phone" placeholder="+55 21 99999-0000" type="tel" /><span className="customer-whatsapp-hint">Use +55 e DDD no Brasil; para outros países, informe + e o DDI.</span></label>
             {addressesError && <label className="record-field record-field-wide"><span className="field-label">Endereço principal <span className="field-optional">modo compatível</span></span><input autoComplete="street-address" className="text-input" defaultValue={customer.delivery_address ?? ''} maxLength={1000} name="delivery_address" /><span className="customer-whatsapp-hint">A lista de endereços está indisponível. Você ainda pode editar o endereço principal por aqui.</span></label>}
-            <label className="record-field record-field-wide"><span className="field-label">Observações <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" defaultValue={customer.notes ?? ''} maxLength={4000} name="notes" rows={3} /></label>
           </div>
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
           <button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : 'Salvar alterações'}</button>
@@ -887,16 +883,14 @@ export function CustomerDetailPage() {
           <div className="record-form-grid">
             {interactionFormMode === 'missed_call'
               ? <><input name="interaction_type" type="hidden" value="call" /><input name="call_outcome" type="hidden" value="missed" /></>
-              : <label className="record-field"><span className="field-label">Tipo de contato</span><select className="text-input" name="interaction_type" onChange={(event) => setInteractionType(event.target.value as Interaction['interaction_type'])} value={interactionType}><option value="call">Ligação (registro manual)</option><option value="whatsapp_manual">WhatsApp (anotação manual)</option><option value="note">Observação</option><option value="other">Outro contato</option></select></label>}
+              : <label className="record-field"><span className="field-label">Tipo de contato</span><select className="text-input" name="interaction_type" onChange={(event) => setInteractionType(event.target.value as Interaction['interaction_type'])} value={interactionType}><option value="call">Ligação (registro manual)</option><option value="whatsapp_manual">WhatsApp</option><option value="other">Outro contato</option></select></label>}
             <label className="record-field"><span className="field-label">Direção</span><select className="text-input" name="direction"><option value="not_applicable">Não se aplica</option><option value="outgoing">Realizado pelo negócio</option><option value="incoming">Recebido do cliente</option></select></label>
             {interactionFormMode === 'general' && interactionType === 'call' && <label className="record-field"><span className="field-label">Resultado da ligação</span><select className="text-input" name="call_outcome" onChange={(event) => setInteractionCallOutcome(event.target.value as NonNullable<Interaction['call_outcome']>)} required value={interactionCallOutcome}><option value="answered">Atendida</option><option value="missed">Não atendida</option><option value="other">Outro resultado</option></select></label>}
             <label className="record-field"><span className="field-label">Quando aconteceu <span className="field-optional">padrão: agora · horário de Brasília · alterável</span></span><input className="text-input" defaultValue={businessDateTimeInputValue()} name="occurred_at" type="datetime-local" /></label>
             <label className="record-field record-field-wide"><span className="field-label">Pedido relacionado <span className="field-optional">opcional</span></span><select className="text-input" disabled={customerOrdersLoading || displayedOrders.length === 0} name="related_order_id"><option value="">{customerOrdersLoading ? 'Carregando pedidos…' : displayedOrderError && displayedOrders.length === 0 ? 'Pedidos indisponíveis' : 'Nenhum pedido'}</option>{displayedOrders.map((order) => <option key={order.id} value={order.id}>{orderLabel(order)}</option>)}</select></label>
             {displayedOrderError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{displayedOrderError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadCustomer()} type="button">Tentar novamente</button></div>}
-            {displayedOrders.length === 0 && !displayedOrderError && !customerOrdersLoading && <p className="section-footnote record-field-wide">Este cliente ainda não tem pedidos para vincular.</p>}
             {customerHasMoreOrders && <button className="text-button record-field-wide" disabled={loadingMoreOrders || saving} onClick={() => void loadMoreOrders()} type="button">{loadingMoreOrders ? 'Carregando pedidos…' : 'Carregar mais pedidos'}</button>}
             {displayedMoreOrdersError && <div className="form-message form-message-error record-field-wide" role="alert"><p>{displayedMoreOrdersError}</p><button className="text-button" disabled={loadingMoreOrders || saving} onClick={() => void loadMoreOrders()} type="button">Tentar novamente</button></div>}
-            <label className="record-field record-field-wide"><span className="field-label">Anotações <span className="field-optional">opcional</span></span><textarea className="text-input record-textarea" maxLength={4000} name="notes" rows={3} /></label>
             {interactionFormMode === 'general' && <>
               <label className="record-field record-field-wide"><span className="field-label">Próximo passo <span className="field-optional">opcional</span></span><input className="text-input" maxLength={240} name="follow_up_title" placeholder="Ex.: confirmar entrega" /></label>
               <label className="record-field"><span className="field-label">Data do retorno <span className="field-optional">padrão: hoje · alterável</span></span><input className="text-input" defaultValue={businessToday()} name="follow_up_due_on" type="date" /></label>
@@ -925,7 +919,6 @@ export function CustomerDetailPage() {
           <div className="section-heading section-heading-compact"><div><p className="eyebrow">CADASTRO</p><h2 id="customer-actions-title">Informações</h2></div></div>
           <dl className="customer-facts">
             <div><dt>Endereço</dt><dd>{customer.delivery_address || 'Não informado'}</dd></div>
-            <div><dt>Observações</dt><dd>{customer.notes || 'Nenhuma observação cadastrada'}</dd></div>
           </dl>
           {customer.is_active && <button className="text-button archive-button" onClick={() => void handleArchiveCustomer()} type="button">Arquivar cliente</button>}
         </section>
@@ -1003,7 +996,6 @@ export function CustomerDetailPage() {
                     {interaction.direction !== 'not_applicable' && <p>{interaction.direction === 'incoming' ? 'Recebido' : 'Realizado pelo negócio'}</p>}
                     {interaction.call_outcome && <p><strong>Resultado da ligação:</strong> {callOutcomeLabels[interaction.call_outcome]}</p>}
                     {interaction.outcome && <p><strong>Resultado:</strong> {interaction.outcome}</p>}
-                    {interaction.notes && <p>{interaction.notes}</p>}
                     {interaction.related_order_id && <p><Link to={`/pedidos/${interaction.related_order_id}`}>Pedido relacionado · {relatedOrder ? orderLabel(relatedOrder) : 'abrir pedido'}</Link></p>}
                   </div>
                 </li>

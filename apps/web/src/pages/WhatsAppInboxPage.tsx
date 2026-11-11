@@ -664,6 +664,7 @@ export function WhatsAppInboxPage() {
   const [listRefreshing, setListRefreshing] = useState(false)
   const [listError, setListError] = useState<string | null>(null)
   const [historySyncNotice, setHistorySyncNotice] = useState<string | null>(null)
+  const [historySyncPending, setHistorySyncPending] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -803,6 +804,7 @@ export function WhatsAppInboxPage() {
       setListPage(page)
       setHasMore(result.meta?.has_more ?? next.length >= 25)
       setHistorySyncNotice(result.meta?.history_sync?.notice ?? null)
+      setHistorySyncPending(result.meta?.history_sync?.status === 'syncing')
     } catch {
       if (requestId === listRequest.current && generation === inboxGenerationRef.current && requestScope === activeListScope.current) {
         setListError('Não foi possível carregar as conversas. Tente novamente.')
@@ -843,6 +845,7 @@ export function WhatsAppInboxPage() {
       const pageRows = result.conversations ?? []
       const refreshedHasMore = result.meta?.has_more ?? pageRows.length >= 25
       setHistorySyncNotice(result.meta?.history_sync?.notice ?? null)
+      setHistorySyncPending(result.meta?.history_sync?.status === 'syncing')
       const pageIds = new Set(pageRows.map((conversation) => conversation.id))
       setConversations((current) => {
         const retainedRows = current.filter((conversation) => {
@@ -987,19 +990,57 @@ export function WhatsAppInboxPage() {
   useEffect(() => { if (configured && isWhatsAppConnected(connectionState) && view === 'calls') void loadCalls() }, [configured, connectionState, loadCalls, view])
   useEffect(() => {
     if (!configured || !isWhatsAppConnected(connectionState) || view !== 'calls') return
-    const interval = window.setInterval(() => { void loadCalls() }, 30_000)
-    return () => window.clearInterval(interval)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void loadCalls()
+    }
+    const interval = window.setInterval(refreshWhenVisible, 30_000)
+    window.addEventListener('focus', refreshWhenVisible)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshWhenVisible)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
   }, [configured, connectionState, loadCalls, view])
 
   useEffect(() => {
     if (!configured || !isWhatsAppConnected(connectionState)) return
-    const interval = window.setInterval(() => {
+    const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') {
         void refreshLoadedConversations({ force: false, refreshSelectedConversation: true })
       }
+    }
+    const interval = window.setInterval(() => {
+      refreshWhenVisible()
     }, 30_000)
-    return () => window.clearInterval(interval)
+    window.addEventListener('focus', refreshWhenVisible)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshWhenVisible)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
   }, [configured, connectionState, refreshLoadedConversations])
+
+  useEffect(() => {
+    if (!historySyncPending || !configured || !isWhatsAppConnected(connectionState)) return
+    let attempts = 0
+    const refreshImportedHistory = () => {
+      if (document.visibilityState !== 'visible') return
+      if (attempts >= 10) {
+        setHistorySyncPending(false)
+        return
+      }
+      attempts += 1
+      void refreshLoadedConversations({ force: false, refreshSelectedConversation: false })
+    }
+    const interval = window.setInterval(refreshImportedHistory, 3000)
+    document.addEventListener('visibilitychange', refreshImportedHistory)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshImportedHistory)
+    }
+  }, [connectionState, configured, historySyncPending, refreshLoadedConversations])
 
   useEffect(() => {
     if (detailLoading || selectedConversation?.id !== selectedId) return
@@ -1058,10 +1099,19 @@ export function WhatsAppInboxPage() {
     return () => { active = false }
   }, [businessId, configured, selectedId])
 
+  const selectedConversationForStatus = selectedConversation?.id === selectedId ? selectedConversation : null
+  const hasPendingMessageStatuses = selectedConversationForStatus?.messages.some((message) => (
+    message.message_type === 'outgoing'
+    && (message.status === 'pending' || message.status === 'sent' || message.status === 'delivered')
+  )) ?? false
+
   useEffect(() => {
-    if (!selectedId || !configured) return
+    if (!selectedId || !configured || !isWhatsAppConnected(connectionState) || !hasPendingMessageStatuses) return
     let active = true
+    let requestInFlight = false
     const refreshMessageStatuses = async () => {
+      if (!active || document.visibilityState !== 'visible' || requestInFlight) return
+      requestInFlight = true
       try {
         const result = await invokeInbox<MessageStatusesResponse>({
           action: 'message_statuses', business_id: businessId, conversationId: selectedId,
@@ -1087,12 +1137,24 @@ export function WhatsAppInboxPage() {
         })
       } catch {
         // Keep the conversation usable if the small status refresh is temporarily unavailable.
+      } finally {
+        requestInFlight = false
       }
     }
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshMessageStatuses()
+    }
     void refreshMessageStatuses()
-    const interval = window.setInterval(() => { void refreshMessageStatuses() }, 5000)
-    return () => { active = false; window.clearInterval(interval) }
-  }, [businessId, configured, selectedId])
+    const interval = window.setInterval(refreshWhenVisible, 15_000)
+    window.addEventListener('focus', refreshWhenVisible)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshWhenVisible)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [businessId, configured, connectionState, hasPendingMessageStatuses, selectedId])
 
   const selectedLink = selectedId ? links[selectedId] : undefined
   const currentConversation = selectedConversation?.id === selectedId
@@ -1798,6 +1860,7 @@ export function WhatsAppInboxPage() {
         </div>
         {listError && <div className="inline-state inline-state-error" role="alert"><p>{listError}</p><button className="text-button" onClick={() => void refreshLoadedConversations()} type="button">Tentar novamente</button></div>}
         {historySyncNotice && <p className="whatsapp-history-sync-notice" role="status">{historySyncNotice}</p>}
+        {historySyncPending && <p className="whatsapp-history-sync-notice" role="status">Atualizando conversas antigas…</p>}
         {showConversationListLoading && <p className="inline-state" role="status">Carregando conversas…</p>}
         {showConversationListRefreshing && <p className="inline-state" role="status">Atualizando conversas…</p>}
         {showConversationListEmpty && <div className="whatsapp-list-empty"><Icon name="message" /><strong>Nenhuma conversa nesta lista</strong><span>As conversas recebidas pelo canal conectado aparecerão aqui.</span></div>}

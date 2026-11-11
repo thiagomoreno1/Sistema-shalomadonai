@@ -2,14 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { canManageBusiness, useBusiness } from '../business/BusinessContext'
 import { Icon } from '../components/Icon'
-import { DashboardTrends, type DashboardTrendDay, type DashboardTrendPeriod } from '../components/DashboardTrends'
 import { formatBRLExact, formatBusinessDate } from '../lib/formatters'
-import { createDemoRevenueTrendDays, loadDashboardRevenueTrendDays, type DashboardRevenueTrendDay } from '../lib/dashboardRevenueTrends'
 import { useBusinessToday } from '../lib/useBusinessToday'
 import { useVisibleAutoRefresh } from '../lib/useVisibleAutoRefresh'
 import { isDemoPreviewEnabled } from '../lib/demoPreview'
 import { supabaseClient } from '../lib/supabase'
 import './DashboardDesignReferencesPage.css'
+import './DashboardPage.css'
 
 type DashboardPriorities = {
   as_of_on: string
@@ -48,37 +47,12 @@ type RecentOrder = {
   created_at: string
 }
 
-type DashboardFinancialSummary = {
-  receipts: { amount_cents: string }
-  outflows: { purchase_cents: string }
-  known_product_cost_summary: {
-    known_item_cost_cents: string
-    missing_cost_line_count: number | string
-    returned_order_count: number | string
-  }
-  inventory_purchase_count: {
-    adjusted_purchase_cents: string
-    missing_cost_movement_count: number | string
-  }
-  inventory_finance: {
-    inventory_value_cents: string | null
-    inventory_value_missing_cost_products: number | string
-    inventory_loss_cents: string | null
-    inventory_loss_movement_count: number | string
-    inventory_loss_missing_cost_count: number | string
-  }
+type FinancialSummary = {
   managerial_result: {
+    completed_order_count: number
     sales_cents: string
     product_subtotal_cents: string
     customer_delivery_fee_cents: string
-    discount_cents: string
-    item_cost_cents: string | null
-    missing_cost_line_count: number
-    returned_order_count: number
-    operating_expense_cents: string
-    delivery_cost_cents: string
-    available: boolean
-    result_cents: string | null
   }
 }
 
@@ -101,15 +75,6 @@ const actionFilters: Array<{ value: ActionFilter; label: string }> = [
   { value: 'receivables', label: 'Clientes e salários' },
   { value: 'deliveries', label: 'Entregas' },
   { value: 'inventory', label: 'Estoque' },
-]
-
-const trendPeriodOptions: Array<{ value: DashboardTrendPeriod; label: string }> = [
-  { value: 'today', label: 'Hoje' },
-  { value: 'week', label: 'Esta semana' },
-  { value: 'last_7', label: 'Últimos 7 dias' },
-  { value: 'month', label: 'Este mês' },
-  { value: 'last_30', label: 'Últimos 30 dias' },
-  { value: 'year', label: 'Este ano' },
 ]
 
 const deliveryStatusLabels: Record<DashboardPriorities['deliveries']['items'][number]['status'], string> = {
@@ -181,68 +146,6 @@ function createDemoPriorities(today: string): DashboardPriorities {
   }
 }
 
-function createDemoTrends(startOn: string, dayCount: number): DashboardTrendDay[] {
-  const orders = [0, 1, 2, 1, 3, 2, 4]
-  const receipts = [0, 125000, 86000, 250000, 0, 340000, 422000]
-  const outflows = [45000, 0, 95000, 145000, 62000, 88000, 73000]
-  return Array.from({ length: dayCount }, (_, index) => {
-    const patternIndex = index % orders.length
-    const orderCount = orders[patternIndex]
-    return {
-      business_date: shiftCalendarDate(startOn, index),
-      order_count: BigInt(orderCount),
-      receipts_cents: BigInt(receipts[patternIndex]),
-      paid_outflows_cents: BigInt(outflows[patternIndex]),
-    }
-  })
-}
-
-function createDemoFinancialSummary(days: DashboardTrendDay[]): DashboardFinancialSummary {
-  const orders = days.reduce((total, day) => total + day.order_count, 0n)
-  const grossSales = orders * 230000n
-  const deliveryFees = orders * 5000n
-  const discounts = orders * 12000n
-  const sales = grossSales - discounts
-  const paidOutflows = days.reduce((total, day) => total + day.paid_outflows_cents, 0n)
-  const itemCost = sales * 55n / 100n
-  const inventoryPurchases = paidOutflows / 4n
-  const operatingExpenses = paidOutflows * 55n / 100n
-  const deliveryCost = paidOutflows - operatingExpenses - inventoryPurchases
-  return {
-    receipts: { amount_cents: days.reduce((total, day) => total + day.receipts_cents, 0n).toString() },
-    outflows: { purchase_cents: inventoryPurchases.toString() },
-    known_product_cost_summary: {
-      known_item_cost_cents: itemCost.toString(),
-      missing_cost_line_count: 0,
-      returned_order_count: 0,
-    },
-    inventory_purchase_count: {
-      adjusted_purchase_cents: inventoryPurchases.toString(),
-      missing_cost_movement_count: 0,
-    },
-    inventory_finance: {
-      inventory_value_cents: '428500',
-      inventory_value_missing_cost_products: 0,
-      inventory_loss_cents: '0',
-      inventory_loss_movement_count: 0,
-      inventory_loss_missing_cost_count: 0,
-    },
-    managerial_result: {
-      sales_cents: sales.toString(),
-      product_subtotal_cents: (grossSales - deliveryFees).toString(),
-      customer_delivery_fee_cents: deliveryFees.toString(),
-      discount_cents: discounts.toString(),
-      item_cost_cents: itemCost.toString(),
-      missing_cost_line_count: 0,
-      returned_order_count: 0,
-      operating_expense_cents: operatingExpenses.toString(),
-      delivery_cost_cents: deliveryCost.toString(),
-      available: true,
-      result_cents: (sales - itemCost - operatingExpenses - deliveryCost).toString(),
-    },
-  }
-}
-
 function createDemoRecentOrders(today: string): RecentOrder[] {
   return [
     { id: 'demo-order-1', customer_name_snapshot: 'Mercado Boa Praça', status: 'open', requires_delivery: true, created_at: `${today}T13:10:00-03:00` },
@@ -264,56 +167,6 @@ function shiftCalendarDate(value: string, offset: number) {
   const date = new Date(`${value}T12:00:00Z`)
   date.setUTCDate(date.getUTCDate() + offset)
   return date.toISOString().slice(0, 10)
-}
-
-function getTrendDateRange(today: string, period: DashboardTrendPeriod) {
-  const date = new Date(`${today}T12:00:00Z`)
-  const weekday = date.getUTCDay()
-  const startOn = period === 'today'
-    ? today
-    : period === 'week'
-      ? shiftCalendarDate(today, -((weekday + 6) % 7))
-      : period === 'last_7'
-      ? shiftCalendarDate(today, -6)
-      : period === 'month'
-        ? `${today.slice(0, 7)}-01`
-        : period === 'last_30'
-          ? shiftCalendarDate(today, -29)
-          : `${today.slice(0, 4)}-01-01`
-  const dayCount = Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${startOn}T00:00:00Z`)) / 86_400_000) + 1
-  return { startOn, dayCount, label: trendPeriodOptions.find((option) => option.value === period)?.label ?? 'Últimos 7 dias' }
-}
-
-function getTrendDateChunks(startOn: string, dayCount: number) {
-  const chunks: Array<{ startOn: string; endOn: string; dayCount: number }> = []
-  for (let offset = 0; offset < dayCount; offset += 30) {
-    const chunkDayCount = Math.min(30, dayCount - offset)
-    const chunkStartOn = shiftCalendarDate(startOn, offset)
-    chunks.push({ startOn: chunkStartOn, endOn: shiftCalendarDate(chunkStartOn, chunkDayCount - 1), dayCount: chunkDayCount })
-  }
-  return chunks
-}
-
-function readTrendInteger(value: unknown) {
-  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value)
-  if (typeof value === 'string' && /^\d+$/.test(value)) return BigInt(value)
-  throw new Error('Invalid daily aggregate.')
-}
-
-function readTrendDays(value: unknown, startOn: string, dayCount: number): DashboardTrendDay[] {
-  if (!Array.isArray(value) || value.length !== dayCount) throw new Error('Incomplete daily series.')
-  return value.map((row: unknown, index) => {
-    if (typeof row !== 'object' || row === null) throw new Error('Invalid daily series.')
-    const item = row as Record<string, unknown>
-    const expectedDate = shiftCalendarDate(startOn, index)
-    if (item.business_date !== expectedDate) throw new Error('Unexpected daily series date.')
-    return {
-      business_date: expectedDate,
-      order_count: readTrendInteger(item.order_count),
-      receipts_cents: readTrendInteger(item.receipts_cents),
-      paid_outflows_cents: readTrendInteger(item.paid_outflows_cents),
-    }
-  })
 }
 
 export function DashboardPage() {
@@ -342,129 +195,11 @@ export function DashboardPage() {
   const recentOrdersRequestId = useRef(0)
   const [recentOrdersState, setRecentOrdersState] = useState<{ scopeKey: string; loading: boolean; error: boolean; orders: RecentOrder[] }>({ scopeKey: '', loading: true, error: false, orders: [] })
   const currentRecentOrders = recentOrdersState.scopeKey === recentOrdersScopeKey ? recentOrdersState : { loading: true, error: false, orders: [] }
-  const [trendPeriod, setTrendPeriod] = useState<DashboardTrendPeriod>('last_7')
-  const { startOn: trendStartOn, dayCount: trendDayCount, label: trendPeriodLabel } = getTrendDateRange(today, trendPeriod)
-  const trendScopeKey = `${businessId}:${trendStartOn}:${today}`
-  const trendRequestId = useRef(0)
-  const [trendState, setTrendState] = useState<{ scopeKey: string; loading: boolean; error: boolean; days: DashboardTrendDay[] }>({ scopeKey: '', loading: true, error: false, days: [] })
-  const currentTrends = trendState.scopeKey === trendScopeKey ? trendState : { loading: true, error: false, days: [] }
-  const revenueTrendRequestId = useRef(0)
-  const [revenueTrendState, setRevenueTrendState] = useState<{ scopeKey: string; loading: boolean; error: boolean; days: DashboardRevenueTrendDay[] }>({ scopeKey: '', loading: true, error: false, days: [] })
-  const currentRevenueTrends = revenueTrendState.scopeKey === trendScopeKey ? revenueTrendState : { loading: true, error: false, days: [] }
-  const financialSummaryScopeKey = `${businessId}:${role}:${trendStartOn}:${today}`
   const financialSummaryRequestId = useRef(0)
-  const [financialSummaryState, setFinancialSummaryState] = useState<{ scopeKey: string; loading: boolean; error: boolean; data: DashboardFinancialSummary | null }>({ scopeKey: '', loading: true, error: false, data: null })
-  const currentFinancialSummary = financialSummaryState.scopeKey === financialSummaryScopeKey
-    ? financialSummaryState
-    : { loading: true, error: false, data: null }
-
-  const loadTrends = useCallback(async (silent = false) => {
-    const requestId = ++trendRequestId.current
-    if (!canManageBusiness(role)) {
-      setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: [] })
-      return
-    }
-    if (!silent) setTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
-    try {
-      if (demoPreview) {
-        setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: createDemoTrends(trendStartOn, trendDayCount) })
-        return
-      }
-      const client = supabaseClient
-      if (!client) throw new Error('Authentication service unavailable.')
-      const chunks = getTrendDateChunks(trendStartOn, trendDayCount)
-      const dailyResults = await Promise.all(chunks.map(async (chunk) => {
-        const { data, error } = await client.rpc('get_dashboard_daily_trends', {
-          p_business_id: businessId,
-          p_start_on: chunk.startOn,
-          p_end_on: chunk.endOn,
-        })
-        if (error) throw error
-        return readTrendDays(data, chunk.startOn, chunk.dayCount)
-      }))
-      const days = dailyResults.flat()
-      if (days.length !== trendDayCount) throw new Error('Incomplete daily series.')
-      if (requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days })
-    } catch {
-      if (!silent && requestId === trendRequestId.current) setTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
-    }
-  }, [businessId, demoPreview, role, today, trendDayCount, trendScopeKey, trendStartOn])
-
-  const loadRevenueTrends = useCallback(async (silent = false) => {
-    const requestId = ++revenueTrendRequestId.current
-    if (!canManageBusiness(role)) {
-      setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: [] })
-      return
-    }
-    if (!silent) setRevenueTrendState({ scopeKey: trendScopeKey, loading: true, error: false, days: [] })
-    try {
-      if (demoPreview) {
-        setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days: createDemoRevenueTrendDays(trendStartOn, trendDayCount) })
-        return
-      }
-      const client = supabaseClient
-      if (!client) throw new Error('Authentication service unavailable.')
-      const days = await loadDashboardRevenueTrendDays(trendStartOn, trendDayCount, async (startOn, endOn) => {
-        const { data, error } = await client.rpc('get_dashboard_revenue_trends', {
-          p_business_id: businessId,
-          p_start_on: startOn,
-          p_end_on: endOn,
-        })
-        return { data, error }
-      })
-      if (requestId === revenueTrendRequestId.current) setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: false, days })
-    } catch {
-      if (!silent && requestId === revenueTrendRequestId.current) setRevenueTrendState({ scopeKey: trendScopeKey, loading: false, error: true, days: [] })
-    }
-  }, [businessId, demoPreview, role, trendDayCount, trendScopeKey, trendStartOn])
-
-  const loadFinancialSummary = useCallback(async (silent = false) => {
-    const requestId = ++financialSummaryRequestId.current
-    if (!canManageBusiness(role)) return
-    if (!silent) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: true, error: false, data: null })
-    try {
-      if (demoPreview) {
-        setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: createDemoFinancialSummary(createDemoTrends(trendStartOn, trendDayCount)) })
-        return
-      }
-      if (!supabaseClient) throw new Error('Authentication service unavailable.')
-      const [reportResult, inventoryResult, inventoryPurchaseCountResult, knownProductCostResult] = await Promise.all([
-        supabaseClient.rpc('get_financial_report_summary', {
-          p_business_id: businessId,
-          p_start_on: trendStartOn,
-          p_end_on: today,
-        }),
-        supabaseClient.rpc('get_inventory_finance_summary', {
-          p_business_id: businessId,
-          p_start_on: trendStartOn,
-          p_end_on: today,
-        }),
-        supabaseClient.rpc('get_inventory_purchase_count_summary', {
-          p_business_id: businessId,
-          p_start_on: trendStartOn,
-          p_end_on: today,
-        }),
-        supabaseClient.rpc('get_dashboard_known_product_cost_summary', {
-          p_business_id: businessId,
-          p_start_on: trendStartOn,
-          p_end_on: today,
-        }),
-      ])
-      if (reportResult.error || !reportResult.data || inventoryResult.error || !inventoryResult.data?.[0] || inventoryPurchaseCountResult.error || !inventoryPurchaseCountResult.data?.[0] || knownProductCostResult.error || !knownProductCostResult.data?.[0]) {
-        throw reportResult.error ?? inventoryResult.error ?? inventoryPurchaseCountResult.error ?? knownProductCostResult.error ?? new Error('Financial summary was empty.')
-      }
-      const summary = {
-        ...(reportResult.data as Omit<DashboardFinancialSummary, 'inventory_finance' | 'inventory_purchase_count' | 'known_product_cost_summary'>),
-        known_product_cost_summary: knownProductCostResult.data[0] as DashboardFinancialSummary['known_product_cost_summary'],
-        inventory_purchase_count: inventoryPurchaseCountResult.data[0] as DashboardFinancialSummary['inventory_purchase_count'],
-        inventory_finance: inventoryResult.data[0] as DashboardFinancialSummary['inventory_finance'],
-      }
-      if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: summary })
-    } catch {
-      if (!silent && requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: true, data: null })
-    }
-  }, [businessId, demoPreview, financialSummaryScopeKey, role, today, trendDayCount, trendStartOn])
-
+  const [financialSummaryState, setFinancialSummaryState] = useState<{ scopeKey: string; loading: boolean; error: boolean; data: FinancialSummary | null }>({ scopeKey: '', loading: true, error: false, data: null })
+  const financialSummaryScopeKey = `${businessId}:${role}:${today}`
+  const currentFinancialSummary = financialSummaryState.scopeKey === financialSummaryScopeKey ? financialSummaryState : { loading: true, error: false, data: null }
+  const financialSummary = currentFinancialSummary.data
   const loadPriorities = useCallback(async (silent = false) => {
     const requestId = ++prioritiesRequestId.current
     if (!canManageBusiness(role)) {
@@ -527,15 +262,44 @@ export function DashboardPage() {
     }
   }, [businessId, demoPreview, role, recentOrdersScopeKey, today])
 
+  const loadFinancialSummary = useCallback(async (silent = false) => {
+    const requestId = ++financialSummaryRequestId.current
+    if (!canManageBusiness(role)) {
+      setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: null })
+      return
+    }
+    if (!silent) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: true, error: false, data: null })
+    try {
+      if (demoPreview) {
+        setFinancialSummaryState({
+          scopeKey: financialSummaryScopeKey,
+          loading: false,
+          error: false,
+          data: { managerial_result: { completed_order_count: 1, sales_cents: '29600', product_subtotal_cents: '28000', customer_delivery_fee_cents: '1600' } },
+        })
+        return
+      }
+      if (!supabaseClient) throw new Error('Authentication service unavailable.')
+      const { data, error } = await supabaseClient.rpc('get_financial_report_summary', {
+        p_business_id: businessId,
+        p_start_on: `${today.slice(0, 7)}-01`,
+        p_end_on: today,
+      })
+      if (error || !data) throw error ?? new Error('Financial summary was empty.')
+      if (requestId === financialSummaryRequestId.current) setFinancialSummaryState({ scopeKey: financialSummaryScopeKey, loading: false, error: false, data: data as FinancialSummary })
+    } catch {
+      if (!silent && requestId === financialSummaryRequestId.current) setFinancialSummaryState((previous) => ({
+        scopeKey: financialSummaryScopeKey,
+        loading: false,
+        error: true,
+        data: previous.scopeKey === financialSummaryScopeKey ? previous.data : null,
+      }))
+    }
+  }, [businessId, demoPreview, financialSummaryScopeKey, role, today])
+
   const refreshDashboard = useCallback(async () => {
-    await Promise.allSettled([
-      loadPriorities(true),
-      loadRecentOrders(true),
-      loadTrends(true),
-      loadRevenueTrends(true),
-      loadFinancialSummary(true),
-    ])
-  }, [loadFinancialSummary, loadPriorities, loadRecentOrders, loadRevenueTrends, loadTrends])
+    await Promise.allSettled([loadPriorities(true), loadRecentOrders(true), loadFinancialSummary(true)])
+  }, [loadFinancialSummary, loadPriorities, loadRecentOrders])
   useVisibleAutoRefresh(refreshDashboard)
 
   // oxlint-disable-next-line react/set-state-in-effect
@@ -550,44 +314,9 @@ export function DashboardPage() {
   }, [loadRecentOrders])
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
-    void loadTrends()
-    return () => { trendRequestId.current += 1 }
-  }, [loadTrends])
-  // oxlint-disable-next-line react/set-state-in-effect
-  useEffect(() => {
-    void loadRevenueTrends()
-    return () => { revenueTrendRequestId.current += 1 }
-  }, [loadRevenueTrends])
-  // oxlint-disable-next-line react/set-state-in-effect
-  useEffect(() => {
     void loadFinancialSummary()
     return () => { financialSummaryRequestId.current += 1 }
   }, [loadFinancialSummary])
-
-  const financialSummary = currentFinancialSummary.data?.managerial_result
-  const grossBillingCents = financialSummary
-    ? BigInt(financialSummary.product_subtotal_cents) + BigInt(financialSummary.customer_delivery_fee_cents)
-    : null
-  const netBillingCents = financialSummary ? BigInt(financialSummary.sales_cents) : null
-  const knownProductCost = currentFinancialSummary.data?.known_product_cost_summary
-  const missingCostLineCount = Number(knownProductCost?.missing_cost_line_count ?? 0)
-  const returnedOrderCount = Number(knownProductCost?.returned_order_count ?? 0)
-  const productCostCents = knownProductCost ? BigInt(knownProductCost.known_item_cost_cents) : null
-  const grossProfitCents = productCostCents !== null && netBillingCents !== null ? netBillingCents - productCostCents : null
-  const inventoryFinance = currentFinancialSummary.data?.inventory_finance
-  const inventoryLossMissingCostCount = Number(inventoryFinance?.inventory_loss_missing_cost_count ?? 0)
-  const inventoryLossCents = inventoryFinance?.inventory_loss_cents === null || !inventoryFinance
-    ? null
-    : BigInt(inventoryFinance.inventory_loss_cents)
-  const estimatedProfitCents = financialSummary && productCostCents !== null && inventoryLossCents !== null
-    ? BigInt(financialSummary.sales_cents) - productCostCents - BigInt(financialSummary.operating_expense_cents) - BigInt(financialSummary.delivery_cost_cents) - inventoryLossCents
-    : null
-  const profitEstimatePartialNotes = [
-    missingCostLineCount > 0 ? `faltam os custos de ${missingCostLineCount} item(ns) vendido(s)` : null,
-    returnedOrderCount > 0 ? `${returnedOrderCount} pedido(s) devolvido(s) sem ajuste podem alterar o valor` : null,
-    inventoryLossMissingCostCount > 0 ? `${inventoryLossMissingCostCount} perda(s) sem custo conhecido foram excluídas` : null,
-  ].filter((note): note is string => note !== null)
-  const profitEstimateIsPartial = estimatedProfitCents !== null && profitEstimatePartialNotes.length > 0
   const totalPriorityActionCount = priorities
     ? priorities.follow_ups.pending_count + priorities.receivables.overdue_count + priorities.receivables.due_today_count + priorities.payroll.overdue_count + priorities.payroll.due_today_count + priorities.deliveries.pending_count + priorities.inventory.attention_count
     : null
@@ -608,7 +337,7 @@ export function DashboardPage() {
       dueOn: receivable.due_on,
       severity: receivable.overdue ? 0 : 2,
       category: 1,
-      href: demoPreview ? '/financeiro' : `/pedidos/${receivable.order_id}`,
+      href: demoPreview ? '/financeiro/receber' : `/pedidos/${receivable.order_id}`,
       icon: 'coin' as const,
       title: receivable.customer_name,
       detail: `Parcela ${receivable.installment_number} · ${formatBusinessDate(receivable.due_on)} · ${formatBRLExact(receivable.balance_cents)}`,
@@ -664,14 +393,6 @@ export function DashboardPage() {
           <h1>Início</h1>
           <p className="page-description">O que precisa de ação hoje?</p>
         </div>
-        {canManageBusiness(role) && <div className="dashboard-heading-actions">
-          <label className="dashboard-range-picker" htmlFor="dashboard-period">
-            <span>Período</span>
-            <select id="dashboard-period" value={trendPeriod} onChange={(event) => setTrendPeriod(event.target.value as DashboardTrendPeriod)}>
-              {trendPeriodOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
-        </div>}
       </header>
 
       {canManageBusiness(role) ? <>
@@ -689,7 +410,7 @@ export function DashboardPage() {
           <span className="dashboard-summary-count">{priorities ? priorities.payroll.overdue_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
-        <Link className="dashboard-summary-link is-due-today" to="/financeiro">
+        <Link className="dashboard-summary-link is-due-today" to="/financeiro/receber">
           <span className="dashboard-summary-icon"><Icon name="clock" /></span>
           <span className="dashboard-summary-copy"><strong>Parcelas dos clientes</strong><small>Valores que vencem hoje · {priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando…' : '—'}</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.receivables.due_today_count : '—'}</span>
@@ -755,10 +476,10 @@ export function DashboardPage() {
               </section>}
 
               {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.receivables.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-receivables-title">
-                <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Parcelas que clientes ainda devem</h3><Link className="quiet-link" to="/financeiro">Ver parcelas <Icon name="arrow" /></Link></div>
+                <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Parcelas que clientes ainda devem</h3><Link className="quiet-link" to="/financeiro/receber">Ver parcelas <Icon name="arrow" /></Link></div>
                 {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma parcela atrasada ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
                   {priorities.receivables.items.map((item) => <li key={item.installment_id}>
-                    <Link to={demoPreview ? '/financeiro' : `/pedidos/${item.order_id}`}>
+                    <Link to={demoPreview ? '/financeiro/receber' : `/pedidos/${item.order_id}`}>
                       <span className={`dashboard-action-symbol${item.overdue ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
                       <span className="dashboard-action-copy"><strong>{item.customer_name}</strong><small>Parcela {item.installment_number} · {formatBusinessDate(item.due_on)}</small></span>
                       <span className="dashboard-action-meta"><strong>{formatBRLExact(item.balance_cents)}</strong><span className={`dashboard-row-state${item.overdue ? ' is-overdue' : ' is-today'}`}>{item.overdue ? 'Atrasado' : 'Vence hoje'}</span></span>
@@ -819,61 +540,24 @@ export function DashboardPage() {
 
       </div>
 
-        <section className="dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
+        <section className="surface-panel dashboard-financial-overview" aria-labelledby="dashboard-financial-title">
           <div className="section-heading dashboard-financial-heading">
             <div>
-              <p className="eyebrow">{trendPeriodLabel.toUpperCase()}</p>
-          <h2 id="dashboard-financial-title">Dashboard de faturamento</h2>
-              <p className="dashboard-financial-period">{formatBusinessDate(trendStartOn)} a {formatBusinessDate(today)} · atualização automática a cada minuto</p>
+              <p className="eyebrow">FINANCEIRO</p>
+              <h2 id="dashboard-financial-title">Dashboard</h2>
+              <p className="dashboard-financial-period">Resumo deste mês</p>
             </div>
-            <Link className="quiet-link" to="/relatorios">Ver relatórios <Icon name="arrow" /></Link>
+            <Link className="quiet-link" to="/financeiro">Abrir Dashboard <Icon name="arrow" /></Link>
           </div>
-          {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando indicadores financeiros…</p>}
-          {!currentFinancialSummary.loading && currentFinancialSummary.error && <div className="dashboard-panel-state" role="alert"><p>Não foi possível carregar os indicadores financeiros.</p><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
-          {!currentFinancialSummary.loading && !currentFinancialSummary.error && currentFinancialSummary.data && <>
-            <div className="indicator-grid dashboard-financial-indicators">
-              <article className="indicator-card"><p>Faturamento bruto</p><strong>{grossBillingCents === null ? '—' : formatBRLExact(grossBillingCents)}</strong></article>
-              <article className="indicator-card"><p>Faturamento líquido</p><strong>{netBillingCents === null ? '—' : formatBRLExact(netBillingCents)}</strong></article>
-              <article className="indicator-card"><p>{missingCostLineCount > 0 ? 'Custo conhecido dos produtos vendidos' : 'Custo dos produtos vendidos'}</p><strong>{productCostCents === null ? '—' : formatBRLExact(productCostCents)}</strong></article>
-              <article className="indicator-card"><p>Compras para estoque · acumulado</p><strong>{formatBRLExact(currentFinancialSummary.data.inventory_purchase_count.adjusted_purchase_cents)}</strong><span>Até o fim do período</span>{Number(currentFinancialSummary.data.inventory_purchase_count.missing_cost_movement_count) > 0 && <span role="status">Parcial: {Number(currentFinancialSummary.data.inventory_purchase_count.missing_cost_movement_count)} movimento(s) sem custo.</span>}</article>
-              <article className="indicator-card"><p>Lucro estimado{profitEstimateIsPartial ? ' · parcial' : ''}</p><strong>{estimatedProfitCents === null ? '—' : formatBRLExact(estimatedProfitCents)}</strong>{profitEstimateIsPartial && <span role="status">Parcial: {profitEstimatePartialNotes.join('; ')}.</span>}</article>
-            </div>
-            <details className="surface-panel dashboard-result-breakdown">
-              <summary>Ver faturamento e despesas</summary>
-              <div className="dashboard-result-breakdown-heading"><h3>Composição financeira</h3></div>
-              <dl>
-                <div><dt>Faturamento bruto</dt><dd>{grossBillingCents === null ? '—' : formatBRLExact(grossBillingCents)}</dd></div>
-                <div><dt>Descontos nos pedidos</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.discount_cents)}</dd></div>
-                <div className="is-total"><dt>Faturamento líquido</dt><dd>{netBillingCents === null ? '—' : formatBRLExact(netBillingCents)}</dd></div>
-                <div><dt>{missingCostLineCount > 0 ? 'Custo conhecido dos produtos vendidos' : 'Custo dos produtos vendidos'}</dt><dd>{productCostCents === null ? '—' : `− ${formatBRLExact(productCostCents)}`}</dd></div>
-                <div className="is-total"><dt>Lucro bruto{profitEstimateIsPartial ? ' parcial' : ''}</dt><dd>{grossProfitCents === null ? '—' : formatBRLExact(grossProfitCents)}</dd></div>
-                <div><dt>{inventoryLossMissingCostCount > 0 ? 'Perdas com custo conhecido' : 'Perdas registradas'}</dt><dd>{inventoryLossCents === null ? '—' : `− ${formatBRLExact(inventoryLossCents)}`}</dd></div>
-                <div><dt>Despesas da empresa</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.operating_expense_cents)}</dd></div>
-                <div><dt>Despesas de entrega</dt><dd>− {formatBRLExact(currentFinancialSummary.data.managerial_result.delivery_cost_cents)}</dd></div>
-                <div className="is-total"><dt>Lucro estimado{profitEstimateIsPartial ? ' · parcial' : ''}</dt><dd>{estimatedProfitCents === null ? '—' : formatBRLExact(estimatedProfitCents)}</dd></div>
-              </dl>
-              <div className="dashboard-purchase-cash-outflow">
-                <div><strong>Compras pagas em dinheiro</strong></div>
-                <strong>{formatBRLExact(currentFinancialSummary.data.outflows.purchase_cents ?? '0')}</strong>
-              </div>
-              {profitEstimateIsPartial && <p className="dashboard-result-note" role="status">Estimativa parcial: {profitEstimatePartialNotes.join('; ')}.</p>}
-            </details>
-          </>}
+          {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando resumo…</p>}
+          {!currentFinancialSummary.loading && currentFinancialSummary.error && !financialSummary && <div className="inline-state inline-state-error" role="alert"><span>Não foi possível carregar o resumo financeiro.</span><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
+          {!currentFinancialSummary.loading && financialSummary && <div className="dashboard-financial-metrics" aria-label="Resumo financeiro deste mês">
+            <article><span>Faturamento bruto</span><strong>{formatBRLExact((BigInt(financialSummary.managerial_result.product_subtotal_cents) + BigInt(financialSummary.managerial_result.customer_delivery_fee_cents)).toString())}</strong></article>
+            <article><span>Faturamento líquido</span><strong>{formatBRLExact(financialSummary.managerial_result.sales_cents)}</strong></article>
+            <article><span>Pedidos concluídos</span><strong>{financialSummary.managerial_result.completed_order_count}</strong></article>
+          </div>}
+          {currentFinancialSummary.error && financialSummary && <p className="section-footnote" role="status">Resumo desatualizado; a última informação carregada continua visível.</p>}
         </section>
-        <DashboardTrends
-          days={currentTrends.days}
-          revenueDays={currentRevenueTrends.days}
-          endOn={today}
-          error={currentTrends.error}
-          revenueError={currentRevenueTrends.error}
-          revenueLoading={currentRevenueTrends.loading}
-          loading={currentTrends.loading}
-          onRetry={() => void loadTrends()}
-          onRetryRevenue={() => void loadRevenueTrends()}
-          period={trendPeriod}
-          periodLabel={trendPeriodLabel}
-          startOn={trendStartOn}
-        />
 
       <div className="dashboard-columns dashboard-operations-grid">
         <section className="surface-panel dashboard-recent-panel" aria-labelledby="dashboard-recent-orders-title">

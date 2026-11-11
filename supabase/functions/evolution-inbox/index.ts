@@ -7,9 +7,10 @@ const LEGACY_CHAT_PAGE_SIZE = 25
 const CONTACT_DIRECTORY_PAGE_SIZE = 50
 const CONTACT_NAME_MAX_PAGES = 20
 // The provider fills its chat/message tables asynchronously after pairing.
-// Refresh this cache before the inbox's 30s poll so an empty/partial first
-// response does not hide conversations that arrive during history sync.
-const LEGACY_SYNC_COOLDOWN_MS = 15_000
+// Retry empty/failed history imports soon, but do not repeat successful imports
+// on every inbox poll. New activity is handled by the configured webhook.
+const LEGACY_SYNC_COOLDOWN_MS = 60_000
+const LEGACY_SYNC_RETRY_COOLDOWN_MS = 15_000
 const CONTACT_NAMES_COOLDOWN_MS = 60_000
 const CONTACT_DIRECTORY_REFRESH_MS = 60_000
 const CONTACT_IDENTITY_RECONCILE_COOLDOWN_MS = 30_000
@@ -33,7 +34,8 @@ const CORS_HEADERS = {
 const EVOLUTION_WEBHOOK_EVENTS = ['MESSAGES_SET', 'MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'MESSAGES_DELETE', 'SEND_MESSAGE',
   'CONTACTS_SET', 'CONTACTS_UPSERT', 'CONTACTS_UPDATE', 'CHATS_SET', 'CHATS_UPSERT', 'CHATS_UPDATE',
   'GROUPS_UPSERT', 'GROUP_UPDATE', 'GROUPS_UPDATE', 'CALL', 'CONNECTION_UPDATE']
-const recentLegacySync = new Map<string, { at: number; result: JsonRecord }>()
+const recentLegacySync = new Map<string, { at: number; cooldownMs: number; result: JsonRecord }>()
+const pendingLegacySync = new Map<string, Promise<JsonRecord>>()
 const recentIdentityReconcile = new Map<string, { at: number; merged: number }>()
 type ContactProfile = { name: string | null; pictureUrl: string | null; phone?: string | null }
 type ContactDirectory = Map<string, ContactProfile>
@@ -525,6 +527,30 @@ async function loadPersistedContactDirectory(
   })))
 }
 
+async function loadPersistedGroupDirectory(
+  admin: any,
+  businessId: string,
+  instanceName: string,
+  remoteJids: string[],
+): Promise<Map<string, GroupMetadata>> {
+  const uniqueJids = [...new Set(remoteJids.map((jid) => jid.toLowerCase()).filter(isGroupJid))]
+  if (!uniqueJids.length) return new Map()
+  const result = new Map<string, GroupMetadata>()
+  for (let start = 0; start < uniqueJids.length; start += 100) {
+    const { data, error } = await admin.from('whatsapp_contact_directory')
+      .select('remote_jid, group_subject')
+      .eq('business_id', businessId).eq('instance_name', instanceName)
+      .in('remote_jid', uniqueJids.slice(start, start + 100))
+    if (error) throw new RequestError(500, 'group_directory_lookup_failed')
+    for (const row of data ?? []) {
+      const jid = text(row.remote_jid, 256)
+      const subject = displayableContactName(row.group_subject, null)
+      if (jid && subject && isGroupJid(jid)) result.set(jid.toLowerCase(), { subject, pictureUrl: null })
+    }
+  }
+  return result
+}
+
 function savedNameForJids(names: ContactDirectory, ...values: unknown[]): string | null {
   for (const value of values) {
     for (const key of jidNameKeys(value)) {
@@ -940,7 +966,7 @@ async function instanceWebhookToken(masterSecret: string, instanceName: string):
 async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: string, providerPage: number): Promise<JsonRecord> {
   const cacheKey = `${businessId}:${config.instanceName}:${providerPage}`
   const cached = recentLegacySync.get(cacheKey)
-  if (cached && Date.now() - cached.at < LEGACY_SYNC_COOLDOWN_MS) {
+  if (cached && Date.now() - cached.at < cached.cooldownMs) {
     await reconcileKnownContactIdentities(admin, businessId, config.instanceName)
     return { ...cached.result, status: 'recently_synced' }
   }
@@ -1156,8 +1182,63 @@ async function syncLegacyChats(admin: any, config: EvolutionConfig, businessId: 
       ? { notice: 'A Evolution não retornou conversas salvas para importar. Confira a sincronização de histórico na instância.' }
       : {}),
   }
-  recentLegacySync.set(cacheKey, { at: Date.now(), result })
+  const cooldownMs = result.status === 'available' ? LEGACY_SYNC_COOLDOWN_MS : LEGACY_SYNC_RETRY_COOLDOWN_MS
+  recentLegacySync.set(cacheKey, { at: Date.now(), cooldownMs, result })
   return result
+}
+
+async function scheduleLegacyChatsSync(
+  admin: any,
+  config: EvolutionConfig,
+  businessId: string,
+  providerPage: number,
+): Promise<JsonRecord> {
+  const cacheKey = `${businessId}:${config.instanceName}:${providerPage}`
+  const cached = recentLegacySync.get(cacheKey)
+  if (cached && Date.now() - cached.at < cached.cooldownMs) {
+    await reconcileKnownContactIdentities(admin, businessId, config.instanceName)
+    return { ...cached.result, status: 'recently_synced' }
+  }
+  if (pendingLegacySync.has(cacheKey)) {
+    return { status: 'syncing', synced_conversations: 0, imported_messages: 0, has_more: true, provider_page: providerPage }
+  }
+
+  const task = syncLegacyChats(admin, config, businessId, providerPage)
+    .catch((error) => {
+      console.warn('Legacy WhatsApp history sync failed', {
+        reason: error instanceof RequestError ? error.code : 'provider_request_failed',
+        ...(error instanceof RequestError && error.upstreamStatus !== undefined ? { upstream_status: error.upstreamStatus } : {}),
+      })
+      return {
+        status: 'unavailable', synced_conversations: 0, imported_messages: 0,
+        has_more: false, provider_page: providerPage,
+        notice: 'Não foi possível sincronizar o histórico agora. As conversas já salvas continuam disponíveis.',
+      }
+    })
+    .then((result) => {
+      if (result.status === 'unavailable') {
+        recentLegacySync.set(cacheKey, {
+          at: Date.now(), cooldownMs: LEGACY_SYNC_RETRY_COOLDOWN_MS, result,
+        })
+      }
+      return result
+    })
+  pendingLegacySync.set(cacheKey, task)
+  void task.finally(() => {
+    if (pendingLegacySync.get(cacheKey) === task) pendingLegacySync.delete(cacheKey)
+  })
+
+  const runtime = (globalThis as typeof globalThis & {
+    EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void }
+  }).EdgeRuntime
+  if (runtime && typeof runtime.waitUntil === 'function') {
+    runtime.waitUntil(task)
+    return { status: 'syncing', synced_conversations: 0, imported_messages: 0, has_more: true, provider_page: providerPage }
+  }
+
+  // Local Edge Runtime versions without waitUntil still complete the legacy
+  // import before returning, preserving the existing local development flow.
+  return await task
 }
 
 function evolutionInstanceName(entry: unknown): string | null {
@@ -2579,13 +2660,10 @@ export default {
         const query = body.query === undefined ? '' : (text(body.query, 120) ?? '')
         if (body.query !== undefined && body.query !== '' && !query) return json({ error: 'invalid_query' }, 400)
         const providerChatPage = Math.ceil((page * PAGE_SIZE) / LEGACY_CHAT_PAGE_SIZE)
-        // These Evolution requests are independent. Running them together
-        // removes the webhook check's network wait from the inbox's critical
-        // path without changing either result or the DB sync order below.
-        const [webhookHealth, historySync] = await Promise.all([
-          reconcileEvolutionWebhook(config),
-          syncLegacyChats(admin, config, businessId, providerChatPage),
-        ])
+        // Always serve the local inbox first. Importing legacy chats and
+        // checking the provider webhook can involve slow Evolution requests;
+        // neither is required to read conversations already in Supabase.
+        const historySync = await scheduleLegacyChatsSync(admin, config, businessId, providerChatPage)
         let selection = admin.from('whatsapp_conversations')
           .select(`id, instance_name, remote_jid, remote_jid_alt, contact_name, group_subject, contact_phone, display_name_override, contact_classification, hidden_from_inbox, status, unread_count, last_activity_at,
             latest_message:whatsapp_messages!whatsapp_messages_connection_conversation_fkey(
@@ -2619,24 +2697,22 @@ export default {
             latestByConversation.set(String(message.conversation_id), message)
           }
         }
-        const savedNames = await loadSavedContactNames(config, admin, businessId)
-        const groupDirectory = await loadGroupDirectory(config, admin, businessId)
-        const groupsNeedingLookup = (rows ?? []).filter((row: JsonRecord) => {
-          const jid = text(row.remote_jid, 256)
-          const existingMetadata = jid ? groupDirectory.get(jid.toLowerCase()) : null
-          return Boolean(jid && isGroupJid(jid)
-            && !displayableContactName(row.display_name_override, null)
-            && !displayableContactName(existingMetadata?.subject, null)
-            && !displayableContactName(row.group_subject, null)
-            && !groupMetadataWasRecentlyChecked(config, jid, 'subject'))
-        }).slice(0, 8)
-        const groupLookups = await Promise.all(groupsNeedingLookup.map(async (row: JsonRecord) => {
-          const jid = text(row.remote_jid, 256)!
-          return { row, jid, metadata: await loadGroupMetadata(config, jid, 'subject', admin, businessId) }
-        }))
-        for (const { row, jid, metadata } of groupLookups) {
-          groupDirectory.set(jid.toLowerCase(), metadata)
-        }
+        const pageJids = [
+          ...(rows ?? []).flatMap((row: JsonRecord) => [row.remote_jid, row.remote_jid_alt]
+            .map((value) => text(value, 256)).filter((value): value is string => Boolean(value))),
+          ...[...latestByConversation.values()].flatMap((message) => {
+            const metadata = isRecord(message.media_metadata) ? message.media_metadata : {}
+            return [metadata.participant_jid, metadata.participant_alt_jid]
+              .map((value) => text(value, 256)).filter((value): value is string => Boolean(value))
+          }),
+        ]
+        const savedNames = await loadPersistedContactDirectory(admin, businessId, config.instanceName, pageJids)
+        const groupDirectory = await loadPersistedGroupDirectory(
+          admin,
+          businessId,
+          config.instanceName,
+          pageJids,
+        )
         const identityBackfills = (rows ?? []).map((row: JsonRecord) => {
           const jid = text(row.remote_jid, 256)
           if (!jid) return null
@@ -2674,8 +2750,8 @@ export default {
           page,
           has_more: offset + conversations.length < (count ?? 0) || historySync.has_more === true,
           history_sync: historySync,
-          webhook_ready: webhookHealth.ready,
-          webhook_repaired: webhookHealth.repaired,
+          webhook_ready: recentWebhookReconciliation.get(`${config.businessId}:${config.instanceName}`)?.result.ready ?? false,
+          webhook_repaired: recentWebhookReconciliation.get(`${config.businessId}:${config.instanceName}`)?.result.repaired ?? false,
         } })
       }
 
