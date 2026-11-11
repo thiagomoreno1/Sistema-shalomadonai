@@ -57,6 +57,8 @@ type FinancialSummary = {
 }
 
 type ActionFilter = 'all' | 'followups' | 'receivables' | 'deliveries' | 'inventory'
+type MoneyDirection = 'incoming' | 'outgoing'
+type DashboardMoney = { label: string; tone: 'positive' | 'negative' | 'neutral'; accessibleLabel: string }
 type DashboardPriorityAction = {
   key: string
   dueOn: string
@@ -66,6 +68,7 @@ type DashboardPriorityAction = {
   icon: 'phone' | 'coin' | 'truck' | 'box'
   title: string
   detail: string
+  money?: DashboardMoney
   state: string
 }
 
@@ -159,6 +162,26 @@ function formatQuantity(value: number) {
   return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(value)
 }
 
+function formatDashboardMoney(value: string, direction: MoneyDirection, context: string): DashboardMoney {
+  const cents = BigInt(value)
+  const absoluteCents = cents < 0n ? -cents : cents
+  if (absoluteCents === 0n) {
+    const label = formatBRLExact(0n)
+    return { label, tone: 'neutral', accessibleLabel: `${context}: ${label}` }
+  }
+
+  const tone = direction === 'incoming' ? 'positive' : 'negative'
+  const label = `${direction === 'incoming' ? '+' : '−'} ${formatBRLExact(absoluteCents)}`
+  return { label, tone, accessibleLabel: `${context}: ${label}` }
+}
+
+function DashboardMoneyValue({ amount, element = 'span' }: { amount: DashboardMoney; element?: 'span' | 'strong' }) {
+  const className = `dashboard-money is-${amount.tone}`
+  return element === 'strong'
+    ? <strong className={className} aria-label={amount.accessibleLabel}>{amount.label}</strong>
+    : <span className={className} aria-label={amount.accessibleLabel}>{amount.label}</span>
+}
+
 function formatOrderDate(value: string) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeZone: 'America/Sao_Paulo' }).format(new Date(value))
 }
@@ -179,6 +202,8 @@ export function DashboardPage() {
   const [priorityState, setPriorityState] = useState<{ scopeKey: string; loading: boolean; error: boolean; data: DashboardPriorities | null }>({ scopeKey: '', loading: true, error: false, data: null })
   const currentPriorities = priorityState.scopeKey === prioritiesScopeKey ? priorityState : { loading: true, error: false, data: null }
   const priorities = currentPriorities.data
+  const overduePayrollMoney = priorities ? formatDashboardMoney(priorities.payroll.overdue_amount_cents, 'outgoing', 'Total de salários atrasados') : null
+  const receivablesDueTodayMoney = priorities ? formatDashboardMoney(priorities.receivables.due_today_balance_cents, 'incoming', 'Total a receber hoje') : null
   const prioritiesLoading = currentPriorities.loading
   const prioritiesError = currentPriorities.error
   const [actionFilter, setActionFilter] = useState<ActionFilter>('all')
@@ -200,6 +225,8 @@ export function DashboardPage() {
   const financialSummaryScopeKey = `${businessId}:${role}:${today}`
   const currentFinancialSummary = financialSummaryState.scopeKey === financialSummaryScopeKey ? financialSummaryState : { loading: true, error: false, data: null }
   const financialSummary = currentFinancialSummary.data
+  const financialGrossMoney = financialSummary ? formatDashboardMoney((BigInt(financialSummary.managerial_result.product_subtotal_cents) + BigInt(financialSummary.managerial_result.customer_delivery_fee_cents)).toString(), 'incoming', 'Faturamento bruto') : null
+  const financialNetMoney = financialSummary ? formatDashboardMoney(financialSummary.managerial_result.sales_cents, 'incoming', 'Faturamento líquido') : null
   const loadPriorities = useCallback(async (silent = false) => {
     const requestId = ++prioritiesRequestId.current
     if (!canManageBusiness(role)) {
@@ -340,7 +367,8 @@ export function DashboardPage() {
       href: demoPreview ? '/financeiro/receber' : `/pedidos/${receivable.order_id}`,
       icon: 'coin' as const,
       title: receivable.customer_name,
-      detail: `Parcela ${receivable.installment_number} · ${formatBusinessDate(receivable.due_on)} · ${formatBRLExact(receivable.balance_cents)}`,
+      detail: `Parcela ${receivable.installment_number} · ${formatBusinessDate(receivable.due_on)}`,
+      money: formatDashboardMoney(receivable.balance_cents, 'incoming', `Valor a receber de ${receivable.customer_name}`),
       state: receivable.overdue ? 'Atrasado' : 'Vence hoje',
     })) ?? []),
     ...(priorities?.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).map((item) => ({
@@ -351,7 +379,8 @@ export function DashboardPage() {
       href: '/equipe',
       icon: 'coin' as const,
       title: `Salário · ${item.name}`,
-      detail: `${formatBusinessDate(item.due_on)} · ${formatBRLExact(item.amount_cents)}`,
+      detail: formatBusinessDate(item.due_on),
+      money: formatDashboardMoney(item.amount_cents, 'outgoing', `Salário de ${item.name}`),
       state: item.due_on < today ? 'Atrasado' : 'Vence hoje',
     })) ?? []),
     ...(priorities?.deliveries.items.map((delivery) => ({
@@ -406,13 +435,13 @@ export function DashboardPage() {
         </Link>
         <Link className="dashboard-summary-link is-overdue" to="/equipe">
           <span className="dashboard-summary-icon"><Icon name="coin" /></span>
-          <span className="dashboard-summary-copy"><strong>Salários atrasados</strong><small>Equipe · {priorities ? formatBRLExact(priorities.payroll.overdue_amount_cents) : prioritiesLoading ? 'Carregando…' : '—'}</small></span>
+          <span className="dashboard-summary-copy"><strong>Salários atrasados</strong><small>Equipe · {overduePayrollMoney ? <DashboardMoneyValue amount={overduePayrollMoney} /> : prioritiesLoading ? 'Carregando…' : '—'}</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.payroll.overdue_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
         <Link className="dashboard-summary-link is-due-today" to="/financeiro/receber">
           <span className="dashboard-summary-icon"><Icon name="clock" /></span>
-          <span className="dashboard-summary-copy"><strong>Parcelas dos clientes</strong><small>Valores que vencem hoje · {priorities ? formatBRLExact(priorities.receivables.due_today_balance_cents) : prioritiesLoading ? 'Carregando…' : '—'}</small></span>
+          <span className="dashboard-summary-copy"><strong>Parcelas dos clientes</strong><small>Valores que vencem hoje · {receivablesDueTodayMoney ? <DashboardMoneyValue amount={receivablesDueTodayMoney} /> : prioritiesLoading ? 'Carregando…' : '—'}</small></span>
           <span className="dashboard-summary-count">{priorities ? priorities.receivables.due_today_count : '—'}</span>
           <Icon className="dashboard-summary-arrow" name="arrow" />
         </Link>
@@ -442,7 +471,7 @@ export function DashboardPage() {
             {visiblePriorityActions.map((action) => <li key={action.key}>
               <Link to={action.href}>
                 <span className={`dashboard-action-symbol${action.severity === 0 ? ' is-overdue' : action.severity === 1 ? ' is-today' : ''}`}><Icon name={action.icon} /></span>
-                <span className="dashboard-action-copy"><strong>{action.title}</strong><small>{action.detail}</small></span>
+                <span className="dashboard-action-copy"><strong>{action.title}</strong><small>{action.detail}{action.money && <> · <DashboardMoneyValue amount={action.money} /></>}</small></span>
                 <span className={`dashboard-row-state${action.severity === 0 ? ' is-overdue' : action.severity === 1 ? ' is-today' : ''}`}>{action.state}</span>
                 <Icon className="dashboard-row-arrow" name="arrow" />
               </Link>
@@ -478,14 +507,17 @@ export function DashboardPage() {
               {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.receivables.items.length > 0)) && <section className="dashboard-action-group" aria-labelledby="dashboard-receivables-title">
                 <div className="dashboard-action-group-heading"><h3 id="dashboard-receivables-title">Parcelas que clientes ainda devem</h3><Link className="quiet-link" to="/financeiro/receber">Ver parcelas <Icon name="arrow" /></Link></div>
                 {priorities.receivables.items.length === 0 ? <p className="dashboard-priority-empty">Nenhuma parcela atrasada ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
-                  {priorities.receivables.items.map((item) => <li key={item.installment_id}>
-                    <Link to={demoPreview ? '/financeiro/receber' : `/pedidos/${item.order_id}`}>
-                      <span className={`dashboard-action-symbol${item.overdue ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
-                      <span className="dashboard-action-copy"><strong>{item.customer_name}</strong><small>Parcela {item.installment_number} · {formatBusinessDate(item.due_on)}</small></span>
-                      <span className="dashboard-action-meta"><strong>{formatBRLExact(item.balance_cents)}</strong><span className={`dashboard-row-state${item.overdue ? ' is-overdue' : ' is-today'}`}>{item.overdue ? 'Atrasado' : 'Vence hoje'}</span></span>
-                      <Icon className="dashboard-row-arrow" name="arrow" />
-                    </Link>
-                  </li>)}
+                  {priorities.receivables.items.map((item) => {
+                    const amount = formatDashboardMoney(item.balance_cents, 'incoming', `Valor a receber de ${item.customer_name}`)
+                    return <li key={item.installment_id}>
+                      <Link to={demoPreview ? '/financeiro/receber' : `/pedidos/${item.order_id}`}>
+                        <span className={`dashboard-action-symbol${item.overdue ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
+                        <span className="dashboard-action-copy"><strong>{item.customer_name}</strong><small>Parcela {item.installment_number} · {formatBusinessDate(item.due_on)}</small></span>
+                        <span className="dashboard-action-meta"><DashboardMoneyValue amount={amount} element="strong" /><span className={`dashboard-row-state${item.overdue ? ' is-overdue' : ' is-today'}`}>{item.overdue ? 'Atrasado' : 'Vence hoje'}</span></span>
+                        <Icon className="dashboard-row-arrow" name="arrow" />
+                      </Link>
+                    </li>
+                  })}
                 </ul>}
                 {priorities.receivables.overdue_count + priorities.receivables.due_today_count > priorities.receivables.items.length && <p className="section-footnote">Mostrando {priorities.receivables.items.length} de {priorities.receivables.overdue_count + priorities.receivables.due_today_count} parcelas prioritárias.</p>}
               </section>}
@@ -493,14 +525,17 @@ export function DashboardPage() {
               {(actionFilter === 'receivables' || (actionFilter === 'all' && priorities.payroll.items.some((item) => item.paid_on === null && item.due_on <= today))) && <section className="dashboard-action-group" aria-labelledby="dashboard-payroll-title">
                 <div className="dashboard-action-group-heading"><h3 id="dashboard-payroll-title">Salários da equipe</h3><Link className="quiet-link" to="/equipe">Ver equipe <Icon name="arrow" /></Link></div>
                 {priorities.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).length === 0 ? <p className="dashboard-priority-empty">Nenhum salário vencido ou com vencimento hoje.</p> : <ul className="dashboard-action-list">
-                  {priorities.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).map((item) => <li key={`${item.worker_id}-${item.period_start}`}>
-                    <Link to="/equipe">
-                      <span className={`dashboard-action-symbol${item.due_on < today ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
-                      <span className="dashboard-action-copy"><strong>{item.name}</strong><small>Salário · {formatBusinessDate(item.due_on)}</small></span>
-                      <span className="dashboard-action-meta"><strong>{formatBRLExact(item.amount_cents)}</strong><span className={`dashboard-row-state${item.due_on < today ? ' is-overdue' : ' is-today'}`}>{item.due_on < today ? 'Atrasado' : 'Vence hoje'}</span></span>
-                      <Icon className="dashboard-row-arrow" name="arrow" />
-                    </Link>
-                  </li>)}
+                  {priorities.payroll.items.filter((item) => item.paid_on === null && item.due_on <= today).map((item) => {
+                    const amount = formatDashboardMoney(item.amount_cents, 'outgoing', `Salário de ${item.name}`)
+                    return <li key={`${item.worker_id}-${item.period_start}`}>
+                      <Link to="/equipe">
+                        <span className={`dashboard-action-symbol${item.due_on < today ? ' is-overdue' : ' is-today'}`}><Icon name="coin" /></span>
+                        <span className="dashboard-action-copy"><strong>{item.name}</strong><small>Salário · {formatBusinessDate(item.due_on)}</small></span>
+                        <span className="dashboard-action-meta"><DashboardMoneyValue amount={amount} element="strong" /><span className={`dashboard-row-state${item.due_on < today ? ' is-overdue' : ' is-today'}`}>{item.due_on < today ? 'Atrasado' : 'Vence hoje'}</span></span>
+                        <Icon className="dashboard-row-arrow" name="arrow" />
+                      </Link>
+                    </li>
+                  })}
                 </ul>}
               </section>}
 
@@ -552,8 +587,8 @@ export function DashboardPage() {
           {currentFinancialSummary.loading && <p className="inline-state" aria-live="polite">Carregando resumo…</p>}
           {!currentFinancialSummary.loading && currentFinancialSummary.error && !financialSummary && <div className="inline-state inline-state-error" role="alert"><span>Não foi possível carregar o resumo financeiro.</span><button className="text-button" onClick={() => void loadFinancialSummary()} type="button">Tentar novamente</button></div>}
           {!currentFinancialSummary.loading && financialSummary && <div className="dashboard-financial-metrics" aria-label="Resumo financeiro deste mês">
-            <article><span>Faturamento bruto</span><strong>{formatBRLExact((BigInt(financialSummary.managerial_result.product_subtotal_cents) + BigInt(financialSummary.managerial_result.customer_delivery_fee_cents)).toString())}</strong></article>
-            <article><span>Faturamento líquido</span><strong>{formatBRLExact(financialSummary.managerial_result.sales_cents)}</strong></article>
+            <article><span>Faturamento bruto</span>{financialGrossMoney && <DashboardMoneyValue amount={financialGrossMoney} element="strong" />}</article>
+            <article><span>Faturamento líquido</span>{financialNetMoney && <DashboardMoneyValue amount={financialNetMoney} element="strong" />}</article>
             <article><span>Pedidos concluídos</span><strong>{financialSummary.managerial_result.completed_order_count}</strong></article>
           </div>}
           {currentFinancialSummary.error && financialSummary && <p className="section-footnote" role="status">Resumo desatualizado; a última informação carregada continua visível.</p>}
