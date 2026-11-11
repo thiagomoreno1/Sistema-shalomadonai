@@ -430,7 +430,7 @@ export function CustomersPage() {
           <div><p className="eyebrow">CADASTROS</p><h2 id="customer-list-title">{showArchived ? 'Clientes arquivados' : 'Clientes ativos'}</h2></div>
           <div className="record-heading-actions"><span className="neutral-status">{customers.length} {customers.length === 1 ? 'cadastro' : 'cadastros'}</span><button className="text-button" onClick={() => { setLoading(true); setError(null); setShowArchived((value) => !value) }} type="button">{showArchived ? 'Ver ativos' : 'Ver arquivados'}</button></div>
         </div>
-        <div className="customer-debt-summary" aria-label="Resumo dos valores em aberto" aria-live="polite">
+        <div className={`customer-debt-summary${!loading && !error && !balancesUnavailable ? totalOpenBalance > 0 ? ' has-open-balance' : ' is-clear' : ''}`} aria-label="Resumo dos valores em aberto" aria-live="polite">
           <div><span>Falta receber</span><strong>{loading || error || balancesUnavailable ? '—' : formatBRL(totalOpenBalance)}</strong></div>
           <small>{loading ? 'Carregando saldos…' : error || balancesUnavailable ? 'Saldo indisponível' : `${customersWithBalance} ${customersWithBalance === 1 ? 'cliente deve' : 'clientes devem'}`}</small>
         </div>
@@ -470,7 +470,7 @@ export function CustomersPage() {
                       <span><strong>{customer.name}</strong><small>{customer.phone || (customer.whatsapp_phone ? `WhatsApp: ${customer.whatsapp_phone}` : 'Telefone não informado')}</small></span>
                     </Link>
                   </td>
-                  <td className="customer-debt-amount" data-label="Falta receber">{customer.open_balance_cents === null ? '—' : formatBRL(customer.open_balance_cents)}</td>
+                  <td className={`customer-debt-amount${customer.open_balance_cents === null ? '' : customer.open_balance_cents > 0 ? ' has-open-balance' : ' is-clear'}`} data-label="Falta receber">{customer.open_balance_cents === null ? '—' : formatBRL(customer.open_balance_cents)}</td>
                   <td data-label="Situação"><span className={`customer-debt-status ${customer.open_balance_cents === null ? '' : customer.open_balance_cents > 0 ? 'customer-debt-status-open' : 'customer-debt-status-clear'}`}>{customer.open_balance_cents === null ? 'Indisponível' : customer.open_balance_cents > 0 ? 'Deve' : 'Não deve'}</span></td>
                 </tr>
               ))}</tbody>

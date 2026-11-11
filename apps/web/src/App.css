@@ -1949,6 +1949,7 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .customer-debt-summary > div { display: grid; gap: 3px; }
 .customer-debt-summary span, .customer-debt-summary small { color: var(--muted); font-size: 11px; }
 .customer-debt-summary strong { color: var(--ink); font-size: 21px; font-variant-numeric: tabular-nums; }
+.customer-debt-summary.has-open-balance strong, .customer-debt-amount.has-open-balance { color: var(--success); }
 .customer-debt-table-wrap { max-width: 100%; margin-top: 12px; }
 .customer-debt-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .customer-debt-table th { padding: 8px 8px; color: var(--muted); font-size: 10px; font-weight: 650; text-align: left; }
@@ -1966,6 +1967,8 @@ body, .desktop-sidebar, .topbar, .mobile-bottom-nav, .surface-panel, .attention-
 .customer-debt-amount { font-variant-numeric: tabular-nums; font-weight: 650; text-align: right; white-space: nowrap; }
 .customer-debt-status { display: inline-flex; min-height: 26px; align-items: center; justify-content: center; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--paper); font-size: 10px; white-space: nowrap; }
 .customer-debt-status-open { border-color: var(--line-strong); color: var(--accent); background: var(--accent-wash); }
+.customer-debt-status-clear { border-color: var(--line-strong); color: var(--success); background: var(--success-soft); }
+.product-more-options { margin-top: 2px; }
 
 @media (max-width: 600px) {
   .customer-debt-summary { padding: 11px 12px; }

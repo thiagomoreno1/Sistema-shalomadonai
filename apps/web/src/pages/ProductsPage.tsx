@@ -773,11 +773,8 @@ export function ProductsPage() {
         <div className="section-heading section-heading-compact"><div><p className="eyebrow">CADASTRO</p><h2>{editingProduct ? 'Editar produto' : 'Novo produto'}</h2></div><button className="text-button" onClick={cancelForm} type="button">Fechar</button></div>
           <div className="record-form-grid">
             <label className="record-field record-field-wide"><span className="field-label">Nome do produto <span aria-hidden="true">*</span></span><input autoFocus className="text-input" defaultValue={editingProduct?.name ?? ''} maxLength={160} name="name" required /></label>
-            <label className="record-field"><span className="field-label">Categoria <span className="field-optional">opcional</span></span><select className="text-input" defaultValue={editingProduct?.category_id ?? ''} name="category_id"><option value="">Sem categoria</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
-            <div className="record-field record-field-actions"><span className="field-label">Categorias</span><button className="text-button" onClick={() => { setShowCategoryForm((value) => !value); setCategoryError(null) }} type="button">{showCategoryForm ? 'Fechar categorias' : 'Cadastrar categoria'}</button></div>
-            <label className="record-field"><span className="field-label">Preço de venda <span className="field-optional">R$</span></span><input className="text-input" defaultValue={editingProduct?.sale_price_cents === null || !editingProduct ? '' : (editingProduct.sale_price_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="sale_price" placeholder="0,00" /></label>
-            <label className="record-field"><span className="field-label">Custo médio unitário <span className="field-optional">R$ · {comboEnabled || productIsActive ? 'obrigatório para ativar' : 'necessário para faturamento'}</span></span><input className="text-input" defaultValue={editingProduct?.cost_cents === null || !editingProduct ? '' : (editingProduct.cost_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="cost" placeholder="0,00" /><small className="field-optional">Combos usam o custo informado no próprio cadastro.</small></label>
-            {editingProduct && <div className="record-field record-field-wide"><ProductPriceHistory businessId={businessId} productId={editingProduct.id} refreshToken={priceHistoryRefreshToken} /></div>}
+            <label className="record-field"><span className="field-label">Preço de venda <span className="field-optional">R$</span> {productIsActive && <span aria-hidden="true">*</span>}</span><input className="text-input" defaultValue={editingProduct?.sale_price_cents === null || !editingProduct ? '' : (editingProduct.sale_price_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="sale_price" placeholder="0,00" required={productIsActive} /></label>
+            <label className="record-field"><span className="field-label">Custo por unidade <span className="field-optional">R$</span> {(productIsActive || comboEnabled) && <span aria-hidden="true">*</span>}</span><input className="text-input" defaultValue={editingProduct?.cost_cents === null || !editingProduct ? '' : (editingProduct.cost_cents / 100).toFixed(2).replace('.', ',')} inputMode="decimal" name="cost" placeholder="0,00" required={productIsActive || comboEnabled} /></label>
             <details className="optional-record-details record-field-wide" open={Boolean(editingProduct?.image_path || photoPreviewUrl) || undefined}>
               <summary>Foto do produto <span className="field-optional">opcional</span></summary>
               <div className="record-form-grid">
@@ -809,10 +806,7 @@ export function ProductsPage() {
               </div>
             </details>
             <section className="product-stock-settings record-field-wide" hidden={comboEnabled} aria-labelledby="product-stock-heading">
-              <div className="section-heading section-heading-compact"><div><p className="eyebrow">ESTOQUE AUTOMÁTICO</p><h3 id="product-stock-heading">Saldo do produto</h3></div></div>
-              <p className="section-footnote">{editingProduct?.inventory_tracked
-                ? 'Ex.: TV em unidades; pão em kg. Corrija o saldo em Estoque.'
-                : 'Ex.: 2 TVs ou 15 kg de pão.'}</p>
+              <div className="section-heading section-heading-compact"><div><p className="eyebrow">ESTOQUE</p><h3 id="product-stock-heading">Quantidade inicial</h3></div></div>
               <div className="record-form-grid product-stock-grid">
                 <label className="record-field"><span className="field-label">Unidade de contagem <span aria-hidden="true">*</span></span>
                   <select className="text-input" disabled={saving || comboEnabled || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => setInventoryUnitChoice(event.target.value)} required={!comboEnabled} value={inventoryUnitChoice}>
@@ -828,8 +822,14 @@ export function ProductsPage() {
                 </details>
               </div>
             </section>
-            <label className="record-checkbox record-field-wide"><input checked={comboEnabled} disabled={saving || Boolean(editingProduct?.is_combo) || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => setComboEnabled(event.target.checked)} name="is_combo" type="checkbox" /><span><strong>Este produto é um combo</strong><small>O combo usa o saldo dos produtos da composição; não precisa de saldo próprio.</small></span></label>
-            {comboEnabled && <div className="combo-composition record-field-wide">
+            <details className="optional-record-details record-field-wide product-more-options" open={Boolean(comboEnabled || editingProduct?.category_id || editingProduct?.is_combo || editingProduct?.image_path || minimumStock || !productIsActive) || undefined}>
+              <summary>Mais opções</summary>
+              <div className="record-form-grid">
+                {editingProduct && <div className="record-field record-field-wide"><ProductPriceHistory businessId={businessId} productId={editingProduct.id} refreshToken={priceHistoryRefreshToken} /></div>}
+                <label className="record-field"><span className="field-label">Categoria <span className="field-optional">opcional</span></span><select className="text-input" defaultValue={editingProduct?.category_id ?? ''} name="category_id"><option value="">Sem categoria</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+                <div className="record-field record-field-actions"><span className="field-label">Categorias</span><button className="text-button" onClick={() => { setShowCategoryForm((value) => !value); setCategoryError(null) }} type="button">{showCategoryForm ? 'Fechar categorias' : 'Cadastrar categoria'}</button></div>
+                <label className="record-checkbox record-field-wide"><input checked={comboEnabled} disabled={saving || Boolean(editingProduct?.is_combo) || Boolean(editingProduct?.inventory_tracked)} onChange={(event) => setComboEnabled(event.target.checked)} name="is_combo" type="checkbox" /><span><strong>Produto vendido em combo</strong><small>O estoque é calculado pelos itens do combo.</small></span></label>
+                {comboEnabled && <div className="combo-composition record-field-wide">
               <div className="section-heading section-heading-compact"><div><p className="eyebrow">COMPOSIÇÃO</p><h3>Itens consumidos por combo</h3></div><button className="button button-secondary" disabled={saving} onClick={() => setComboDraft((current) => [...current, { key: newKey(), componentProductId: '', quantity: '1' }])} type="button"><Icon name="plus" /> Adicionar item</button></div>
               <p className="section-footnote">Cada componente precisa ter unidade e estoque inicial configurados. Pedidos existentes guardam a composição usada na venda.</p>
               {comboDraft.map((component, index) => (
@@ -839,11 +839,13 @@ export function ProductsPage() {
                   <button aria-label={'Remover componente ' + (index + 1)} className="text-button order-remove-button" disabled={saving || comboDraft.length === 1} onClick={() => setComboDraft((current) => current.filter((row) => row.key !== component.key))} type="button">Remover</button>
                 </div>
               ))}
-            </div>}
-            <label className="record-checkbox record-field-wide"><input checked={productIsActive} onChange={(event) => setProductIsActive(event.target.checked)} name="is_active" type="checkbox" /><span>Disponível no catálogo</span></label>
+                </div>}
+                <label className="record-checkbox record-field-wide"><input checked={productIsActive} onChange={(event) => setProductIsActive(event.target.checked)} name="is_active" type="checkbox" /><span>Disponível no catálogo</span></label>
+              </div>
+            </details>
           </div>
           {formError && <p className="form-message form-message-error" role="alert">{formError}</p>}
-          <div className="record-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : editingProduct ? 'Salvar alterações' : 'Salvar produto'}</button><p className="section-footnote">Produtos sem preço podem ser salvos como inativos para completar depois.</p></div>
+          <div className="record-form-actions"><button className="button button-primary" disabled={saving} type="submit">{saving ? 'Salvando…' : editingProduct ? 'Salvar alterações' : 'Salvar produto'}</button></div>
         </form>
       )}
       {showCategoryForm && (
