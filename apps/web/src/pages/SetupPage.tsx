@@ -5,7 +5,7 @@ export function SetupPage() {
   return (
     <main className="setup-screen">
       <section className="setup-card" aria-labelledby="setup-title">
-        <div className="brand-lockup setup-brand"><span><strong>Arvelo</strong><small>Operação</small></span></div>
+        <div className="brand-lockup setup-brand"><span><strong>Arvello</strong><small>Operação</small></span></div>
         <h1 id="setup-title">Este ambiente ainda não foi conectado</h1>
         <p className="setup-copy">
           A autenticação precisa ser configurada pela pessoa responsável pela implantação antes do acesso aos dados da empresa.

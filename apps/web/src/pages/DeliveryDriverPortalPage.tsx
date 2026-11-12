@@ -67,7 +67,7 @@ const demoContext: DriverContext = {
   business_id: 'demo-business',
   worker_id: 'demo-driver',
   worker_name: 'Carlos · demonstração',
-  business_name: 'Arvelo',
+  business_name: 'Arvello',
   is_active: true,
 }
 
@@ -227,7 +227,7 @@ export function DeliveryDriverPortalPage({ preview = false }: { preview?: boolea
     <main className="driver-portal-screen">
       <header className="driver-portal-header">
         <div className="driver-portal-brand">
-          <span><strong>Arvelo</strong><small>Painel do entregador · {context?.business_name ?? 'Operação'}</small></span>
+          <span><strong>Arvello</strong><small>Painel do entregador · {context?.business_name ?? 'Operação'}</small></span>
         </div>
         <div className="driver-portal-account">
           <span>{context?.worker_name ?? session?.user.email}</span>

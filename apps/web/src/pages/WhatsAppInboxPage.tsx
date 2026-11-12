@@ -2022,7 +2022,7 @@ export function WhatsAppInboxPage() {
                 {!currentConversation.hidden_from_inbox && <button className="button button-secondary" disabled={contactPreferencesSaving} onClick={() => void handleContactPreferences({ contact_classification: 'personal', hidden_from_inbox: true }, 'hidden', 'Conversa ocultada; o histórico continua salvo.')} type="button">Marcar como pessoal e ocultar</button>}
                 {currentConversation.hidden_from_inbox && <button className="button button-secondary" disabled={contactPreferencesSaving} onClick={() => void handleContactPreferences({ hidden_from_inbox: false }, segmentForRestoredConversation(currentConversation), 'Conversa restaurada.')} type="button">Restaurar conversa</button>}
               </>}
-              <p className="section-footnote whatsapp-match-hint">Ocultar só tira a conversa das listas ativas da Arvelo. Nenhuma mensagem é apagada, e você pode restaurá-la pela aba Ocultas.</p>
+              <p className="section-footnote whatsapp-match-hint">Ocultar só tira a conversa das listas ativas da Arvello. Nenhuma mensagem é apagada, e você pode restaurá-la pela aba Ocultas.</p>
             </form>
           </details>
 

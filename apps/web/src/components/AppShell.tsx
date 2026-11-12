@@ -107,7 +107,7 @@ export function AppShell() {
       <a className="skip-link" href="#main-content">Pular para o conteúdo</a>
       <aside className="desktop-sidebar" aria-label="Navegação principal">
         <div className="brand-lockup sidebar-brand">
-          <span><strong>Arvelo</strong><small>Operação</small></span>
+          <span><strong>Arvello</strong><small>Operação</small></span>
         </div>
         <p className="sidebar-caption">OPERAÇÃO</p>
         <nav className="sidebar-nav">
@@ -125,7 +125,7 @@ export function AppShell() {
       <div className="app-column">
         <header className="topbar">
           <div className="topbar-greeting">
-            <span><strong>Arvelo</strong><small className="topbar-email">{getRouteLabel(location.pathname)}{displayName ? ` · ${displayName}` : ''}</small></span>
+            <span><strong>Arvello</strong><small className="topbar-email">{getRouteLabel(location.pathname)}{displayName ? ` · ${displayName}` : ''}</small></span>
           </div>
           <div className="topbar-actions">
             <ThemeToggle />

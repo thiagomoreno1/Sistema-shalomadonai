@@ -5,13 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#F5F7F0" />
     <meta name="robots" content="noindex, nofollow" />
-    <title>Arvelo · Operação</title>
+    <title>Arvello · Operação</title>
   </head>
   <body>
     <div id="root"></div>
     <script>
       try {
-        const savedTheme = localStorage.getItem('arvelo-theme') || localStorage.getItem('shalom-adonai-theme');
+        const savedTheme = localStorage.getItem('arvello-theme') || localStorage.getItem('arvelo-theme') || localStorage.getItem('shalom-adonai-theme');
         const theme = savedTheme === 'dark' || savedTheme === 'light' ? savedTheme : 'light';
         document.documentElement.dataset.theme = theme;
         document.documentElement.style.colorScheme = theme;
