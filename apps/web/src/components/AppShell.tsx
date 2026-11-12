@@ -110,7 +110,6 @@ export function AppShell() {
           <img className="brand-image" src="/arvello-mark.png" alt="" aria-hidden="true" />
           <span><strong>Arvello</strong></span>
         </div>
-        <p className="sidebar-caption">OPERAÇÃO</p>
         <nav className="sidebar-nav">
           {desktopItems.map((item) => <NavigationLink item={item} key={item.to} />)}
         </nav>
