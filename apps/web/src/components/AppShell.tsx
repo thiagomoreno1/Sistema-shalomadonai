@@ -107,7 +107,8 @@ export function AppShell() {
       <a className="skip-link" href="#main-content">Pular para o conteúdo</a>
       <aside className="desktop-sidebar" aria-label="Navegação principal">
         <div className="brand-lockup sidebar-brand">
-          <span><strong>Arvello</strong><small>Operação</small></span>
+          <img className="brand-image" src="/arvello-mark.png" alt="" aria-hidden="true" />
+          <span><strong>Arvello</strong></span>
         </div>
         <p className="sidebar-caption">OPERAÇÃO</p>
         <nav className="sidebar-nav">
